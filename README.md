@@ -94,4 +94,4 @@ Issues and small PRs are welcome. Please keep changes focused and self‑contain
 
 ## License
 
-Mages is licensed under the **GNU AGPL v3** (see `LICENSE`).
+Mages is licensed under the **GNU AGPL v3** (see `LICENSE`), with the All artwork, logos, and visual assets are licensed under a [CCA-BY-SA 4.0 License](https://creativecommons.org/licenses/by-sa/4.0/).
