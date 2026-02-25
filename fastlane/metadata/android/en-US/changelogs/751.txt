@@ -1,0 +1,2 @@
+- Add native OAuth login support
+- Fix typo in license section of README.md

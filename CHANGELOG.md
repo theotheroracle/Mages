@@ -1,3 +1,9 @@
+## v3.1.2
+
+- Add native OAuth login support
+- Fix typo in license section of README.md
+
+
 ## v3.1.1
 
 - multiple attachments, native file pickers on jvm, and an camera option

@@ -46,6 +46,14 @@
     <content_attribute id="social-audio">intense</content_attribute>
   </content_rating>
   <releases>
+    <release version="3.1.2" date="2026-02-25" type="stable">
+      <description>
+        <ul>
+          <li>Add native OAuth login support</li>
+          <li>Fix typo in license section of README.md</li>
+        </ul>
+      </description>
+    </release>
     <release version="3.1.1" date="2026-02-22" type="stable">
       <description>
         <ul>
