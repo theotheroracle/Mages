@@ -126,6 +126,66 @@ object AndroidNotificationHelper : KoinComponent {
         mgr.cancel(notifId)
     }
 
+    fun showInviteNotification(
+        ctx: Context,
+        roomId: String,
+        eventId: String,
+        inviterName: String,
+        roomName: String
+    ) {
+        AppNotificationChannels.ensureCreated(ctx)
+        val mgr = ctx.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+
+        val notifId = ("invite_$roomId").hashCode()
+
+        val acceptIntent = createAcceptInviteIntent(ctx, roomId, notifId)
+        val declineIntent = createDeclineInviteIntent(ctx, roomId, notifId)
+
+        val notification = NotificationCompat.Builder(ctx, AppNotificationChannels.CHANNEL_INVITES)
+            .setSmallIcon(R.drawable.ic_notif_status_bar)
+            .setContentTitle("Room Invite")
+            .setContentText("$inviterName invited you to $roomName")
+            .setStyle(NotificationCompat.BigTextStyle()
+                .bigText("$inviterName invited you to $roomName"))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setAutoCancel(true)
+            .setContentIntent(createOpenIntent(ctx, roomId, eventId, notifId))
+            .addAction(R.drawable.ic_notif_status_bar, "Decline", declineIntent)
+            .addAction(R.drawable.ic_notif_status_bar, "Accept", acceptIntent)
+            .build()
+
+        mgr.notify(notifId, notification)
+    }
+
+    private fun createAcceptInviteIntent(ctx: Context, roomId: String, notifId: Int): PendingIntent {
+        val intent = Intent(ctx, NotificationActionReceiver::class.java).apply {
+            action = NotificationActionReceiver.ACTION_ACCEPT_INVITE
+            putExtra(NotificationActionReceiver.EXTRA_ROOM_ID, roomId)
+            putExtra(NotificationActionReceiver.EXTRA_NOTIF_ID, notifId)
+        }
+        return PendingIntent.getBroadcast(
+            ctx,
+            notifId + 10,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun createDeclineInviteIntent(ctx: Context, roomId: String, notifId: Int): PendingIntent {
+        val intent = Intent(ctx, NotificationActionReceiver::class.java).apply {
+            action = NotificationActionReceiver.ACTION_DECLINE_INVITE
+            putExtra(NotificationActionReceiver.EXTRA_ROOM_ID, roomId)
+            putExtra(NotificationActionReceiver.EXTRA_NOTIF_ID, notifId)
+        }
+        return PendingIntent.getBroadcast(
+            ctx,
+            notifId + 11,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
     private fun createFullScreenCallIntent(
         ctx: Context,
         roomId: String,

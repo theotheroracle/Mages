@@ -35,6 +35,26 @@ class NotificationActionReceiver : BroadcastReceiver(), KoinComponent {
                         // also cancel whatever notifId was passed (call notif id)
                     }
 
+                    ACTION_ACCEPT_INVITE -> {
+                        if (roomId != null) {
+                            runCatching { service.initFromDisk() }
+                            val port = service.portOrNull
+                            if (port != null && service.isLoggedIn()) {
+                                runCatching { port.acceptInvite(roomId) }
+                            }
+                        }
+                    }
+
+                    ACTION_DECLINE_INVITE -> {
+                        if (roomId != null) {
+                            runCatching { service.initFromDisk() }
+                            val port = service.portOrNull
+                            if (port != null && service.isLoggedIn()) {
+                                runCatching { port.leaveRoom(roomId) }
+                            }
+                        }
+                    }
+
                     ACTION_MARK_READ, ACTION_REPLY -> {
                         if (roomId == null || eventId == null) return@launch
 
@@ -71,6 +91,8 @@ class NotificationActionReceiver : BroadcastReceiver(), KoinComponent {
         const val ACTION_MARK_READ = "org.mlm.mages.ACTION_MARK_READ"
         const val ACTION_REPLY = "org.mlm.mages.ACTION_REPLY"
         const val ACTION_DECLINE_CALL = "org.mlm.mages.ACTION_DECLINE_CALL"
+        const val ACTION_ACCEPT_INVITE = "org.mlm.mages.ACTION_ACCEPT_INVITE"
+        const val ACTION_DECLINE_INVITE = "org.mlm.mages.ACTION_DECLINE_INVITE"
 
         const val EXTRA_ROOM_ID = "roomId"
         const val EXTRA_EVENT_ID = "eventId"

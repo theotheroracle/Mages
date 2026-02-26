@@ -81,8 +81,31 @@ class NotificationEnrichWorker(
 
         when (rendered.kind) {
             NotificationKind.StateEvent -> {
-                // Don’t show state events; but cancel placeholder.
+                // Don't show state events; but cancel placeholder.
                 nm.cancel(notifId)
+                return Result.success()
+            }
+
+            NotificationKind.Invite -> {
+                nm.cancel(notifId)
+
+                if (settings.autoJoinInvites) {
+                    val acceptOk = runCatching {
+                        port.acceptInvite(roomId)
+                    }.getOrDefault(false)
+                    if (acceptOk) {
+                        // TODO: trigger a room list refresh here?
+                    }
+                    return Result.success()
+                }
+
+                AndroidNotificationHelper.showInviteNotification(
+                    applicationContext,
+                    roomId = roomId,
+                    eventId = eventId,
+                    inviterName = rendered.sender,
+                    roomName = rendered.roomName
+                )
                 return Result.success()
             }
 

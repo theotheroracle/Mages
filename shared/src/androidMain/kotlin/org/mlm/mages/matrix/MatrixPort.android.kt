@@ -1572,6 +1572,7 @@ private fun mages.NotificationKind.toKotlin(): NotificationKind = when (this) {
     mages.NotificationKind.CALL_RING -> NotificationKind.CallRing
     mages.NotificationKind.CALL_NOTIFY -> NotificationKind.CallNotify
     mages.NotificationKind.CALL_INVITE -> NotificationKind.CallInvite
+    mages.NotificationKind.INVITE -> NotificationKind.Invite
     mages.NotificationKind.STATE_EVENT -> NotificationKind.StateEvent
 }
 

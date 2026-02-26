@@ -100,6 +100,15 @@ data class AppSettings(
     )
     val notifySoundOncePerRoom: Boolean = false,
 
+    @Setting(
+        title = "Auto-join room invites",
+        description = "Automatically join rooms when invited",
+        category = Notifications::class,
+        type = Toggle::class,
+        dependsOn = "notificationsEnabled"
+    )
+    val autoJoinInvites: Boolean = false,
+
     @Persisted
     val notifiedRoomsJson: String = "",
 

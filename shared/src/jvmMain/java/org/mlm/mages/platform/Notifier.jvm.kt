@@ -109,6 +109,22 @@ actual fun BindNotifications(
 
             for (n in items) {
                 if (n.eventId.isBlank()) continue
+
+                if (n.kind == org.mlm.mages.matrix.NotificationKind.Invite) {
+                    if (settings.autoJoinInvites) {
+                        runCatching { port.acceptInvite(n.roomId) }
+                    } else {
+                        // no action buttons, just a notification
+                        NotifierImpl.notify(
+                            app = "Mages",
+                            title = "Room Invite",
+                            body = "${n.sender} invited you to ${n.roomName}",
+                            desktopEntry = "org.mlm.mages"
+                        )
+                    }
+                    continue
+                }
+
                 if (n.tsMs > maxSeenTs) maxSeenTs = n.tsMs
 
                 if (recentlyNotified.size > 2000) {

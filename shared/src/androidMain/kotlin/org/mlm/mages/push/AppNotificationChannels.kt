@@ -18,6 +18,7 @@ object AppNotificationChannels {
     const val CHANNEL_MESSAGES = "messages"
     const val CHANNEL_MESSAGES_SILENT = "messages_silent"
     const val CHANNEL_CALLS = "calls"
+    const val CHANNEL_INVITES = "invites"
 
     fun ensureCreated(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -62,7 +63,20 @@ object AppNotificationChannels {
                     NotificationManager.IMPORTANCE_HIGH
                 ).apply {
                     description = "Incoming calls"
-                    setSound(null, null) // keep if you want silent ring by default
+//                    setSound(null, null) // keep if you want silent ring by default
+                    enableVibration(true)
+                }
+            )
+        }
+
+        if (mgr.getNotificationChannel(CHANNEL_INVITES) == null) {
+            mgr.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_INVITES,
+                    "Room Invites",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Room invitation notifications"
                     enableVibration(true)
                 }
             )

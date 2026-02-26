@@ -309,6 +309,7 @@ pub enum NotificationKind {
     CallRing,
     CallNotify,
     CallInvite,
+    Invite,
     StateEvent,
 }
 
@@ -7390,6 +7391,15 @@ fn map_notification_item_to_rendered(
             },
             _ => {}
         }
+    }
+
+    if let NotificationEvent::Invite(invite) = &item.event {
+        kind = NotificationKind::Invite;
+        sender = item
+            .sender_display_name
+            .clone()
+            .unwrap_or_else(|| invite.sender.to_string());
+        body = "Room invite".to_owned();
     }
 
     Some(RenderedNotification {

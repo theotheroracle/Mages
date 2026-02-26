@@ -124,6 +124,7 @@ enum class NotificationKind {
     CallRing,
     CallNotify,
     CallInvite,
+    Invite,
     StateEvent
 }
 
