@@ -4443,6 +4443,7 @@ pub fn login_oauth_loopback(
         root_event_id: String,
         body: String,
         reply_to_event_id: Option<String>,
+        latest_event_id: Option<String>,
     ) -> bool {
         RT.block_on(async {
             let Ok(rid) = ruma::OwnedRoomId::try_from(room_id) else {
@@ -4460,6 +4461,12 @@ pub fn login_oauth_loopback(
             let relation = if let Some(reply_to) = reply_to_event_id {
                 if let Ok(eid) = ruma::OwnedEventId::try_from(reply_to) {
                     MsgRelation::Thread(ThreadRel::reply(root, eid))
+                } else {
+                    MsgRelation::Thread(ThreadRel::without_fallback(root))
+                }
+            } else if let Some(latest) = latest_event_id {
+                if let Ok(eid) = ruma::OwnedEventId::try_from(latest) {
+                    MsgRelation::Thread(ThreadRel::plain(root, eid))
                 } else {
                     MsgRelation::Thread(ThreadRel::without_fallback(root))
                 }

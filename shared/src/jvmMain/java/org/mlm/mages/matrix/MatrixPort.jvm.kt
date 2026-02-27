@@ -1019,9 +1019,10 @@ class RustMatrixPort : MatrixPort {
         roomId: String,
         rootEventId: String,
         body: String,
-        replyToEventId: String?
+        replyToEventId: String?,
+        latestEventId: String?
     ): Boolean = withContext(Dispatchers.IO) {
-        runCatching { withClient { it.sendThreadText(roomId, rootEventId, body, replyToEventId) } }.getOrDefault(false)
+        runCatching { withClient { it.sendThreadText(roomId, rootEventId, body, replyToEventId, latestEventId) } }.getOrDefault(false)
     }
 
     override suspend fun isSpace(roomId: String): Boolean =

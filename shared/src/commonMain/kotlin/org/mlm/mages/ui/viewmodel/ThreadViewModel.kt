@@ -416,6 +416,11 @@ class ThreadViewModel(
         if (body.isBlank()) return false
 
         val replyToId = currentState.replyingTo?.eventId
+        val latestEventId = if (replyToId == null && currentState.replies.isNotEmpty()) {
+            currentState.replies.lastOrNull()?.eventId
+        } else {
+            null
+        }
 
         // Clear input immediately for better UX
         updateState {
@@ -427,7 +432,7 @@ class ThreadViewModel(
 
         // Send to server - message will appear via timeline diff
         val ok = runSafe {
-            service.port.sendThreadText(roomId, rootEventId, body, replyToId)
+            service.port.sendThreadText(roomId, rootEventId, body, replyToId, latestEventId)
         } ?: false
 
         if (!ok) {

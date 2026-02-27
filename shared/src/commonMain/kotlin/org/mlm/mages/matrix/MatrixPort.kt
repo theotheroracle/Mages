@@ -547,7 +547,7 @@ interface MatrixPort {
         eventIds: List<String>
     ): Map<String, List<ReactionChip>>
 
-    suspend fun sendThreadText(roomId: String, rootEventId: String, body: String, replyToEventId: String? = null): Boolean
+    suspend fun sendThreadText(roomId: String, rootEventId: String, body: String, replyToEventId: String? = null, latestEventId: String? = null): Boolean
     suspend fun threadSummary(roomId: String, rootEventId: String, perPage: Int = 100, maxPages: Int = 10): ThreadSummary
 
     suspend fun threadReplies(
