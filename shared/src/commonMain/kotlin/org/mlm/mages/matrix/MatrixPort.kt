@@ -342,6 +342,13 @@ interface MatrixPort {
         Reconnecting
     }
 
+    enum class RecoveryState {
+        Disabled,
+        Enabled,
+        Incomplete,
+        Unknown
+    }
+
     interface SyncObserver { fun onState(status: SyncStatus) }
 
     suspend fun init(hs: String, accountId: String? = null)
@@ -367,6 +374,8 @@ interface MatrixPort {
     suspend fun setTyping(roomId: String, typing: Boolean): Boolean
     fun whoami(): String?
     fun accountManagementUrl(): String?
+    fun recoveryState(): RecoveryState
+    fun setupRecovery(observer: RecoveryObserver): ULong
 
     suspend fun enqueueText(roomId: String, body: String, txnId: String? = null): String
     fun observeSends(): Flow<SendUpdate>
@@ -381,6 +390,13 @@ interface MatrixPort {
         fun onRequest(flowId: String, fromUser: String, fromDevice: String)
         fun onError(message: String)
     }
+
+    interface RecoveryObserver {
+        fun onProgress(step: String)
+        fun onDone(recoveryKey: String)
+        fun onError(message: String)
+    }
+
     fun observeConnection(observer: ConnectionObserver): ULong
     fun stopConnectionObserver(token: ULong)
 

@@ -251,6 +251,34 @@ class RustMatrixPort : MatrixPort {
         }
     }
 
+    override fun recoveryState(): MatrixPort.RecoveryState {
+        return runBlocking(Dispatchers.IO) {
+            withClient { 
+                when (it.recoveryState()) {
+                    mages.RecoveryState.DISABLED -> MatrixPort.RecoveryState.Disabled
+                    mages.RecoveryState.ENABLED -> MatrixPort.RecoveryState.Enabled
+                    mages.RecoveryState.INCOMPLETE -> MatrixPort.RecoveryState.Incomplete
+                    else -> MatrixPort.RecoveryState.Unknown
+                }
+            }
+        }
+    }
+
+    override fun setupRecovery(observer: MatrixPort.RecoveryObserver): ULong {
+        val cb = object : mages.RecoveryObserver {
+            override fun onProgress(step: String) {
+                observer.onProgress(step)
+            }
+            override fun onDone(recoveryKey: String) {
+                observer.onDone(recoveryKey)
+            }
+            override fun onError(message: String) {
+                observer.onError(message)
+            }
+        }
+        return withClient { it.setupRecovery(cb) }
+    }
+
     override suspend fun paginateBack(roomId: String, count: Int): Boolean =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -302,7 +330,7 @@ class RustMatrixPort : MatrixPort {
 
     override suspend fun getUserPowerLevel(roomId: String, userId: String): Long =
         withContext(Dispatchers.IO) {
-            runCatching { withClient { it.getUserPowerLevel(roomId, userId).toLong() } }.getOrDefault(-1L)
+            runCatching { withClient { it.getUserPowerLevel(roomId, userId) } }.getOrDefault(-1L)
         }
 
     override suspend fun getPinnedEvents(roomId: String): List<String> =

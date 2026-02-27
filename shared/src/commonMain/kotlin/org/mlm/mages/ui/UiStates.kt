@@ -4,6 +4,7 @@ import org.mlm.mages.MessageEvent
 import org.mlm.mages.RoomSummary
 import org.mlm.mages.matrix.DeviceSummary
 import org.mlm.mages.matrix.LiveLocationShare
+import org.mlm.mages.matrix.MatrixPort
 import org.mlm.mages.matrix.Presence
 import org.mlm.mages.matrix.RoomNotificationMode
 import org.mlm.mages.matrix.RoomPredecessorInfo
@@ -167,6 +168,10 @@ data class SecurityUiState(
     val selectedTab: Int = 0,
 
     // Recovery
+    val recoveryState: MatrixPort.RecoveryState = MatrixPort.RecoveryState.Disabled,
+    val isEnablingRecovery: Boolean = false,
+    val recoveryProgress: String? = null,
+    val generatedRecoveryKey: String? = null,
     val showRecoveryDialog: Boolean = false,
     val recoveryKeyInput: String = "",
 

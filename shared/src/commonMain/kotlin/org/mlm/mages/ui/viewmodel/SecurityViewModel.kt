@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import org.mlm.mages.MatrixService
+import org.mlm.mages.matrix.MatrixPort
 import org.mlm.mages.matrix.Presence
 import org.mlm.mages.settings.AppSettings
 import org.mlm.mages.ui.SecurityUiState
@@ -25,6 +26,7 @@ class SecurityViewModel(
         data object LogoutSuccess : Event()
         data class ShowError(val message: String) : Event()
         data class ShowSuccess(val message: String) : Event()
+        data class RecoveryKeyGenerated(val key: String) : Event()
     }
 
     private val _events = Channel<Event>(Channel.BUFFERED)
@@ -40,6 +42,55 @@ class SecurityViewModel(
         refreshIgnored()
         loadPresence()
         loadAccountManagementUrl()
+        loadRecoveryState()
+    }
+
+    private fun loadRecoveryState() {
+        launch {
+            val port = service.portOrNull ?: return@launch
+            val state = runCatching { port.recoveryState() }.getOrNull() ?: MatrixPort.RecoveryState.Disabled
+            updateState { copy(recoveryState = state) }
+        }
+    }
+
+    fun setupRecovery() {
+        launch {
+            val port = service.portOrNull ?: return@launch
+            
+            val observer = object : MatrixPort.RecoveryObserver {
+                override fun onProgress(step: String) {
+                    updateState { copy(recoveryProgress = step) }
+                }
+
+                override fun onDone(recoveryKey: String) {
+                    updateState { 
+                        copy(
+                            isEnablingRecovery = false,
+                            recoveryProgress = null,
+                            generatedRecoveryKey = recoveryKey,
+                            recoveryState = MatrixPort.RecoveryState.Enabled
+                        ) 
+                    }
+                }
+
+                override fun onError(message: String) {
+                    updateState { 
+                        copy(
+                            isEnablingRecovery = false,
+                            recoveryProgress = null,
+                            error = "Recovery error: $message"
+                        ) 
+                    }
+                }
+            }
+
+            updateState { copy(isEnablingRecovery = true, recoveryProgress = "Starting...") }
+            port.setupRecovery(observer)
+        }
+    }
+
+    fun dismissRecoveryKey() {
+        updateState { copy(generatedRecoveryKey = null) }
     }
 
     private fun loadAccountManagementUrl() {

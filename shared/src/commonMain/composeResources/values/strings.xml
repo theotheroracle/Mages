@@ -127,6 +127,10 @@
     <string name="user_id_placeholder">@user:server.com</string>
     <string name="verify">Verify</string>
     <string name="recovery">Recovery</string>
+    <string name="set_up_recovery">Set up recovery</string>
+    <string name="recovery_key">Recovery Key</string>
+    <string name="save_recovery_key_warning">Save this key somewhere safe. You\'ll need it to restore your encrypted messages if you lose access to your devices.</string>
+    <string name="copy">Copy</string>
     <string name="your_devices">Your Devices</string>
     <string name="no_devices_found">No devices found</string>
     <string name="try_refreshing">Try refreshing the list</string>

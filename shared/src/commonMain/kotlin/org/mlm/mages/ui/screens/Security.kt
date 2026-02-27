@@ -14,8 +14,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
@@ -25,6 +28,7 @@ import io.github.mlmgames.settings.ui.AutoSettingsScreen
 import io.github.mlmgames.settings.ui.CategoryConfig
 import org.koin.compose.koinInject
 import org.mlm.mages.matrix.DeviceSummary
+import org.mlm.mages.matrix.MatrixPort
 import org.mlm.mages.matrix.Presence
 import org.mlm.mages.settings.*
 import org.mlm.mages.ui.components.core.EmptyState
@@ -110,9 +114,13 @@ fun SecurityScreen(
                     devices = state.devices,
                     isLoading = state.isLoadingDevices,
                     accountManagementUrl = state.accountManagementUrl,
+                    recoveryState = state.recoveryState,
+                    isEnablingRecovery = state.isEnablingRecovery,
+                    recoveryProgress = state.recoveryProgress,
                     onRefresh = viewModel::refreshDevices,
                     onVerifyDevice = viewModel::startSelfVerify,
                     onVerifyUser = { showVerifyUserDialog = true },
+                    onEnableRecovery = viewModel::setupRecovery,
                     onOpenRecovery = viewModel::openRecoveryDialog,
                     onOpenAccountManagement = { url -> uriHandler.openUri(url) }
                 )
@@ -144,6 +152,15 @@ fun SecurityScreen(
             onChange = viewModel::setRecoveryKey,
             onCancel = viewModel::closeRecoveryDialog,
             onConfirm = viewModel::submitRecoveryKey
+        )
+    }
+
+    // Generated Recovery Key Dialog
+    val generatedKey = state.generatedRecoveryKey
+    if (generatedKey != null) {
+        RecoveryKeyDialog(
+            recoveryKey = generatedKey,
+            onDismiss = viewModel::dismissRecoveryKey
         )
     }
 
@@ -187,13 +204,76 @@ fun SecurityScreen(
 }
 
 @Composable
+private fun RecoveryKeyDialog(
+    recoveryKey: String,
+    onDismiss: () -> Unit
+) {
+    val clipboardManager = LocalClipboardManager.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.Key, null, tint = MaterialTheme.colorScheme.primary) },
+        title = { Text(stringResource(Res.string.recovery_key)) },
+        text = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = stringResource(Res.string.save_recovery_key_warning),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(bottom = Spacing.md)
+                )
+
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = recoveryKey.chunked(4).joinToString(" "),
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(Spacing.md)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(Spacing.md))
+
+                Button(
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(recoveryKey))
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.ContentCopy, null)
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text(stringResource(Res.string.copy))
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) {
+                Text(stringResource(Res.string.done))
+            }
+        }
+    )
+}
+
+@Composable
 private fun DevicesTab(
     devices: List<DeviceSummary>,
     isLoading: Boolean,
     accountManagementUrl: String?,
+    recoveryState: MatrixPort.RecoveryState,
+    isEnablingRecovery: Boolean,
+    recoveryProgress: String?,
     onRefresh: () -> Unit,
     onVerifyDevice: (String) -> Unit,
     onVerifyUser: () -> Unit,
+    onEnableRecovery: () -> Unit,
     onOpenRecovery: () -> Unit,
     onOpenAccountManagement: (String) -> Unit
 ) {
@@ -208,9 +288,15 @@ private fun DevicesTab(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md)
             ) {
                 ActionCard(
-                    icon = Icons.Default.Key,
-                    title = stringResource(Res.string.recovery),
-                    onClick = onOpenRecovery,
+                    icon = if (isEnablingRecovery) Icons.Default.HourglassEmpty else Icons.Default.Key,
+                    title = if (recoveryProgress != null) recoveryProgress 
+                            else if (recoveryState == MatrixPort.RecoveryState.Enabled) stringResource(Res.string.recovery)
+                            else stringResource(Res.string.set_up_recovery),
+                    onClick = { 
+                        if (recoveryState == MatrixPort.RecoveryState.Enabled) onOpenRecovery() 
+                        else onEnableRecovery() 
+                    },
+                    enabled = !isEnablingRecovery,
                     modifier = Modifier.weight(1f)
                 )
                 ActionCard(
@@ -276,11 +362,13 @@ private fun ActionCard(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
 ) {
     Card(
         onClick = onClick,
         modifier = modifier,
+        enabled = enabled,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer
         )
@@ -292,7 +380,7 @@ private fun ActionCard(
             Icon(
                 icon,
                 null,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(32.dp)
             )
             Spacer(Modifier.height(Spacing.sm))
