@@ -1,10 +1,12 @@
 package org.mlm.mages.ui.screens
 
 import androidx.compose.animation.*
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -341,6 +343,7 @@ private fun RoomsTopBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
                 .padding(horizontal = Spacing.lg, vertical = Spacing.xs),
             horizontalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
