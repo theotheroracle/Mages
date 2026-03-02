@@ -35,6 +35,7 @@ import org.mlm.mages.ui.components.sheets.EnterRecoveryKeySheet
 import org.mlm.mages.ui.components.sheets.SetupRecoverySheet
 import org.mlm.mages.ui.components.snackbar.SnackbarManager
 import org.mlm.mages.ui.components.snackbar.snackbarHost
+import org.mlm.mages.ui.components.snackbar.rememberErrorPoster
 import org.mlm.mages.ui.theme.Spacing
 import org.mlm.mages.ui.util.popBack
 import org.mlm.mages.ui.viewmodel.SecurityViewModel
@@ -57,6 +58,7 @@ fun SecurityScreen(
     val state by viewModel.state.collectAsState()
     val settings by viewModel.settings.collectAsState()
     val snackbarManager: SnackbarManager = koinInject()
+    val postError = rememberErrorPoster(snackbarManager)
     val settingsSnackbarHostState = remember { SnackbarHostState() }
     val uriHandler = LocalUriHandler.current
 
@@ -70,7 +72,7 @@ fun SecurityScreen(
     }
 
     LaunchedEffect(state.error) {
-        state.error?.let { snackbarManager.showError(it) }
+        state.error?.let { postError(it) }
     }
 
     LaunchedEffect(state.recoverySubmitSuccess) {

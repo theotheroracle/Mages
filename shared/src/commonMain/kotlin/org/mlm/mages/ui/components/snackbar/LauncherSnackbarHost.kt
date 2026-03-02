@@ -2,12 +2,11 @@ package org.mlm.mages.ui.components.snackbar
 
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import kotlinx.coroutines.launch
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.rememberCoroutineScope
-import org.koin.compose.koinInject
+import kotlinx.coroutines.launch
 
 @Composable
 fun LauncherSnackbarHost(

@@ -8,6 +8,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import org.jetbrains.compose.resources.stringResource
+import mages.shared.generated.resources.Res
+import mages.shared.generated.resources.copy
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -29,9 +34,10 @@ class SnackbarManager {
         duration: SnackbarDuration = SnackbarDuration.Short,
         onAction: (suspend () -> Unit)? = null,
     ) {
+        val normalizedMessage = normalizeMessage(message)
         _events.tryEmit(
             SnackbarEvent(
-                message = message,
+                message = normalizedMessage,
                 actionLabel = actionLabel,
                 withDismissAction = withDismissAction,
                 duration = duration,
@@ -47,15 +53,43 @@ class SnackbarManager {
         duration: SnackbarDuration = SnackbarDuration.Short,
         onAction: (suspend () -> Unit)? = null,
     ) {
+        val normalizedMessage = normalizeMessage(message)
         _events.tryEmit(
             SnackbarEvent(
-                message = "Error: $message",
+                message = normalizedMessage,
                 actionLabel = actionLabel,
                 withDismissAction = withDismissAction,
                 duration = duration,
-                onAction = onAction
+                onAction = onAction,
             )
         )
+    }
+
+    private fun normalizeMessage(message: String): String {
+        return message
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .lines()
+            .joinToString(" ") { it.trim() }
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .removePrefix("Error: ")
+            .removePrefix("error: ")
+    }
+}
+
+@Composable
+fun rememberErrorPoster(manager: SnackbarManager): (String) -> Unit {
+    val clipboard = LocalClipboardManager.current
+    val copyLabel = stringResource(Res.string.copy)
+    return remember(manager, clipboard, copyLabel) {
+        { message: String ->
+            manager.showError(
+                message = message,
+                actionLabel = copyLabel,
+                onAction = { clipboard.setText(AnnotatedString(message)) }
+            )
+        }
     }
 }
 

@@ -41,6 +41,7 @@ import org.mlm.mages.ui.components.core.formatDisplayName
 import org.mlm.mages.ui.components.message.MessageBubble
 import org.mlm.mages.ui.components.sheets.MessageActionSheet
 import org.mlm.mages.ui.components.snackbar.SnackbarManager
+import org.mlm.mages.ui.components.snackbar.rememberErrorPoster
 import org.mlm.mages.ui.theme.Spacing
 import org.mlm.mages.ui.util.formatTime
 import org.mlm.mages.ui.viewmodel.ThreadViewModel
@@ -56,13 +57,14 @@ fun ThreadRoute(
     val state by viewModel.state.collectAsState()
     val scope = rememberCoroutineScope()
     val snackbarManager: SnackbarManager = koinInject()
+    val postError = rememberErrorPoster(snackbarManager)
     val settingsRepository: SettingsRepository<AppSettings> = koinInject()
     val settings by settingsRepository.flow.collectAsState(initial = AppSettings())
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
-                is ThreadViewModel.Event.ShowError -> snackbarManager.showError(event.message)
+                is ThreadViewModel.Event.ShowError -> postError(event.message)
                 is ThreadViewModel.Event.ShowSuccess -> snackbarManager.show(event.message)
             }
         }

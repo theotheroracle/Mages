@@ -43,6 +43,7 @@ import org.mlm.mages.ui.viewmodel.MediaGalleryViewModel
 import org.mlm.mages.ui.viewmodel.MediaTab
 import org.mlm.mages.ui.components.snackbar.SnackbarManager
 import org.mlm.mages.ui.components.snackbar.snackbarHost
+import org.mlm.mages.ui.components.snackbar.rememberErrorPoster
 import java.io.File
 import java.time.Instant
 import java.time.ZoneId
@@ -62,12 +63,13 @@ fun MediaGalleryScreen(
     val shareHandler = rememberShareHandler()
     var selectedTab by remember { mutableStateOf(MediaTab.Images) }
     val snackbarManager: SnackbarManager = koinInject()
+    val postError = rememberErrorPoster(snackbarManager)
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
                 is MediaGalleryViewModel.Event.ShowError -> {
-                    snackbarManager.showError(event.message)
+                    postError(event.message)
                 }
                 is MediaGalleryViewModel.Event.ShowSuccess -> {
                     snackbarManager.show(event.message)

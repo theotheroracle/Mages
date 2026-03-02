@@ -46,6 +46,7 @@ import org.mlm.mages.ui.components.sheets.AccountSwitcherSheet
 import org.mlm.mages.ui.components.sheets.CreateRoomSheet
 import org.mlm.mages.ui.components.snackbar.LauncherSnackbarHost
 import org.mlm.mages.ui.components.snackbar.SnackbarManager
+import org.mlm.mages.ui.components.snackbar.rememberErrorPoster
 import org.mlm.mages.ui.screens.*
 import org.mlm.mages.ui.theme.MainTheme
 import org.mlm.mages.ui.util.popBack
@@ -76,6 +77,7 @@ private fun AppContent(deepLinks: Flow<DeepLinkAction>?) {
     val settingsRepository: SettingsRepository<AppSettings> = koinInject()
     val snackbarManager: SnackbarManager = koinInject()
     val snackbarHostState: SnackbarHostState = koinInject()
+    val postError = rememberErrorPoster(snackbarManager)
     val callManager: CallManager = koinInject()
     val settings by settingsRepository.flow.collectAsState(initial = AppSettings())
 
@@ -254,7 +256,7 @@ private fun AppContent(deepLinks: Flow<DeepLinkAction>?) {
                                         backStack.add(Route.Room(event.roomId, event.name))
                                     }
                                     is RoomsViewModel.Event.ShowError -> {
-                                        snackbarManager.showError("$event.message")
+                                        postError(event.message)
                                     }
                                 }
                             }
@@ -334,7 +336,7 @@ private fun AppContent(deepLinks: Flow<DeepLinkAction>?) {
                                         quitApp()
                                     }
                                     is SecurityViewModel.Event.ShowError -> {
-                                        snackbarManager.show("Error: ${event.message}")
+                                        postError(event.message)
                                     }
                                     is SecurityViewModel.Event.ShowSuccess -> {
                                         snackbarManager.show(event.message)
@@ -393,7 +395,7 @@ private fun AppContent(deepLinks: Flow<DeepLinkAction>?) {
                                         backStack.add(Route.Room(event.roomId, event.name))
                                     }
                                     is DiscoverViewModel.Event.ShowError -> {
-                                        snackbarManager.show("Error: $event.message")
+                                        postError(event.message)
                                     }
                                 }
                             }
@@ -420,7 +422,7 @@ private fun AppContent(deepLinks: Flow<DeepLinkAction>?) {
                                         backStack.add(Route.Room(event.roomId, event.name))
                                     }
                                     is RoomInfoViewModel.Event.ShowError -> {
-                                        snackbarManager.show("Error: $event.message")
+                                        postError(event.message)
                                     }
                                     is RoomInfoViewModel.Event.ShowSuccess -> {
                                         snackbarManager.show(event.message)
@@ -461,7 +463,7 @@ private fun AppContent(deepLinks: Flow<DeepLinkAction>?) {
                                         backStack.add(Route.Room(event.roomId, event.name))
                                     }
                                     is SpacesViewModel.Event.ShowError -> {
-                                        snackbarManager.show("Error: $event.message")
+                                        postError(event.message)
                                     }
                                     else -> {}
                                 }
@@ -489,7 +491,7 @@ private fun AppContent(deepLinks: Flow<DeepLinkAction>?) {
                                         backStack.add(Route.Room(event.roomId, event.name))
                                     }
                                     is SpaceDetailViewModel.Event.ShowError -> {
-                                        snackbarManager.show("Error: $event.message")
+                                        postError(event.message)
                                     }
                                 }
                             }
@@ -530,7 +532,7 @@ private fun AppContent(deepLinks: Flow<DeepLinkAction>?) {
                                         backStack.add(Route.Room(event.roomId, event.roomName, event.eventId))
                                     }
                                     is SearchViewModel.Event.ShowError -> {
-                                        snackbarManager.showError(event.message)
+                                        postError(event.message)
                                     }
                                 }
                             }
@@ -560,7 +562,7 @@ private fun AppContent(deepLinks: Flow<DeepLinkAction>?) {
                                         val hint = event.body.takeIf { it.contains('.') && !it.startsWith("mxc://") }
                                         service.port.downloadAttachmentToCache(att, hint)
                                             .onSuccess { path -> openExternal(path, att.mime) }
-                                            .onFailure { snackbarManager.showError("Download failed") }
+                                            .onFailure { postError("Download failed") }
                                     }
                                 }
                             },

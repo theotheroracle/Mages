@@ -25,6 +25,7 @@ import org.mlm.mages.ui.components.core.EmptyState
 import org.mlm.mages.ui.components.core.LoadMoreButton
 import org.mlm.mages.ui.components.core.SectionHeader
 import org.mlm.mages.ui.components.snackbar.snackbarHost
+import org.mlm.mages.ui.components.snackbar.rememberErrorPoster
 import org.mlm.mages.ui.theme.Spacing
 import org.mlm.mages.ui.viewmodel.SpaceDetailViewModel
 
@@ -36,9 +37,10 @@ fun SpaceDetailScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarManager: SnackbarManager = koinInject()
+    val postError = rememberErrorPoster(snackbarManager)
 
     LaunchedEffect(state.error) {
-        state.error?.let { snackbarManager.showError(it) }
+        state.error?.let { postError(it) }
     }
 
     Scaffold(

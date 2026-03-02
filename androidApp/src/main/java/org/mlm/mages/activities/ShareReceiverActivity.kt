@@ -34,6 +34,7 @@ import org.mlm.mages.matrix.MatrixPort
 import org.mlm.mages.ui.ForwardableRoom
 import org.mlm.mages.ui.components.snackbar.SnackbarManager
 import org.mlm.mages.ui.components.snackbar.snackbarHost
+import org.mlm.mages.ui.components.snackbar.rememberErrorPoster
 import org.mlm.mages.ui.theme.MainTheme
 import org.mlm.mages.ui.theme.Spacing
 import java.io.File
@@ -164,6 +165,7 @@ private fun ShareReceiverScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current.applicationContext
     val snackbarManager: SnackbarManager = koinInject()
+    val postError = rememberErrorPoster(snackbarManager)
 
     var rooms by remember { mutableStateOf<List<ForwardableRoom>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -193,7 +195,7 @@ private fun ShareReceiverScreen(
 
     LaunchedEffect(errorMessage) {
         errorMessage?.let {
-            snackbarManager.showError(it)
+            postError(it)
             errorMessage = null
         }
     }

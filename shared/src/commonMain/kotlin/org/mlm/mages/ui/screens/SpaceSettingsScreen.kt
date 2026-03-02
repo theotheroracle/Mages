@@ -23,6 +23,7 @@ import org.koin.compose.koinInject
 import org.mlm.mages.ui.components.snackbar.SnackbarManager
 import org.mlm.mages.ui.components.core.Avatar
 import org.mlm.mages.ui.components.snackbar.snackbarHost
+import org.mlm.mages.ui.components.snackbar.rememberErrorPoster
 import org.mlm.mages.ui.theme.Spacing
 import org.mlm.mages.ui.viewmodel.SpaceSettingsViewModel
 
@@ -34,10 +35,11 @@ fun SpaceSettingsScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarManager: SnackbarManager = koinInject()
+    val postError = rememberErrorPoster(snackbarManager)
 
     LaunchedEffect(state.error) {
         state.error?.let {
-            snackbarManager.showError(it)
+            postError(it)
             viewModel.clearError()
         }
     }
@@ -45,7 +47,7 @@ fun SpaceSettingsScreen(
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
-                is SpaceSettingsViewModel.Event.ShowError -> snackbarManager.showError(event.message)
+                is SpaceSettingsViewModel.Event.ShowError -> postError(event.message)
                 is SpaceSettingsViewModel.Event.ShowSuccess -> snackbarManager.show(event.message)
                 SpaceSettingsViewModel.Event.LeaveSuccess -> onLeaveSuccess()
             }

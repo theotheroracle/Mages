@@ -18,6 +18,7 @@ import org.koin.compose.koinInject
 import org.mlm.mages.ui.components.snackbar.SnackbarManager
 import org.mlm.mages.ui.components.core.Avatar
 import org.mlm.mages.ui.components.snackbar.snackbarHost
+import org.mlm.mages.ui.components.snackbar.rememberErrorPoster
 import org.mlm.mages.ui.theme.Spacing
 import org.mlm.mages.ui.viewmodel.ForwardPickerViewModel
 
@@ -29,6 +30,7 @@ fun ForwardPickerScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarManager: SnackbarManager = koinInject()
+    val postError = rememberErrorPoster(snackbarManager)
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
@@ -37,7 +39,7 @@ fun ForwardPickerScreen(
                     onForwardComplete(event.roomId, event.roomName)
                 }
                 is ForwardPickerViewModel.Event.ShowError -> {
-                    snackbarManager.showError(event.message)
+                    postError(event.message)
                 }
                 is ForwardPickerViewModel.Event.ShowProgress -> {
                     // Could show progress snackbar

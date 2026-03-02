@@ -39,6 +39,7 @@ import org.mlm.mages.ui.theme.Spacing
 import org.koin.compose.koinInject
 import org.mlm.mages.matrix.RoomNotificationMode
 import org.mlm.mages.ui.components.snackbar.SnackbarManager
+import org.mlm.mages.ui.components.snackbar.rememberErrorPoster
 import org.mlm.mages.ui.viewmodel.RoomInfoUiState
 import org.mlm.mages.ui.viewmodel.RoomInfoViewModel
 import org.mlm.mages.matrix.displayName
@@ -53,13 +54,14 @@ fun RoomInfoRoute(
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarManager: SnackbarManager = koinInject()
+    val postError = rememberErrorPoster(snackbarManager)
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
                 RoomInfoViewModel.Event.LeaveSuccess -> onLeaveSuccess()
                 is RoomInfoViewModel.Event.OpenRoom -> { /* handled in App.kt */ }
-                is RoomInfoViewModel.Event.ShowError -> snackbarManager.showError(event.message)
+                is RoomInfoViewModel.Event.ShowError -> postError(event.message)
                 is RoomInfoViewModel.Event.ShowSuccess -> snackbarManager.show(event.message)
             }
         }
@@ -149,9 +151,10 @@ fun RoomInfoScreen(
     var showReportDialog by remember { mutableStateOf(false) }
     var showAdvanced by remember { mutableStateOf(false) }
     val snackbarManager: SnackbarManager = koinInject()
+    val postError = rememberErrorPoster(snackbarManager)
     val clipboard = LocalClipboardManager.current
 
-    LaunchedEffect(state.error) { state.error?.let { snackbarManager.showError(it) } }
+    LaunchedEffect(state.error) { state.error?.let { postError(it) } }
 
     Scaffold(
         topBar = {

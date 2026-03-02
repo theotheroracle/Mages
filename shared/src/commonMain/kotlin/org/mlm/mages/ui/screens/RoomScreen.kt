@@ -61,6 +61,7 @@ import org.mlm.mages.ui.viewmodel.RoomViewModel
 import org.jetbrains.compose.resources.stringResource
 import mages.shared.generated.resources.*
 import org.mlm.mages.ui.components.snackbar.snackbarHost
+import org.mlm.mages.ui.components.snackbar.rememberErrorPoster
 import java.io.File
 import java.nio.file.Files
 import io.github.mlmgames.settings.core.SettingsRepository
@@ -88,6 +89,7 @@ fun RoomScreen(
     val shareHandler = rememberShareHandler()
     var progressText by remember { mutableStateOf<String?>(null) }
     val snackbarManager: SnackbarManager = koinInject()
+    val postError = rememberErrorPoster(snackbarManager)
     val listState = rememberLazyListState()
     val settingsRepository: SettingsRepository<AppSettings> = koinInject()
     val settings by settingsRepository.flow.collectAsState(initial = AppSettings())
@@ -189,7 +191,7 @@ fun RoomScreen(
             when (event) {
                 is RoomViewModel.Event.ShowError -> {
                     progressText = null
-                    snackbarManager.showError(event.message)
+                    postError(event.message)
                 }
                 is RoomViewModel.Event.ShowSuccess -> {
                     progressText = null
@@ -271,7 +273,7 @@ fun RoomScreen(
         } else if (state.hitStart || jumpAttempts >= 30) {
             pendingJumpEventId = null
             jumpAttempts = 0
-            snackbarManager.showError(errorMessage)
+            postError(errorMessage)
         }
     }
 
