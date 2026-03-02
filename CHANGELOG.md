@@ -1,3 +1,17 @@
+## v4.0.1
+
+- Show the actual error message for few fails
+- Add copy action to snackbar (for errors)
+- Filter server or state messages to display them in a different way
+- Option to change recovery key, and turn off key storage
+- make filter chips row scrollable
+- [BREAKING] Bump matrix-rust-sdk to latest main, and add dm voice calling support (Need to clear data!)
+- Improve status indicators, and make "seen by" clickable
+- Revert tap to open color change (cause of bad text contrast)
+- Hide predecessor room banner
+- bump rust toolchain version, and element-call version
+
+
 ## v3.2.2
 
 - Hide predecessor room banner

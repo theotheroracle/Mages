@@ -46,6 +46,22 @@
     <content_attribute id="social-audio">intense</content_attribute>
   </content_rating>
   <releases>
+    <release version="4.0.1" date="2026-03-02" type="stable">
+      <description>
+        <ul>
+          <li>Show the actual error message for few fails</li>
+          <li>Add copy action to snackbar (for errors)</li>
+          <li>Filter server or state messages to display them in a different way</li>
+          <li>Option to change recovery key, and turn off key storage</li>
+          <li>make filter chips row scrollable</li>
+          <li>[BREAKING] Bump matrix-rust-sdk to latest main, and add dm voice calling support (Need to clear data!)</li>
+          <li>Improve status indicators, and make "seen by" clickable</li>
+          <li>Revert tap to open color change (cause of bad text contrast)</li>
+          <li>Hide predecessor room banner</li>
+          <li>bump rust toolchain version, and element-call version</li>
+        </ul>
+      </description>
+    </release>
     <release version="3.2.2" date="2026-03-01" type="stable">
       <description>
         <ul>
