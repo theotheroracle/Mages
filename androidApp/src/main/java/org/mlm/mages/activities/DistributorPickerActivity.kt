@@ -15,7 +15,7 @@ class DistributorPickerActivity : AppCompatActivity() {
         val distributors = UnifiedPush.getDistributors(this)
         val saved = UnifiedPush.getSavedDistributor(this)
 
-        Log.i("UP-Mages", "Distributors: $distributors, saved: $saved")
+        Log.i("UP-Mages", "DistributorPicker: distributors=$distributors, saved=$saved")
 
         when {
             distributors.isEmpty() -> {
@@ -23,28 +23,26 @@ class DistributorPickerActivity : AppCompatActivity() {
                     .setTitle("No push distributor")
                     .setMessage("No push distributor available.")
                     .setPositiveButton("OK") { _, _ -> finish() }
-                    .setOnCancelListener { finish() }
                     .show()
             }
-
             distributors.size == 1 -> {
-                val isEmbedded = distributors.first().contains(packageName)
-                val currentName = if (isEmbedded) "Built-in FCM (embedded)" else distributors.first()
+                val dist = distributors.first()
+                UnifiedPush.saveDistributor(this, dist)
+                UnifiedPush.register(this, PREF_INSTANCE)
+
+                val name = if (dist.contains(packageName)) "Built-in FCM (embedded)" else dist
                 AlertDialog.Builder(this)
                     .setTitle("Push service")
-                    .setMessage("Currently using: $currentName\n\nInstall another distributor like ntfy or Sunup to switch.")
+                    .setMessage("Using: $name\n\nYou can install ntfy or another distributor later to switch.")
                     .setPositiveButton("OK") { _, _ -> finish() }
-                    .setOnCancelListener { finish() }
                     .show()
             }
-
             else -> {
                 AlertDialog.Builder(this)
                     .setTitle("Select push service")
                     .setMessage("Choose which app will deliver your push notifications.")
                     .setPositiveButton("Continue") { _, _ -> launchPicker() }
                     .setNegativeButton("Cancel") { _, _ -> finish() }
-                    .setOnCancelListener { finish() }
                     .show()
             }
         }
@@ -52,10 +50,7 @@ class DistributorPickerActivity : AppCompatActivity() {
 
     private fun launchPicker() {
         UnifiedPush.tryPickDistributor(this) { success ->
-            Log.i("UP-Mages", "tryPickDistributor success=$success")
-            if (success) {
-                UnifiedPush.register(this, PREF_INSTANCE)
-            }
+            if (success) UnifiedPush.register(this, PREF_INSTANCE)
             finish()
         }
     }
