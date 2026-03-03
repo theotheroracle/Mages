@@ -46,6 +46,14 @@
     <content_attribute id="social-audio">intense</content_attribute>
   </content_rating>
   <releases>
+    <release version="4.0.2" date="2026-03-03" type="stable">
+      <description>
+        <ul>
+          <li>Move "This Device" down in DevicesTab, and try fixing UnifiedPush again</li>
+          <li>UI: make "This device" text not autowrap</li>
+        </ul>
+      </description>
+    </release>
     <release version="4.0.1" date="2026-03-02" type="stable">
       <description>
         <ul>

@@ -1,0 +1,2 @@
+- Move "This Device" down in DevicesTab, and try fixing UnifiedPush again
+- UI: make "This device" text not autowrap

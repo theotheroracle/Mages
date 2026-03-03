@@ -1,3 +1,9 @@
+## v4.0.2
+
+- Move "This Device" down in DevicesTab, and try fixing UnifiedPush again
+- UI: make "This device" text not autowrap
+
+
 ## v4.0.1
 
 - Show the actual error message for few fails
