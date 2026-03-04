@@ -11,7 +11,7 @@
 - Filter server or state messages to display them in a different way
 - Option to change recovery key, and turn off key storage
 - make filter chips row scrollable
-- [BREAKING] Bump matrix-rust-sdk to latest main, and add dm voice calling support (Need to clear data!)
+- [BREAKING] Bump matrix-rust-sdk to latest main, and add dm voice calling support
 - Improve status indicators, and make "seen by" clickable
 - Revert tap to open color change (cause of bad text contrast)
 - Hide predecessor room banner
