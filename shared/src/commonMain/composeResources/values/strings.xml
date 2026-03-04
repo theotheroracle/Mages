@@ -144,6 +144,7 @@
     <string name="unignore">Unignore</string>
 
     <string name="jump_to_bottom">Jump to bottom</string>
+    <string name="return_to_position">Return</string>
     <string name="scroll_to_bottom">Scroll to bottom</string>
     <string name="load_earlier_messages">Load earlier messages</string>
     <string name="beginning_of_conversation">Beginning of conversation</string>

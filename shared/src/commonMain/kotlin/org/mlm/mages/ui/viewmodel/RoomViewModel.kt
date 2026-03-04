@@ -953,8 +953,19 @@ class RoomViewModel(
 
     fun jumpToEvent(eventId: String) {
         if (eventId.isBlank()) return
-        launch {
+
+        _state.update { it.copy(highlightedEventId = eventId) }
+
+        viewModelScope.launch {
             _events.send(Event.JumpToEvent(eventId))
+            clearHighlight()
+        }
+    }
+
+    private fun clearHighlight() {
+        viewModelScope.launch {
+            delay(1600)
+            _state.update { it.copy(highlightedEventId = null) }
         }
     }
 

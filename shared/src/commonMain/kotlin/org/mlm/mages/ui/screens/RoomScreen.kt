@@ -154,6 +154,8 @@ fun RoomScreen(
 
     var didInitialScroll by rememberSaveable { mutableStateOf(false) }
 
+    var returnPosition by rememberSaveable { mutableStateOf<Pair<String, Int>?>(null) }
+
 
     val events = state.events
 
@@ -173,6 +175,14 @@ fun RoomScreen(
         if (state.myUserId == null) -1 else events.indexOfLast { it.sender == state.myUserId }
     }
 
+    // Find index of first unread message (where timestamp > lastReadTs)
+    val firstUnreadIndex by remember(events, state.lastReadTs) {
+        derivedStateOf {
+            val lastRead = state.lastReadTs ?: return@derivedStateOf null
+            events.indexOfFirst { it.timestampMs > lastRead }.takeIf { it >= 0 }
+        }
+    }
+
     LaunchedEffect(state.hasTimelineSnapshot, state.events.size, pendingJumpEventId) {
         if (!state.hasTimelineSnapshot || state.events.isEmpty()) return@LaunchedEffect
         if (pendingJumpEventId != null) return@LaunchedEffect
@@ -181,7 +191,9 @@ fun RoomScreen(
             listState.firstVisibleItemIndex == 0 &&
             listState.firstVisibleItemScrollOffset == 0
         ) {
-            listState.scrollToItem(lastListIndex())
+            // Scroll to first unread message, or bottom if none
+            val targetIndex = firstUnreadIndex?.let { listIndexForEventIndex(it) } ?: lastListIndex()
+            listState.scrollToItem(targetIndex)
             didInitialScroll = true
         }
     }
@@ -255,12 +267,17 @@ fun RoomScreen(
         state.isPaginatingBack
     ) {
         val target = pendingJumpEventId ?: return@LaunchedEffect
-        if (!state.hasTimelineSnapshot) return@LaunchedEffect
-        if (state.events.isEmpty()) return@LaunchedEffect
+        if (!state.hasTimelineSnapshot || state.events.isEmpty()) return@LaunchedEffect
 
         val idx = state.events.indexOfFirst { it.eventId == target }
         if (idx >= 0) {
-            listState.scrollToItem(listIndexForEventIndex(idx))
+            val listIndex = listIndexForEventIndex(idx)
+
+            listState.animateScrollToItem(
+                index = listIndex,
+                scrollOffset = -80   // so message isn't at the very top
+            )
+
             pendingJumpEventId = null
             jumpAttempts = 0
             return@LaunchedEffect
@@ -347,18 +364,30 @@ fun RoomScreen(
                 enter = scaleIn() + fadeIn(),
                 exit = scaleOut() + fadeOut()
             ) {
+                val isReturnMode = returnPosition != null
                 ExtendedFloatingActionButton(
                     onClick = {
                         scope.launch {
-                            listState.animateScrollToItem(lastListIndex().coerceAtLeast(0))
+                            if (isReturnMode) {
+                                // Returns to saved pos
+                                returnPosition?.let { (_, index) ->
+                                    listState.animateScrollToItem(index.coerceAtLeast(0))
+                                }
+                                returnPosition = null
+                            } else {
+                                listState.animateScrollToItem(lastListIndex().coerceAtLeast(0))
+                            }
                         }
                     },
                     containerColor = MaterialTheme.colorScheme.tertiaryContainer,
                     contentColor = MaterialTheme.colorScheme.onTertiaryContainer
                 ) {
-                    Icon(Icons.Default.KeyboardArrowDown, stringResource(Res.string.scroll_to_bottom))
+                    Icon(
+                        if (isReturnMode) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        stringResource(if (isReturnMode) Res.string.return_to_position else Res.string.scroll_to_bottom)
+                    )
                     Spacer(Modifier.width(8.dp))
-                    Text(stringResource(Res.string.jump_to_bottom))
+                    Text(stringResource(if (isReturnMode) Res.string.return_to_position else Res.string.jump_to_bottom))
                 }
             }
         },
@@ -479,6 +508,11 @@ fun RoomScreen(
                                                 }
                                             },
                                             onOpenThread = { viewModel.openThread(event) },
+                                            onSaveReturnPosition = { eventId ->
+                                                val currentIndex = listState.firstVisibleItemIndex
+                                                returnPosition = eventId to currentIndex
+                                            },
+                                            highlightedEventId = state.highlightedEventId,
                                             viewModel
                                         )
                                     }
@@ -881,6 +915,8 @@ private fun MessageItem(
     onReact: (String) -> Unit,
     onOpenAttachment: () -> Unit,
     onOpenThread: () -> Unit,
+    onSaveReturnPosition: (String) -> Unit,
+    highlightedEventId: String? = null,
     viewModel: RoomViewModel
 ) {
     val timestamp = event.timestampMs
@@ -1012,44 +1048,64 @@ private fun MessageItem(
         val bubbleOffset = if (isMine) -animatedSwipeOffsetPx else animatedSwipeOffsetPx
         Box(modifier = Modifier.graphicsLayer { translationX = bubbleOffset }) {
 
-        MessageBubble(
-            isMine = isMine,
-            body = event.body,
-            sender = event.senderDisplayName,
-            timestamp = timestamp,
-            groupedWithPrev = shouldGroup,
-            groupedWithNext = nextEvent != null &&
-                nextEvent.sender == event.sender &&
-                formatDate(nextEvent.timestampMs) == eventDate,
-            isDm = state.isDm,
-            reactionChips = chips,
-            eventId = event.eventId,
-            onLongPress = onLongPress,
-            onReact = onReact,
-            lastReadByOthersTs = state.lastIncomingFromOthersTs,
-            thumbPath = state.thumbByEvent[event.eventId],
-            attachmentKind = event.attachment?.kind,
-            attachmentWidth = event.attachment?.width,
-            attachmentHeight = event.attachment?.height,
-            durationMs = event.attachment?.durationMs,
-            onOpenAttachment = onOpenAttachment,
-            replyPreview = event.replyToBody,
-            replySender = event.replyToSenderDisplayName,
-            sendState = event.sendState,
-            isEdited = event.isEdited,
-            poll = event.pollData,
-            onVote = { optionId ->
-                event.pollData?.let { p -> viewModel.votePoll(event.eventId, p, optionId) }
-            },
-            onEndPoll = {
-                viewModel.endPoll(event.eventId)
-            },
-            onReplyPreviewClick = event.replyToEventId?.let { rid ->
-                { viewModel.jumpToEvent(rid) }
-            },
-            threadCount = state.threadCount[event.eventId],
-            onOpenThread = onOpenThread
-        )
+            val isHighlighted = highlightedEventId == event.eventId
+
+            val highlightAlpha by animateFloatAsState(
+                targetValue = if (isHighlighted) 1f else 0f,
+                animationSpec = tween(durationMillis = 900, easing = LinearOutSlowInEasing),
+                label = "highlight"
+            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.14f * highlightAlpha)
+                    )
+                    .animateContentSize()
+            ) {
+                MessageBubble(
+                    isMine = isMine,
+                    body = event.body,
+                    sender = event.senderDisplayName,
+                    timestamp = timestamp,
+                    groupedWithPrev = shouldGroup,
+                    groupedWithNext = nextEvent != null &&
+                            nextEvent.sender == event.sender &&
+                            formatDate(nextEvent.timestampMs) == eventDate,
+                    isDm = state.isDm,
+                    reactionChips = chips,
+                    eventId = event.eventId,
+                    onLongPress = onLongPress,
+                    onReact = onReact,
+                    lastReadByOthersTs = state.lastIncomingFromOthersTs,
+                    thumbPath = state.thumbByEvent[event.eventId],
+                    attachmentKind = event.attachment?.kind,
+                    attachmentWidth = event.attachment?.width,
+                    attachmentHeight = event.attachment?.height,
+                    durationMs = event.attachment?.durationMs,
+                    onOpenAttachment = onOpenAttachment,
+                    replyPreview = event.replyToBody,
+                    replySender = event.replyToSenderDisplayName,
+                    sendState = event.sendState,
+                    isEdited = event.isEdited,
+                    poll = event.pollData,
+                    onVote = { optionId ->
+                        event.pollData?.let { p -> viewModel.votePoll(event.eventId, p, optionId) }
+                    },
+                    onEndPoll = {
+                        viewModel.endPoll(event.eventId)
+                    },
+                    onReplyPreviewClick = event.replyToEventId?.let { rid ->
+                        {
+                            onSaveReturnPosition(event.eventId)
+                            viewModel.jumpToEvent(rid)
+                        }
+                    },
+                    threadCount = state.threadCount[event.eventId],
+                    onOpenThread = onOpenThread
+                )
+            }
         } // end bubble offset Box
     } // end outer Box
     Spacer(Modifier.height(1.dp))

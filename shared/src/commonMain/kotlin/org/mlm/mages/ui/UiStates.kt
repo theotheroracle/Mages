@@ -139,6 +139,7 @@ data class RoomUiState(
     val messageInfoEntries: List<SeenByEntry> = emptyList(),
     val showReadReceiptsSheet: Boolean = false,
     val readReceiptsForEvent: List<SeenByEntry> = emptyList(),
+    val highlightedEventId: String? = null,
 )
 
 

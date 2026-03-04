@@ -144,6 +144,7 @@
     <string name="copied">Copiado</string>
 
     <string name="jump_to_bottom">Ir al final</string>
+    <string name="return_to_position">Volver</string>
     <string name="scroll_to_bottom">Desplazarse hacia abajo</string>
     <string name="load_earlier_messages">Cargar mensajes anteriores</string>
     <string name="beginning_of_conversation">Inicio de la conversación</string>
