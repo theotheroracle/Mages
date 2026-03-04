@@ -35,6 +35,7 @@ import org.mlm.mages.settings.AppSettings
 import org.mlm.mages.ui.components.snackbar.SnackbarManager
 import org.unifiedpush.android.connector.LinkActivityHelper
 import org.unifiedpush.android.connector.UnifiedPush
+import androidx.core.content.edit
 
 class MainActivity : AppCompatActivity() {
 
@@ -63,7 +64,7 @@ class MainActivity : AppCompatActivity() {
 
     private var pendingCallAction: (() -> Unit)? = null
 
-    fun requestVoiceCallPermissions(onGranted: () -> Unit) = // TODO: Switch to deeplink based requests later?
+    fun requestVoiceCallPermissions(onGranted: () -> Unit) =
         requestCallPermissions(needsCamera = false, onGranted)
 
     fun requestVideoCallPermissions(onGranted: () -> Unit) =
@@ -94,7 +95,6 @@ class MainActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
         MagesPaths.init(this)
-        requestVideoCallPermissions {}
 
         val settingsRepository: SettingsRepository<AppSettings> =
             SettingsProvider.get(applicationContext)
@@ -118,7 +118,12 @@ class MainActivity : AppCompatActivity() {
 
         setContent {
             KoinApp(settingsRepository) {
-                App(settingsRepository, deepLinks)
+                App(
+                    settingsRepository,
+                    deepLinks,
+                    onRequestVideoCallPermissions = { action -> requestVideoCallPermissions(action) },
+                    onRequestVoiceCallPermissions = { action -> requestVoiceCallPermissions(action) }
+                )
             }
         }
     }
@@ -158,7 +163,7 @@ class MainActivity : AppCompatActivity() {
     private fun showDistributorPickerOnce() {
         val prefs = getSharedPreferences("up_mages", MODE_PRIVATE)
         if (!prefs.getBoolean("picker_shown", false)) {
-            prefs.edit().putBoolean("picker_shown", true).apply()
+            prefs.edit { putBoolean("picker_shown", true) }
             startActivity(Intent(this, DistributorPickerActivity::class.java))
         }
     }

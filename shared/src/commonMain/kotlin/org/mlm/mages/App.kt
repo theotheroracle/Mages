@@ -60,18 +60,24 @@ val LocalMessageFontSize = staticCompositionLocalOf { 16f }
 @Composable
 fun App(
     settingsRepository: SettingsRepository<AppSettings>,
-    deepLinks: Flow<DeepLinkAction>? = null
+    deepLinks: Flow<DeepLinkAction>? = null,
+    onRequestVideoCallPermissions: ((() -> Unit) -> Unit)? = null,
+    onRequestVoiceCallPermissions: ((() -> Unit) -> Unit)? = null
 ) {
     val settings by settingsRepository.flow.collectAsState(AppSettings())
 
     CompositionLocalProvider(LocalMessageFontSize provides settings.fontSize) {
-        AppContent(deepLinks = deepLinks)
+        AppContent(deepLinks = deepLinks, onRequestVideoCallPermissions = onRequestVideoCallPermissions, onRequestVoiceCallPermissions = onRequestVoiceCallPermissions)
     }
 }
 
 @Suppress("UnusedMaterial3ScaffoldPaddingParameter")
 @Composable
-private fun AppContent(deepLinks: Flow<DeepLinkAction>?) {
+private fun AppContent(
+    deepLinks: Flow<DeepLinkAction>?,
+    onRequestVideoCallPermissions: ((() -> Unit) -> Unit)? = null,
+    onRequestVoiceCallPermissions: ((() -> Unit) -> Unit)? = null
+) {
     val service: MatrixService = koinInject()
     val accountStore: AccountStore = koinInject()
     val settingsRepository: SettingsRepository<AppSettings> = koinInject()
@@ -140,7 +146,8 @@ private fun AppContent(deepLinks: Flow<DeepLinkAction>?) {
             widgetTheme,
             languageTag,
             elementCallUrl,
-            parentCallUrl
+            parentCallUrl,
+            onRequestVideoCallPermissions
         )
 
         BindLifecycle(service)
@@ -305,14 +312,25 @@ private fun AppContent(deepLinks: Flow<DeepLinkAction>?) {
                                 backStack.add(Route.Thread(roomId, eventId, roomName))
                             },
                             onStartCall = {
-                                viewModel.startCall(
+                                onRequestVideoCallPermissions?.invoke {
+                                    viewModel.startCall(
+                                        intent = CallIntent.StartCall,
+                                        theme = widgetTheme,
+                                        languageTag = languageTag,
+                                    )
+                                } ?: viewModel.startCall(
                                     intent = CallIntent.StartCall,
                                     theme = widgetTheme,
                                     languageTag = languageTag,
                                 )
                             },
                             onStartVoiceCall = {
-                                viewModel.startVoiceCall(
+                                onRequestVoiceCallPermissions?.invoke {
+                                    viewModel.startVoiceCall(
+                                        languageTag = Locale.getDefault().toLanguageTag(),
+                                        theme = widgetTheme
+                                    )
+                                } ?: viewModel.startVoiceCall(
                                     languageTag = Locale.getDefault().toLanguageTag(),
                                     theme = widgetTheme
                                 )

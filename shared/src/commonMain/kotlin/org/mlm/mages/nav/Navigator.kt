@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.ui.NavDisplay
@@ -16,6 +17,7 @@ import androidx.savedstate.serialization.SavedStateConfiguration
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.polymorphic
@@ -74,7 +76,10 @@ fun BindDeepLinks(
     languageTag: String,
     elementCallUrl: String?,
     parentCallUrl: String?,
+    onRequestCallPermissions: ((() -> Unit) -> Unit)? = null,
 ) {
+    val coroutineScope = rememberCoroutineScope()
+
     LaunchedEffect(deepLinks) {
         deepLinks?.collectLatest { action ->
             backStack.add(Route.Room(
@@ -86,26 +91,33 @@ fun BindDeepLinks(
             val callIntent = if (action.voiceOnly) CallIntent.JoinExistingVoiceDm
             else CallIntent.JoinExisting
 
-
             if (action.joinCall && !callManager.isInCall(action.roomId)) {
-                // Retry in case room isn't available yet right after restore.
-                repeat(10) { attempt ->
-                    val ok = runCatching {
-                        callManager.startOrJoinCall(
-                            roomId = action.roomId,
-                            roomName = action.roomId,
-                            intent = callIntent,
-                            elementCallUrl = elementCallUrl,
-                            parentUrl = parentCallUrl,
-                            languageTag = languageTag,
-                            theme = widgetTheme
-                        )
-                    }.getOrDefault(false)
+                val joinCallAction: () -> Unit = {
+                    coroutineScope.launch {
+                        repeat(10) { attempt ->
+                            val ok = runCatching {
+                                callManager.startOrJoinCall(
+                                    roomId = action.roomId,
+                                    roomName = action.roomId,
+                                    intent = callIntent,
+                                    elementCallUrl = elementCallUrl,
+                                    parentUrl = parentCallUrl,
+                                    languageTag = languageTag,
+                                    theme = widgetTheme
+                                )
+                            }.getOrDefault(false)
 
-                    if (ok) return@collectLatest
+                            if (ok) return@launch
 
-                    // backoff
-                    delay(400L + attempt * 150L)
+                            delay(400L + attempt * 150L)
+                        }
+                    }
+                }
+
+                if (onRequestCallPermissions != null) {
+                    onRequestCallPermissions.invoke(joinCallAction)
+                } else {
+                    joinCallAction()
                 }
             }
         }
