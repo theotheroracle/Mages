@@ -46,6 +46,15 @@
     <content_attribute id="social-audio">intense</content_attribute>
   </content_rating>
   <releases>
+    <release version="4.1.1" date="2026-03-04" type="stable">
+      <description>
+        <ul>
+          <li>try forcing the redirects be ipv4 addrs (#41)</li>
+          <li>Show a return action, after clicking a reply (#50)</li>
+          <li>Only ask for call perms, when making a call</li>
+        </ul>
+      </description>
+    </release>
     <release version="4.0.2" date="2026-03-03" type="stable">
       <description>
         <ul>

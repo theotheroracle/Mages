@@ -1,0 +1,3 @@
+- try forcing the redirects be ipv4 addrs (#41)
+- Show a return action, after clicking a reply (#50)
+- Only ask for call perms, when making a call

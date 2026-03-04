@@ -1,3 +1,10 @@
+## v4.1.1
+
+- try forcing the redirects be ipv4 addrs (#41)
+- Show a return action, after clicking a reply (#50)
+- Only ask for call perms, when making a call
+
+
 ## v4.0.2
 
 - Move "This Device" down in DevicesTab, and try fixing UnifiedPush again
