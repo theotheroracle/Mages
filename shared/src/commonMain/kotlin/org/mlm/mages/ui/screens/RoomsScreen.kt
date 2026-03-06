@@ -50,6 +50,22 @@ fun RoomsScreen(
             state.lowPriorityItems.isNotEmpty() ||
             state.inviteItems.isNotEmpty()
 
+    val unreadChatCount by remember(state.allItems) {
+        derivedStateOf {
+            state.allItems.count { !it.isInvited && it.unreadCount > 0 }
+        }
+    }
+    val unreadGroupsCount by remember(state.allItems) {
+        derivedStateOf {
+            state.allItems.count { !it.isInvited && !it.isDm && it.unreadCount > 0 }
+        }
+    }
+    val unreadDmsCount by remember(state.allItems) {
+        derivedStateOf {
+            state.allItems.count { !it.isInvited && it.isDm && it.unreadCount > 0 }
+        }
+    }
+
     val isInvitesFilter = state.typeFilter == RoomTypeFilter.Invites
 
     val firstFavouriteId = state.favouriteItems.firstOrNull()?.roomId
@@ -81,6 +97,9 @@ fun RoomsScreen(
                 onSearchChange = viewModel::setSearchQuery,
                 onToggleUnreadOnly = viewModel::toggleUnreadOnly,
                 onSetTypeFilter = viewModel::setTypeFilter,
+                unreadChatCount = unreadChatCount,
+                unreadGroupsCount = unreadGroupsCount,
+                unreadDmsCount = unreadDmsCount,
                 onOpenSpaces = onOpenSpaces,
                 onOpenSecurity = onOpenSecurity,
                 onOpenDiscover = onOpenDiscover,
@@ -271,6 +290,9 @@ private fun RoomsTopBar(
     unreadOnly: Boolean,
     typeFilter: RoomTypeFilter,
     inviteCount: Int,
+    unreadChatCount: Int,
+    unreadGroupsCount: Int,
+    unreadDmsCount: Int,
     onSearchChange: (String) -> Unit,
     onToggleUnreadOnly: () -> Unit,
     onSetTypeFilter: (RoomTypeFilter) -> Unit,
@@ -350,7 +372,14 @@ private fun RoomsTopBar(
             FilterChip(
                 selected = unreadOnly,
                 onClick = onToggleUnreadOnly,
-                label = { Text(stringResource(Res.string.unread_only)) },
+                label = {
+                    Text(
+                        text = withCount(
+                            stringResource(Res.string.unread_only),
+                            unreadChatCount
+                        )
+                    )
+                },
                 leadingIcon = if (unreadOnly) {
                     { Icon(Icons.Default.Check, null, Modifier.size(18.dp)) }
                 } else null
@@ -358,7 +387,7 @@ private fun RoomsTopBar(
             FilterChip(
                 selected = typeFilter == RoomTypeFilter.Groups,
                 onClick = { onSetTypeFilter(RoomTypeFilter.Groups) },
-                label = { Text("Groups") },
+                label = { Text(withCount("Groups", unreadGroupsCount, unreadOnly)) },
                 leadingIcon = if (typeFilter == RoomTypeFilter.Groups) {
                     { Icon(Icons.Default.Check, null, Modifier.size(18.dp)) }
                 } else null
@@ -366,7 +395,7 @@ private fun RoomsTopBar(
             FilterChip(
                 selected = typeFilter == RoomTypeFilter.Dms,
                 onClick = { onSetTypeFilter(RoomTypeFilter.Dms) },
-                label = { Text("DMs") },
+                label = { Text(withCount("DMs", unreadDmsCount, unreadOnly)) },
                 leadingIcon = if (typeFilter == RoomTypeFilter.Dms) {
                     { Icon(Icons.Default.Check, null, Modifier.size(18.dp)) }
                 } else null
@@ -389,4 +418,9 @@ private fun RoomsTopBar(
             )
         }
     }
+}
+
+private fun withCount(label: String, count: Int, showCount : Boolean = true): String {
+    if (count <= 0 || !showCount) return label
+    return "$label ($count)"
 }
