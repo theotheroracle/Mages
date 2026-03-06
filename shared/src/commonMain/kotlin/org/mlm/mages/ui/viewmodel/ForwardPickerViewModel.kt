@@ -79,11 +79,10 @@ class ForwardPickerViewModel(
             updateState { copy(isLoading = false, rooms = forwardable) }
 
             forwardable.forEach { room ->
-                val mxc = room.avatarUrl ?: return@forEach
-                if (!mxc.startsWith("mxc://")) return@forEach
+                val avatar = room.avatarUrl ?: return@forEach
 
                 launch {
-                    val path = service.avatars.resolve(mxc, px = 64, crop = true) ?: return@launch
+                    val path = service.avatars.resolve(avatar, px = 64, crop = true) ?: return@launch
                     updateState {
                         copy(
                             rooms = rooms.map { r ->

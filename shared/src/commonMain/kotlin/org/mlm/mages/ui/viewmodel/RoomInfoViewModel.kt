@@ -170,20 +170,17 @@ class RoomInfoViewModel(
             }
 
             profile?.avatarUrl?.let { url ->
-                if (url.startsWith("mxc://")) {
-                    launch {
-                        val path = service.avatars.resolve(url, px = 160, crop = true) ?: return@launch
-                        updateState { copy(profile = this.profile?.copy(avatarUrl = path)) }
-                    }
+                launch {
+                    val path = service.avatars.resolve(url, px = 160, crop = true) ?: return@launch
+                    updateState { copy(profile = this.profile?.copy(avatarUrl = path)) }
                 }
             }
 
             sorted.forEach { m ->
-                val mxc = m.avatarUrl ?: return@forEach
-                if (!mxc.startsWith("mxc://")) return@forEach
+                val avatar = m.avatarUrl ?: return@forEach
 
                 launch {
-                    val path = service.avatars.resolve(mxc, px = 64, crop = true) ?: return@launch
+                    val path = service.avatars.resolve(avatar, px = 64, crop = true) ?: return@launch
                     updateState {
                         copy(
                             members = this.members.map { mm ->

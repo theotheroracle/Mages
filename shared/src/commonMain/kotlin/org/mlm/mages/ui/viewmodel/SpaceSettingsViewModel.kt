@@ -173,11 +173,8 @@ class SpaceSettingsViewModel(
             val spaces = runSafe { service.mySpaces() } ?: emptyList()
             val space = spaces.find { it.roomId == currentState.spaceId }
             updateState { copy(space = space) }
-            val mxc = space?.avatarUrl
-            if (!mxc.isNullOrBlank() && mxc.startsWith("mxc://")) {
-                val path = runSafe { service.avatars.resolve(mxc, px = 96, crop = true) }
-                if (path != null) updateState { copy(spaceAvatarPath = path) }
-            }
+            val path = runSafe { service.avatars.resolve(space?.avatarUrl, px = 96, crop = true) }
+            if (path != null) updateState { copy(spaceAvatarPath = path) }
         }
     }
 
@@ -223,13 +220,11 @@ class SpaceSettingsViewModel(
                 // Prefetch avatars
                 children.forEach { child ->
                     child.avatarUrl?.let { url ->
-                        if (url.startsWith("mxc://")) {
-                            launch {
-                                val path = service.avatars.resolve(url, px = 64, crop = true)
-                                if (path != null) {
-                                    updateState {
-                                        copy(avatarPathByRoomId = avatarPathByRoomId + (child.roomId to path))
-                                    }
+                        launch {
+                            val path = service.avatars.resolve(url, px = 64, crop = true)
+                            if (path != null) {
+                                updateState {
+                                    copy(avatarPathByRoomId = avatarPathByRoomId + (child.roomId to path))
                                 }
                             }
                         }

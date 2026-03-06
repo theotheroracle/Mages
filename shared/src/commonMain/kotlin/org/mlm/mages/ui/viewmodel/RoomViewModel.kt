@@ -123,10 +123,8 @@ class RoomViewModel(
                 updateState { copy(isDm = profile.isDm, roomAvatarUrl = profile.avatarUrl, roomName = profile.name) }
 
                 profile.avatarUrl?.let { url ->
-                    if (url.startsWith("mxc://")) {
-                        val path = service.avatars.resolve(url, px = 96, crop = true)
-                        if (path != null) updateState { copy(roomAvatarUrl = path) }
-                    }
+                    val path = service.avatars.resolve(url, px = 96, crop = true)
+                    if (path != null) updateState { copy(roomAvatarUrl = path) }
                 }
             }
         }
@@ -1349,7 +1347,10 @@ class RoomViewModel(
                     service.port.seenByForEvent(s.roomId, lastOutgoing.eventId, 10)
                 }
             } ?: emptyList()
-            updateState { copy(seenByEntries = entries) }
+            val resolvedEntries = entries.map { entry ->
+                entry.copy(avatarUrl = service.avatars.resolve(entry.avatarUrl, px = 64, crop = true))
+            }
+            updateState { copy(seenByEntries = resolvedEntries) }
         }
     }
 

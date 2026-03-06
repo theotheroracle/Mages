@@ -78,6 +78,10 @@ class AvatarLoader(
         return result
     }
 
+    suspend fun resolveAll(avatarUrls: List<String?>, px: Int, crop: Boolean = true): List<String?> {
+        return avatarUrls.map { resolve(it, px, crop) }
+    }
+
     fun shutdown() {
         scope.cancel()
     }
