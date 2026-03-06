@@ -81,6 +81,7 @@ data class RoomUiState(
     val error: String? = null,
 
     val lastReadTs: Long? = null,
+    val hasLoadedLastRead: Boolean = false,
     val isDm: Boolean = false,
     val lastIncomingFromOthersTs: Long? = null,
     val lastOutgoingRead: Boolean = false,

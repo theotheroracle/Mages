@@ -1277,7 +1277,8 @@ class RoomViewModel(
     private fun observeOwnReceipt() {
         launch {
             runSafe { service.port.ownLastRead(currentState.roomId) }
-                ?.let { (_, ts) -> updateState { copy(lastReadTs = ts) } }
+                ?.let { (_, ts) -> updateState { copy(lastReadTs = ts, hasLoadedLastRead = true) } }
+                ?: updateState { copy(hasLoadedLastRead = true) }
         }
 
         ownReceiptToken?.let { service.port.stopReceiptsObserver(it) }
@@ -1285,7 +1286,8 @@ class RoomViewModel(
             override fun onChanged() {
                 launch {
                     runSafe { service.port.ownLastRead(currentState.roomId) }
-                        ?.let { (_, ts) -> updateState { copy(lastReadTs = ts) } }
+                        ?.let { (_, ts) -> updateState { copy(lastReadTs = ts, hasLoadedLastRead = true) } }
+                        ?: updateState { copy(hasLoadedLastRead = true) }
                 }
             }
         })

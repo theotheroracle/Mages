@@ -99,6 +99,8 @@ fun RoomScreen(
     }
     var jumpAttempts by remember { mutableIntStateOf(0) }
 
+    var seekingUnread by rememberSaveable { mutableStateOf(false) }
+    var seekUnreadAttempts by remember { mutableIntStateOf(0) }
     val openExternal = rememberFileOpener()
 
     val imagePicker = rememberFilePickerLauncher(
@@ -183,21 +185,84 @@ fun RoomScreen(
         }
     }
 
-    LaunchedEffect(state.hasTimelineSnapshot, state.events.size, pendingJumpEventId) {
+    val needsUnreadSeek by remember(events, state.lastReadTs, state.hitStart) {
+        derivedStateOf {
+            val lastRead = state.lastReadTs ?: return@derivedStateOf false
+            val firstTs = events.firstOrNull()?.timestampMs ?: return@derivedStateOf false
+            !state.hitStart && firstTs > lastRead
+        }
+    }
+
+    LaunchedEffect(state.hasTimelineSnapshot, state.events.size, pendingJumpEventId, state.hasLoadedLastRead) {
         if (!state.hasTimelineSnapshot || state.events.isEmpty()) return@LaunchedEffect
         if (pendingJumpEventId != null) return@LaunchedEffect
+        if (!state.hasLoadedLastRead) return@LaunchedEffect
 
         if (!didInitialScroll &&
             listState.firstVisibleItemIndex == 0 &&
             listState.firstVisibleItemScrollOffset == 0
         ) {
-            // Scroll to first unread message, or bottom if none
-            val targetIndex = firstUnreadIndex?.let { listIndexForEventIndex(it) } ?: lastListIndex()
-            listState.scrollToItem(targetIndex)
-            didInitialScroll = true
+            if (needsUnreadSeek) {
+                seekingUnread = true
+                seekUnreadAttempts = 0
+            } else {
+                val unreadIdx = firstUnreadIndex
+                if (unreadIdx != null) {
+                val targetIndex = listIndexForEventIndex(unreadIdx)
+                listState.scrollToItem(targetIndex)
+                didInitialScroll = true
+                } else {
+                    listState.scrollToItem(lastListIndex())
+                    didInitialScroll = true
+                }
+            }
         }
     }
 
+    LaunchedEffect(
+        seekingUnread,
+        needsUnreadSeek,
+        firstUnreadIndex,
+        state.hasTimelineSnapshot,
+        state.hasLoadedLastRead,
+        state.events.size,
+        state.hitStart,
+        state.isPaginatingBack
+    ) {
+        if (!seekingUnread) return@LaunchedEffect
+        if (!state.hasTimelineSnapshot || state.events.isEmpty()) return@LaunchedEffect
+        if (!state.hasLoadedLastRead) return@LaunchedEffect
+
+        when {
+            needsUnreadSeek -> {
+                if (!state.isPaginatingBack) {
+                    if (seekUnreadAttempts < 30) {
+                        seekUnreadAttempts++
+                        viewModel.paginateBack()
+                    } else {
+                        seekingUnread = false
+                        seekUnreadAttempts = 0
+                        listState.scrollToItem(listIndexForEventIndex(0))
+                        didInitialScroll = true
+                    }
+                }
+            }
+
+            firstUnreadIndex != null -> {
+                listState.scrollToItem(listIndexForEventIndex(firstUnreadIndex!!))
+                seekingUnread = false
+                seekUnreadAttempts = 0
+                didInitialScroll = true
+            }
+
+            else -> {
+                listState.scrollToItem(lastListIndex())
+                seekingUnread = false
+                seekUnreadAttempts = 0
+                didInitialScroll = true
+            }
+        }
+    }
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             when (event) {
@@ -246,13 +311,13 @@ fun RoomScreen(
         }
     }
 
-    LaunchedEffect(events.lastOrNull()?.itemId, isNearBottom) {
+    LaunchedEffect(events.lastOrNull()?.itemId, isNearBottom, seekingUnread) {
         val last = events.lastOrNull() ?: return@LaunchedEffect
-        if (isNearBottom) viewModel.markReadHere(last)
+        if (isNearBottom && !seekingUnread) viewModel.markReadHere(last)
     }
 
     LaunchedEffect(events.size) {
-        if (isNearBottom && events.isNotEmpty()) {
+        if (isNearBottom && events.isNotEmpty() && !seekingUnread) {
             listState.animateScrollToItem(lastListIndex())
         }
     }
@@ -365,29 +430,60 @@ fun RoomScreen(
                 exit = scaleOut() + fadeOut()
             ) {
                 val isReturnMode = returnPosition != null
-                ExtendedFloatingActionButton(
-                    onClick = {
-                        scope.launch {
-                            if (isReturnMode) {
-                                // Returns to saved pos
-                                returnPosition?.let { (_, index) ->
-                                    listState.animateScrollToItem(index.coerceAtLeast(0))
-                                }
-                                returnPosition = null
-                            } else {
-                                listState.animateScrollToItem(lastListIndex().coerceAtLeast(0))
+
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (!isReturnMode && firstUnreadIndex != null) {
+                        val unreadListIndex = listIndexForEventIndex(firstUnreadIndex!!)
+                        val firstVisible = listState.firstVisibleItemIndex
+                        val isAtUnread = firstVisible in (unreadListIndex - 2)..(unreadListIndex + 2)
+
+                        if (!isAtUnread) {
+                            SmallFloatingActionButton(
+                                onClick = {
+                                    scope.launch {
+                                        listState.animateScrollToItem(
+                                            index = unreadListIndex,
+                                            scrollOffset = -80
+                                        )
+                                    }
+                                },
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                            ) {
+                                Icon(
+                                    Icons.Default.MarkChatUnread,
+                                    contentDescription = stringResource(Res.string.jump_to_unread)
+                                )
                             }
                         }
-                    },
-                    containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer
-                ) {
-                    Icon(
-                        if (isReturnMode) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                        stringResource(if (isReturnMode) Res.string.return_to_position else Res.string.scroll_to_bottom)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(if (isReturnMode) Res.string.return_to_position else Res.string.jump_to_bottom))
+                    }
+
+                    ExtendedFloatingActionButton(
+                        onClick = {
+                            scope.launch {
+                                if (isReturnMode) {
+                                    returnPosition?.let { (_, index) ->
+                                        listState.animateScrollToItem(index.coerceAtLeast(0))
+                                    }
+                                    returnPosition = null
+                                } else {
+                                    listState.animateScrollToItem(lastListIndex().coerceAtLeast(0))
+                                }
+                            }
+                        },
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+                    ) {
+                        Icon(
+                            if (isReturnMode) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            stringResource(if (isReturnMode) Res.string.return_to_position else Res.string.scroll_to_bottom)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(if (isReturnMode) Res.string.return_to_position else Res.string.jump_to_bottom))
+                    }
                 }
             }
         },
@@ -516,6 +612,32 @@ fun RoomScreen(
                                             viewModel
                                         )
                                     }
+                                }
+                            }
+                        }
+
+                        if (seekingUnread) {
+                            Surface(
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(top = 12.dp),
+                                shape = RoundedCornerShape(999.dp),
+                                tonalElevation = 3.dp,
+                                shadowElevation = 2.dp
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    CircularWavyProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Text(
+                                        text = stringResource(Res.string.loading_unread),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
                         }
