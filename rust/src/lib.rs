@@ -4186,7 +4186,9 @@ impl Client {
                     let _ = opener.open(sso_url);
                     Ok(())
                 })
-                .server_builder(LocalServerBuilder::new().ip_address(LocalServerIpAddress::Localhostv4))
+                .server_builder(
+                    LocalServerBuilder::new().ip_address(LocalServerIpAddress::Localhostv4),
+                )
                 .initial_device_display_name(device_name.as_deref().unwrap_or("Mages"))
                 .send()
                 .await
@@ -4275,6 +4277,91 @@ impl Client {
 
             self.ensure_sync_service().await;
 
+            Ok(())
+        })
+    }
+
+    /// Start OAuth login - returns the authorization URL for Android to open in browser
+    pub fn start_oauth_login(&self, redirect_uri: String) -> Result<String, FfiError> {
+        RT.block_on(async {
+            let oauth = self.inner.oauth();
+            let redirect_uri =
+                Url::parse(&redirect_uri).map_err(|e| FfiError::Msg(e.to_string()))?;
+            let registration_data = mages_client_metadata(&redirect_uri).into();
+
+            let auth_data = oauth
+                .login(redirect_uri, None, Some(registration_data), None)
+                .build()
+                .await
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+
+            Ok(auth_data.url.to_string())
+        })
+    }
+
+    /// Finish OAuth login with the callback URL from the browser
+    pub fn finish_oauth_login(
+        &self,
+        callback_data: String,
+        device_name: Option<String>,
+    ) -> Result<(), FfiError> {
+        RT.block_on(async {
+            let oauth = self.inner.oauth();
+            let callback = Url::parse(&callback_data)
+                .map(UrlOrQuery::Url)
+                .unwrap_or_else(|_| UrlOrQuery::Query(callback_data));
+
+            oauth
+                .finish_login(callback)
+                .await
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+
+            Self::maybe_update_device_name(self, device_name).await;
+            Self::persist_oauth_session(self).await?;
+            self.ensure_sync_service().await;
+            Ok(())
+        })
+    }
+
+    /// Start SSO login - returns the SSO URL for Android to open in browser
+    pub fn start_sso_login(
+        &self,
+        redirect_uri: String,
+        idp_id: Option<String>,
+    ) -> Result<String, FfiError> {
+        RT.block_on(async {
+            let auth = self.inner.matrix_auth();
+            let url = auth
+                .get_sso_login_url(&redirect_uri, idp_id.as_deref())
+                .await
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+            Ok(url)
+        })
+    }
+
+    /// Finish SSO login with the callback URL from the browser
+    pub fn finish_sso_login(
+        &self,
+        callback_url: String,
+        device_name: Option<String>,
+    ) -> Result<(), FfiError> {
+        RT.block_on(async {
+            let auth = self.inner.matrix_auth();
+            let callback_url =
+                Url::parse(&callback_url).map_err(|e| FfiError::Msg(e.to_string()))?;
+
+            let mut builder = auth
+                .login_with_sso_callback(callback_url)
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+
+            if let Some(name) = device_name.as_deref() {
+                builder = builder.initial_device_display_name(name);
+            }
+
+            let response = builder.await.map_err(|e| FfiError::Msg(e.to_string()))?;
+
+            Self::persist_matrix_login_response(self, &response).await?;
+            self.ensure_sync_service().await;
             Ok(())
         })
     }
@@ -6158,7 +6245,8 @@ impl Client {
             for entry in out.iter_mut() {
                 if entry.avatar_url.is_none() {
                     if let Ok(uid) = entry.user_id.parse::<OwnedUserId>() {
-                        if let Ok(profile) = self.inner.account().fetch_user_profile_of(&uid).await {
+                        if let Ok(profile) = self.inner.account().fetch_user_profile_of(&uid).await
+                        {
                             entry.avatar_url = profile
                                 .get_static::<AvatarUrl>()
                                 .ok()
@@ -6634,6 +6722,57 @@ impl Client {
         } else {
             self.inbox.lock().unwrap().get(flow_id).map(|p| p.0.clone())
         }
+    }
+
+    async fn maybe_update_device_name(client: &Client, device_name: Option<String>) {
+        if let Some(name) = device_name
+            && let Some(device_id) = client.inner.device_id()
+        {
+            use matrix_sdk::ruma::api::client::device::update_device;
+
+            let mut req = update_device::v3::Request::new(device_id.to_owned());
+            req.display_name = Some(name);
+            let _ = client.inner.send(req).await;
+        }
+    }
+
+    async fn persist_oauth_session(client: &Client) -> Result<(), FfiError> {
+        if let Some(sess) = client.inner.oauth().user_session() {
+            tokio::fs::create_dir_all(&client.store_dir).await?;
+            let info = SessionInfo {
+                user_id: sess.meta.user_id.to_string(),
+                device_id: sess.meta.device_id.to_string(),
+                access_token: sess.tokens.access_token.clone(),
+                refresh_token: sess.tokens.refresh_token.clone(),
+                homeserver: client.inner.homeserver().to_string(),
+            };
+            tokio::fs::write(
+                session_file(&client.store_dir),
+                serde_json::to_string(&info).unwrap(),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn persist_matrix_login_response(
+        client: &Client,
+        response: &matrix_sdk::ruma::api::client::session::login::v3::Response,
+    ) -> Result<(), FfiError> {
+        tokio::fs::create_dir_all(&client.store_dir).await?;
+        let info = SessionInfo {
+            user_id: response.user_id.to_string(),
+            device_id: response.device_id.clone().to_string(),
+            access_token: response.access_token.clone(),
+            refresh_token: response.refresh_token.clone(),
+            homeserver: client.inner.homeserver().to_string(),
+        };
+        tokio::fs::write(
+            session_file(&client.store_dir),
+            serde_json::to_string(&info).unwrap(),
+        )
+        .await?;
+        Ok(())
     }
 }
 

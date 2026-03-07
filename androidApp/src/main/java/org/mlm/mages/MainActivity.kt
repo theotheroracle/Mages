@@ -28,6 +28,7 @@ import org.mlm.mages.nav.handleMatrixLink
 import org.mlm.mages.nav.parseMatrixLink
 import org.mlm.mages.platform.MagesPaths
 import org.mlm.mages.platform.SettingsProvider
+import org.mlm.mages.platform.AndroidBrowserAuthCoordinator
 import org.mlm.mages.push.AndroidNotificationHelper
 import org.mlm.mages.push.PREF_INSTANCE
 import org.mlm.mages.push.PusherReconciler
@@ -189,6 +190,11 @@ class MainActivity : AppCompatActivity() {
     private fun handleIntent(intent: Intent) {
         val snackbarManager: SnackbarManager by inject()
         intent.data?.let { uri ->
+            if (AndroidBrowserAuthCoordinator.isCallback(uri)) {
+                AndroidBrowserAuthCoordinator.handleCallback(uri)
+                return
+            }
+
             if (uri.scheme == "mages" && uri.host == "room") {
                 val roomId = uri.getQueryParameter("id")
                 val eventId = uri.getQueryParameter("event")

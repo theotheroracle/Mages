@@ -1,5 +1,6 @@
 package org.mlm.mages.matrix
 
+import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.trySendBlocking
@@ -7,6 +8,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import mages.FfiRoomNotificationMode
 import mages.SasEmojis
 import mages.TimelineDiffKind
@@ -14,6 +16,8 @@ import mages.Client as FfiClient
 import mages.RoomSummary as FfiRoom
 import org.mlm.mages.*
 import org.mlm.mages.platform.MagesPaths
+import org.mlm.mages.platform.AndroidBrowserAuthCoordinator
+import org.koin.mp.KoinPlatform
 
 class RustMatrixPort : MatrixPort {
     @Volatile
@@ -848,20 +852,54 @@ class RustMatrixPort : MatrixPort {
         openUrl: (String) -> Boolean,
         deviceName: String?
     ): Boolean = withContext(Dispatchers.IO) {
-        val opener = object : mages.UrlOpener {
-            override fun open(url: String): Boolean = openUrl(url)
+        @Suppress("UNUSED_PARAMETER")
+        val ignored = openUrl
+
+        val context = KoinPlatform.getKoin().get<Context>()
+        val pending = AndroidBrowserAuthCoordinator.beginLogin()
+
+        try {
+            val ssoUrl = withClient {
+                it.startSsoLogin(AndroidBrowserAuthCoordinator.ssoRedirectUri, null)
+            }
+
+            if (!AndroidBrowserAuthCoordinator.launch(context, ssoUrl)) {
+                return@withContext false
+            }
+
+            val callback = withTimeout(180_000) { pending.await() }
+            withClient { it.finishSsoLogin(callback, deviceName) }
+            true
+        } finally {
+            AndroidBrowserAuthCoordinator.clear(pending)
         }
-        runCatching { withClient { it.loginSsoLoopback(opener, deviceName) } }.isSuccess
     }
 
     override suspend fun loginOauthLoopback(
         openUrl: (String) -> Boolean,
         deviceName: String?
     ): Boolean = withContext(Dispatchers.IO) {
-        val opener = object : mages.UrlOpener {
-            override fun open(url: String): Boolean = openUrl(url)
+        @Suppress("UNUSED_PARAMETER")
+        val ignored = openUrl
+
+        val context = KoinPlatform.getKoin().get<Context>()
+        val pending = AndroidBrowserAuthCoordinator.beginLogin()
+
+        try {
+            val authUrl = withClient {
+                it.startOauthLogin(AndroidBrowserAuthCoordinator.oauthRedirectUri)
+            }
+
+            if (!AndroidBrowserAuthCoordinator.launch(context, authUrl)) {
+                return@withContext false
+            }
+
+            val callback = withTimeout(180_000) { pending.await() }
+            withClient { it.finishOauthLogin(callback, deviceName) }
+            true
+        } finally {
+            AndroidBrowserAuthCoordinator.clear(pending)
         }
-        runCatching { withClient { it.loginOauthLoopback(opener, deviceName) } }.isSuccess
     }
 
     override suspend fun homeserverLoginDetails(): HomeserverLoginDetails = withContext(Dispatchers.IO) {

@@ -51,6 +51,14 @@
                     android:host="room" />
             </intent-filter>
 
+            <!-- OAuth/SSO callback scheme (com.github.mlm-games.mages) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.github.mlm-games.mages" />
+            </intent-filter>
+
             <!-- matrix.to -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
