@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use futures_util::StreamExt;
 use js_int::UInt;
 use matrix_sdk::RoomState;
