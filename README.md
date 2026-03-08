@@ -5,37 +5,35 @@ Mages is an experimental matrix chat client.
 - UI: [Compose Multiplatform](https://www.jetbrains.com/lp/compose-multiplatform/)
 - Core: a Rust library built on top of [matrix-rust-sdk](https://github.com/matrix-org/matrix-rust-sdk), exposed to Kotlin via UniFFI (not using matrix-sdk-ffi)
 
-The goal was to have a cross‑platform desktop/mobile client, (initially there were very few alternatives to element-desktop which notify, and stay hidden in my tray (unlike neochat, though it has push notifs via kunifiedpush, while this currently polls) while not being as heavy. This kinda is heavy (though not as much), until i find a better solution for notifs on desktop). Although it might occasionally appear stable, it is never aiming to be as stable as element's clients (or other clients like fluffy or fractal with a proper consumer-focused goal)
+The goal was to have a cross‑platform desktop/mobile client, while not being as heavy as web apps. (initially there were very few alternatives to element-desktop which notify, with proper screen-sharing support and that stay hidden in my tray (unlike neochat, though it has linux-specific push notifs via kunifiedpush, while this currently polls). Although it might occasionally appear stable, it is never aiming to be as stable as element's clients (or other clients like fluffy or fractal with a proper user-focused goal)
 
 ## Status 
 
-This is experimental‑stage software. If you use it, assume things may break. (Do open an issue if you'd like to :)
+This is experimental‑stage software. It is still in it's early stages, and might lack common features or have (game/use-breaking?) bugs (do open an issue if you've encountered any)
 
 ## Features (as of the last README update)
 
-- Room list with basic previews and unread counts
-- Room and thread timelines (text, media, polls)
+- Room list with previews and unread counts
+- Room and thread timelines (text, media, polls, live-location sharing)
 - End‑to‑end encryption (via matrix‑sdk)
-- Spaces browser
+- Full Spaces support
 - Simple presence / privacy settings
-- Android app and Linux desktop builds (Available on/as FDroid, AppImage, AUR (`mages-bin`), snapcraft and flathub )
+- Android app and Linux desktop builds (Available on/as FDroid, AppImage (updatable via `Gear Lever` for example), AUR (`mages-bin`), snapcraft and flathub)
 - Unsigned Windows and Mac builds
-- Experimental Call Support
+- Experimental Audio and Video Calls Support (Screen sharing is only available on desktop)
 - Multi account and language (currently only spanish) support 
 
 ## Platforms
 
 - **Android**  
-  - Signed APKs and AABs are published on GitHub Releases.
-  - F‑Droid metadata is planned; for now you can sideload the APK.
+  - Signed APKs and AABs are published on GitHub Releases, or are downloadable via F-Droid (does sometimes lag behind).
 
 - **Linux desktop**  
   - AppImage builds for x86_64 and aarch64.
-  - AUR:  wraps the AppImage.
-  - Other package formats (Snap) may follow.
+  - Also downloadable via AUR and snap-store.
 
 - **Other platforms**  
-  - The UI is Compose Multiplatform. In practice, only Android and Linux's AppImages are actively tested. Windows and Mac are tested rarely and are not signed.
+  - The UI is Compose Multiplatform. In practice, only Android and Linux's AppImages are actively tested. Windows and Mac are tested rarely and are not signed/notarized. Web is theortically possible via wasm-bindgen, but should be kinda hard to maintain.
 
 ## Architecture
 
@@ -87,9 +85,6 @@ Most Matrix‑specific logic lives in Rust; Kotlin mostly handles presentation.
 ## Contributing
 
 Issues and small PRs are welcome. Please keep changes focused and self‑contained.
-
-- Rust changes: try to keep the FFI surface small and stable.
-- Kotlin changes: avoid expensive work in composables; use ViewModels and background dispatchers.
 
 ## License
 
