@@ -176,7 +176,8 @@ fun RoomScreen(
     }
 
     val lastOutgoingIndex = remember(events, state.myUserId) {
-        if (state.myUserId == null) -1 else events.indexOfLast { it.sender == state.myUserId }
+        if (state.myUserId == null) -1
+        else events.indexOfLast { it.sender == state.myUserId && !it.rendersAsSystemMessage() }
     }
 
     // Find index of first unread message (where timestamp > lastReadTs)
@@ -600,11 +601,7 @@ fun RoomScreen(
                                 }
                             } else {
                                 itemsIndexed(events, key = { _, e -> e.itemId }) { index, event ->
-                                    val isSystemEvent = event.eventType != EventType.Message &&
-                                            event.eventType != EventType.Poll &&
-                                            event.eventType != EventType.Sticker
-
-                                    if (isSystemEvent && event.body.isNotBlank()) {
+                                    if (event.rendersAsSystemMessage()) {
                                         SystemMessageItem(event = event)
                                     } else {
                                         MessageItem(
@@ -1069,6 +1066,12 @@ private fun StartOfConversationChip() {
         )
     }
 }
+
+private fun MessageEvent.rendersAsSystemMessage(): Boolean =
+    eventType != EventType.Message &&
+        eventType != EventType.Poll &&
+        eventType != EventType.Sticker &&
+        body.isNotBlank()
 
 @Composable
 private fun MessageItem(
