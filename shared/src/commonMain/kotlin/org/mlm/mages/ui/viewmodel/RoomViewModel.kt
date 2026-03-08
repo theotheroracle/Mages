@@ -13,6 +13,8 @@ import org.mlm.mages.calls.CallManager
 import org.mlm.mages.matrix.*
 import org.mlm.mages.platform.Notifier
 import org.mlm.mages.platform.ShareContent
+import org.mlm.mages.platform.LiveLocationProvider
+import org.mlm.mages.platform.LiveLocationSession
 import org.mlm.mages.platform.platformEmbeddedElementCallParentUrlOrNull
 import org.mlm.mages.platform.platformEmbeddedElementCallUrlOrNull
 import org.mlm.mages.settings.AppSettings
@@ -88,6 +90,24 @@ class RoomViewModel(
 
     private val callManager: CallManager by inject()
 
+    private val locationProvider = LiveLocationProvider()
+
+    private val liveLocationSession = LiveLocationSession(
+        matrixPort = service.port,
+        locationProvider = locationProvider,
+        scope = viewModelScope,
+        onLocationSent = { location ->
+            val myUserId = currentState.myUserId ?: return@LiveLocationSession
+            val share = LiveLocationShare(
+                userId = myUserId,
+                geoUri = "geo:${location.latitude},${location.longitude}",
+                tsMs = System.currentTimeMillis(),
+                isLive = true,
+            )
+            updateState { copy(liveLocationShares = liveLocationShares + (myUserId to share)) }
+        }
+    )
+
     private val settings = settingsRepo.flow
         .stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
 
@@ -101,7 +121,6 @@ class RoomViewModel(
         observeTimeline()
         observeTyping()
         observeOwnReceipt()
-        observeLiveLocation()
         observeReceipts()
         loadNotificationMode()
         loadUpgradeInfo()
@@ -150,6 +169,8 @@ class RoomViewModel(
 
     fun showLiveLocation() = updateState { copy(showLiveLocation = true, showAttachmentPicker = false) }
     fun hideLiveLocation() = updateState { copy(showLiveLocation = false) }
+    fun showLiveLocationMap() = updateState { copy(showLiveLocationMap = true) }
+    fun hideLiveLocationMap() = updateState { copy(showLiveLocationMap = false) }
 
     fun showNotificationSettings() = updateState { copy(showNotificationSettings = true) }
     fun hideNotificationSettings() = updateState { copy(showNotificationSettings = false) }
@@ -750,30 +771,34 @@ class RoomViewModel(
 
     fun startLiveLocation(durationMinutes: Int) {
         launch {
-            val durationMs = durationMinutes * 60 * 1000L
-            val ok = service.port.startLiveLocationShare(currentState.roomId, durationMs)
-            if (ok) {
+            val result = liveLocationSession.startSharing(currentState.roomId, durationMinutes)
+            if (result.isSuccess) {
                 updateState { copy(showLiveLocation = false) }
                 _events.send(Event.ShowSuccess("Location sharing started"))
             } else {
-                _events.send(Event.ShowError("Failed to start location sharing"))
+                val message = result.exceptionOrNull()?.message ?: "Failed to start location sharing"
+                _events.send(Event.ShowError(message))
             }
         }
     }
 
     fun stopLiveLocation() {
         launch {
-            val ok = service.port.stopLiveLocationShare(currentState.roomId)
-            if (ok) {
+            val result = liveLocationSession.stopSharing()
+            if (result.isSuccess) {
+                currentState.myUserId?.let { myUserId ->
+                    updateState { copy(liveLocationShares = liveLocationShares - myUserId) }
+                }
                 updateState { copy(showLiveLocation = false) }
                 _events.send(Event.ShowSuccess("Location sharing stopped"))
             } else {
-                _events.send(Event.ShowError("Failed to stop location sharing"))
+                val message = result.exceptionOrNull()?.message ?: "Failed to stop location sharing"
+                _events.send(Event.ShowError(message))
             }
         }
     }
 
-    val isCurrentlyShareingLocation: Boolean
+    val isCurrentlySharingLocation: Boolean
         get() = currentState.liveLocationShares[currentState.myUserId]?.isLive == true
 
     //  Polls
@@ -1039,6 +1064,29 @@ class RoomViewModel(
         recomputeThreadCountsFromTimeline()
 
         prefetchThumbnailsForEvents(visible.takeLast(8))
+        prefetchSenderAvatars(newEvents)
+    }
+
+    private fun prefetchSenderAvatars(events: List<MessageEvent>) {
+        val byUser = events
+            .asReversed()
+            .mapNotNull { event ->
+                val avatarUrl = event.senderAvatarUrl ?: return@mapNotNull null
+                event.sender to avatarUrl
+            }
+            .distinctBy { it.first }
+
+        if (byUser.isEmpty()) return
+
+        launch {
+            val resolved = byUser.associate { (userId, avatarUrl) ->
+                userId to service.avatars.resolve(avatarUrl, px = 64, crop = true)
+            }.filterValues { it != null }.mapValues { it.value!! }
+
+            if (resolved.isNotEmpty()) {
+                updateState { copy(avatarByUserId = avatarByUserId + resolved) }
+            }
+        }
     }
 
     /**
@@ -1254,6 +1302,7 @@ class RoomViewModel(
             postProcessNewEvents(delta)
         }
 
+        recomputeLiveLocationShares()
         recomputeDerived()
     }
 
@@ -1293,11 +1342,31 @@ class RoomViewModel(
         })
     }
 
-    private fun observeLiveLocation() {
-        val token = service.port.observeLiveLocation(currentState.roomId) { shares ->
-            updateState { copy(liveLocationShares = shares.associateBy { it.userId }) }
+    private fun recomputeLiveLocationShares() {
+        updateState {
+            val shares = allEvents
+                .mapNotNull { event ->
+                    event.liveLocation?.let {
+                        LiveLocationShare(
+                            userId = it.userId,
+                            geoUri = it.geoUri,
+                            tsMs = it.tsMs,
+                            isLive = it.isLive,
+                        )
+                    }
+                }
+                .associateBy { it.userId }
+
+            val mergedShares = myUserId
+                ?.let { selfId ->
+                    val selfShare = liveLocationShares[selfId]
+                    if (selfShare != null && selfShare.isLive && selfId !in shares) shares + (selfId to selfShare)
+                    else shares
+                }
+                ?: shares
+
+            copy(liveLocationShares = mergedShares)
         }
-        updateState { copy(liveLocationSubToken = token) }
     }
 
     private fun recomputeDerived() {

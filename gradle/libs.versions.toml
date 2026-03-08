@@ -49,6 +49,7 @@ apkDist = "0.5.2"
 dbusJavaCore = "5.1.1" # Do not bump these vers as FileKit depends on an older ver.
 dbusJavaTransportNativeUnixsocket = "5.1.1"
 filekit = "0.13.0"
+maplibreCompose = "0.12.1"
 
 
 [libraries]
@@ -117,6 +118,9 @@ kmp-settings-ui-compose = { module = "io.github.mlm-games:kmp-settings-ui-compos
 
 filekit-core = { module = "io.github.vinceglb:filekit-core", version.ref = "filekit" }
 filekit-dialogs-compose = { module = "io.github.vinceglb:filekit-dialogs-compose", version.ref = "filekit" }
+
+maplibre-compose = { module = "org.maplibre.compose:maplibre-compose", version.ref = "maplibreCompose" }
+maplibre-native-bindings-jni = { module = "org.maplibre.compose:maplibre-native-bindings-jni", version.ref = "maplibreCompose" }
 
 
 [plugins]

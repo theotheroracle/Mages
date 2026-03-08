@@ -192,7 +192,7 @@ fun RoomInfoScreen(
                             title = "This room has been upgraded",
                             reason = successor.reason,
                             buttonText = "Go to new room",
-                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                             onAction = { onOpenRoom(successor.roomId) }
                         )
                     }

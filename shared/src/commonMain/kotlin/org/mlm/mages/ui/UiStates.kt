@@ -87,6 +87,7 @@ data class RoomUiState(
     val lastOutgoingRead: Boolean = false,
 
     val thumbByEvent: Map<String, String> = emptyMap(),
+    val avatarByUserId: Map<String, String> = emptyMap(),
     val threadCount: Map<String, Int> = emptyMap(),
 
     val liveLocationShares: Map<String, LiveLocationShare> = emptyMap(),
@@ -101,6 +102,7 @@ data class RoomUiState(
     val showAttachmentPicker: Boolean = false,
     val showPollCreator: Boolean = false,
     val showLiveLocation: Boolean = false,
+    val showLiveLocationMap: Boolean = false,
     val showNotificationSettings: Boolean = false,
 
     val showForwardPicker: Boolean = false,

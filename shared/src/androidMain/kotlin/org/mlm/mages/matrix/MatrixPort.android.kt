@@ -1390,18 +1390,18 @@ class RustMatrixPort : MatrixPort {
     override suspend fun startLiveLocationShare(
         roomId: String,
         durationMs: Long
-    ): Boolean = withContext(Dispatchers.IO) {
-        runCatching { withClient { it.startLiveLocation(roomId, durationMs.toULong(), null) } }.isSuccess
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching { withClient { it.startLiveLocation(roomId, durationMs.toULong(), null) } }
     }
 
-    override suspend fun stopLiveLocationShare(roomId: String): Boolean =
+    override suspend fun stopLiveLocationShare(roomId: String): Result<Unit> =
         withContext(Dispatchers.IO) {
-            runCatching { withClient { it.stopLiveLocation(roomId) } }.isSuccess
+            runCatching { withClient { it.stopLiveLocation(roomId) } }
         }
 
-    override suspend fun sendLiveLocation(roomId: String, geoUri: String): Boolean =
+    override suspend fun sendLiveLocation(roomId: String, geoUri: String): Result<Unit> =
         withContext(Dispatchers.IO) {
-            runCatching { withClient { it.sendLiveLocation(roomId, geoUri) } }.isSuccess
+            runCatching { withClient { it.sendLiveLocation(roomId, geoUri) } }
         }
 
     override fun observeLiveLocation(
@@ -1587,7 +1587,15 @@ private fun mages.MessageEvent.toModel() = MessageEvent(
     replyToSenderDisplayName = replyToSenderDisplayName,
     pollData = pollData?.toModel(),
     reactions = reactions.map { ReactionChip(it.key, it.count.toInt(), it.me) },
-    eventType = eventType.toKotlin()
+    eventType = eventType.toKotlin(),
+    liveLocation = liveLocation?.toModel(),
+)
+
+private fun mages.LiveLocationEvent.toModel() = LiveLocationEvent(
+    userId = userId,
+    geoUri = geoUri,
+    tsMs = tsMs.toLong(),
+    isLive = isLive,
 )
 
 private fun mages.SendState.toKotlin(): SendState = when (this) {
@@ -1614,6 +1622,7 @@ private fun mages.EventType.toKotlin(): EventType = when (this) {
     mages.EventType.CALL_NOTIFICATION -> EventType.CallNotification
     mages.EventType.POLL -> EventType.Poll
     mages.EventType.STICKER -> EventType.Sticker
+    mages.EventType.LIVE_LOCATION -> EventType.LiveLocation
 }
 
 private fun mages.EncFile.toModel() = EncFile(url = url, json = json)

@@ -145,12 +145,12 @@ private fun QuickReactionsRow(onReact: (String) -> Unit, onOpenPicker: () -> Uni
     Spacer(Modifier.height(Spacing.sm))
     LazyRow(contentPadding = PaddingValues(horizontal = Spacing.lg), horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
         items(quickReactions) { emoji ->
-            Surface(onClick = { onReact(emoji) }, shape = CircleShape, color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(48.dp)) {
+            Surface(onClick = { onReact(emoji) }, shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.size(48.dp)) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(emoji, fontSize = 20.sp) }
             }
         }
         item {
-            Surface(onClick = onOpenPicker, shape = CircleShape, color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(48.dp)) {
+            Surface(onClick = onOpenPicker, shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = Modifier.size(48.dp)) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Icon(Icons.Default.Add, contentDescription = "More emoji", modifier = Modifier.size(20.dp))
                 }

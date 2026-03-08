@@ -62,6 +62,7 @@ kotlin {
 
             implementation(libs.filekit.core)
             implementation(libs.filekit.dialogs.compose)
+            implementation(libs.maplibre.compose)
         }
 
         androidMain.dependencies {
@@ -91,6 +92,12 @@ kotlin {
             implementation(libs.systemtray)
             implementation(libs.jcefmaven)
             implementation(libs.json)
+
+            runtimeOnly(libs.maplibre.native.bindings.jni.get().toString()) {
+                capabilities {
+                    requireCapability("org.maplibre.compose:maplibre-native-bindings-jni-${detectMapLibreTarget()}")
+                }
+            }
         }
     }
 }
@@ -110,6 +117,23 @@ val hostLibName = when {
     else -> "libmages_ffi.so"
 }
 val hostLibFile = rustDirDefault.file("target/release/$hostLibName")
+
+fun detectMapLibreTarget(): String {
+    val currentOs = OperatingSystem.current()
+    val hostOs = when {
+        currentOs.isMacOsX -> "macos"
+        currentOs.isLinux -> "linux"
+        currentOs.isWindows -> "windows"
+        else -> error("Unsupported OS for MapLibre: ${System.getProperty("os.name")}")
+    }
+    val hostArch = when (val arch = System.getProperty("os.arch").lowercase()) {
+        "x86_64" -> "amd64"
+        "arm64", "aarch64" -> "aarch64"
+        else -> arch
+    }
+    val renderer = if (hostOs == "macos") "metal" else "opengl"
+    return "$hostOs-$hostArch-$renderer"
+}
 
 val useCargoFallback = providers.provider { true }
 val cargoBinDefault = providers.provider { if (os.isWindows) "cargo.exe" else "cargo" }

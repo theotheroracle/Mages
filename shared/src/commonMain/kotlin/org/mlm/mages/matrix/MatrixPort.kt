@@ -65,6 +65,7 @@ enum class EventType {
     CallNotification,
     Poll,
     Sticker,
+    LiveLocation,
 }
 
 data class SendUpdate(
@@ -673,9 +674,9 @@ interface MatrixPort {
     suspend fun roomSuccessor(roomId: String): RoomUpgradeInfo?
     suspend fun roomPredecessor(roomId: String): RoomPredecessorInfo?
 
-    suspend fun startLiveLocationShare(roomId: String, durationMs: Long): Boolean
-    suspend fun stopLiveLocationShare(roomId: String): Boolean
-    suspend fun sendLiveLocation(roomId: String, geoUri: String): Boolean
+    suspend fun startLiveLocationShare(roomId: String, durationMs: Long): Result<Unit>
+    suspend fun stopLiveLocationShare(roomId: String): Result<Unit>
+    suspend fun sendLiveLocation(roomId: String, geoUri: String): Result<Unit>
     fun observeLiveLocation(roomId: String, onShares: (List<LiveLocationShare>) -> Unit): ULong
     fun stopObserveLiveLocation(token: ULong)
 

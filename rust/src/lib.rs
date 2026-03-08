@@ -200,6 +200,15 @@ pub enum EventType {
     CallNotification,
     Poll,
     Sticker,
+    LiveLocation,
+}
+
+#[derive(Clone, Record)]
+pub struct LiveLocationEvent {
+    pub user_id: String,
+    pub geo_uri: String,
+    pub ts_ms: u64,
+    pub is_live: bool,
 }
 
 #[derive(Clone, Record)]
@@ -225,6 +234,7 @@ pub struct MessageEvent {
     pub poll_data: Option<PollData>,
     pub reactions: Vec<ReactionSummary>,
     pub event_type: EventType,
+    pub live_location: Option<LiveLocationEvent>,
 }
 
 #[derive(Clone, Debug, Record)]
@@ -946,6 +956,13 @@ struct SessionInfo {
     homeserver: String,
 }
 
+#[derive(Clone)]
+struct LiveLocationBeaconState {
+    event_id: String,
+    duration_ms: u64,
+    description: Option<String>,
+}
+
 fn session_file(dir: &PathBuf) -> PathBuf {
     dir.join("session.json")
 }
@@ -1009,6 +1026,7 @@ pub struct Client {
     send_queue_supervised: AtomicBool,
     call_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
     live_location_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
+    live_location_beacons: Mutex<HashMap<String, LiveLocationBeaconState>>,
     recovery_state_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
     backup_state_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
 
@@ -1197,6 +1215,7 @@ impl Client {
             send_queue_supervised: AtomicBool::new(false),
             call_subs: Mutex::new(HashMap::new()),
             live_location_subs: Mutex::new(HashMap::new()),
+            live_location_beacons: Mutex::new(HashMap::new()),
             recovery_state_subs: Mutex::new(HashMap::new()),
             backup_state_subs: Mutex::new(HashMap::new()),
             widget_handles: Mutex::new(HashMap::new()),
@@ -1859,7 +1878,7 @@ impl Client {
         cleanup_frequency_secs: Option<u64>,
     ) -> Result<(), FfiError> {
         RT.block_on(async {
-            use std::time::Duration;
+            use Duration;
             let mut policy = MediaRetentionPolicy::new();
             if max_cache_size_bytes.is_some() {
                 policy = policy.with_max_cache_size(max_cache_size_bytes);
@@ -2083,7 +2102,7 @@ impl Client {
 
     pub fn get_user_power_level(&self, room_id: String, user_id: String) -> i64 {
         RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
                 return -1;
             };
             let Some(room) = self.inner.get_room(&rid) else {
@@ -2185,7 +2204,7 @@ impl Client {
 
     pub fn dm_peer_user_id(&self, room_id: String) -> Option<String> {
         RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
                 return None;
             };
             let Some(room) = self.inner.get_room(&rid) else {
@@ -2207,7 +2226,7 @@ impl Client {
 
     pub fn is_event_read_by(&self, room_id: String, event_id: String, user_id: String) -> bool {
         RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
                 return false;
             };
             let Ok(eid) = EventId::parse(&event_id) else {
@@ -2284,7 +2303,7 @@ impl Client {
         progress: Option<Box<dyn ProgressObserver>>,
     ) -> bool {
         RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
                 return false;
             };
             let Some(tl) = self.timeline_mgr.timeline_for(&rid).await else {
@@ -3114,7 +3133,7 @@ impl Client {
     // Accept an invite by room ID
     pub fn accept_invite(&self, room_id: String) -> bool {
         RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
                 return false;
             };
             // Join-by-id is the canonical accept for invites
@@ -3221,7 +3240,7 @@ impl Client {
     // Get list of pinned event IDs in a room
     pub fn get_pinned_events(&self, room_id: String) -> Vec<String> {
         RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
                 return Vec::new();
             };
             let Some(room) = self.inner.get_room(&rid) else {
@@ -3236,7 +3255,7 @@ impl Client {
     // note: replaces entire list
     pub fn set_pinned_events(&self, room_id: String, event_ids: Vec<String>) -> bool {
         RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
                 return false;
             };
             let Some(room) = self.inner.get_room(&rid) else {
@@ -3317,7 +3336,7 @@ impl Client {
 
     pub fn room_notification_mode(&self, room_id: String) -> Option<FfiRoomNotificationMode> {
         RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
                 return None;
             };
             let Some(room) = self.inner.get_room(&rid) else {
@@ -3340,7 +3359,7 @@ impl Client {
         mode: FfiRoomNotificationMode,
     ) -> Result<(), FfiError> {
         RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
                 return Err(FfiError::Msg("bad room id".into()));
             };
 
@@ -3590,7 +3609,7 @@ impl Client {
                 if let Some(s) = { svc_slot.lock().unwrap().as_ref().cloned() } {
                     break s;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                tokio::time::sleep(Duration::from_millis(200)).await;
             };
 
             let rls = svc.room_list_service();
@@ -4508,7 +4527,7 @@ impl Client {
 
     pub fn room_tags(&self, room_id: String) -> Option<RoomTags> {
         RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
                 return None;
             };
             let Some(room) = self.inner.get_room(&rid) else {
@@ -4688,7 +4707,7 @@ impl Client {
 
     pub fn room_send_queue_set_enabled(&self, room_id: String, enabled: bool) -> bool {
         RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
                 return false;
             };
             let Some(room) = self.inner.get_room(&rid) else {
@@ -5150,7 +5169,7 @@ impl Client {
         use matrix_sdk::ruma::events::AnyMessageLikeEventContent;
 
         RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
                 return Err(FfiError::Msg("bad room id".into()));
             };
             let Some(room) = self.inner.get_room(&rid) else {
@@ -5179,7 +5198,7 @@ impl Client {
         use matrix_sdk::ruma::events::AnyMessageLikeEventContent;
 
         RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
                 return Err(FfiError::Msg("bad room id".into()));
             };
             let Ok(eid) = EventId::parse(&poll_event_id) else {
@@ -5207,7 +5226,7 @@ impl Client {
         use matrix_sdk::ruma::{EventId, events::AnyMessageLikeEventContent};
 
         RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
                 return Err(FfiError::Msg("bad room id".into()));
             };
             let Ok(poll_eid) = EventId::parse(&poll_event_id) else {
@@ -5237,40 +5256,83 @@ impl Client {
         description: Option<String>,
     ) -> Result<(), FfiError> {
         RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
                 return Err(FfiError::Msg("bad room id".into()));
             };
             let Some(room) = self.inner.get_room(&rid) else {
                 return Err(FfiError::Msg("room not found".into()));
             };
 
-            room.start_live_location_share(duration_ms, description)
+            let response = room
+                .start_live_location_share(duration_ms, description.clone())
                 .await
-                .map(|_| ())
-                .map_err(|e| FfiError::Msg(e.to_string()))
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+
+            self.live_location_beacons.lock().unwrap().insert(
+                room_id,
+                LiveLocationBeaconState {
+                    event_id: response.event_id.to_string(),
+                    duration_ms,
+                    description,
+                },
+            );
+
+            Ok(())
         })
     }
 
     /// Stop our live location share (if any) in the room.
     pub fn stop_live_location(&self, room_id: String) -> Result<(), FfiError> {
         RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            use matrix_sdk::ruma::events::beacon_info::BeaconInfoEventContent;
+
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
                 return Err(FfiError::Msg("bad room id".into()));
             };
             let Some(room) = self.inner.get_room(&rid) else {
                 return Err(FfiError::Msg("room not found".into()));
             };
 
-            room.stop_live_location_share()
+            let cached = self
+                .live_location_beacons
+                .lock()
+                .unwrap()
+                .get(&room_id)
+                .cloned();
+
+            let result = if let Some(cached) = cached {
+                room.send_state_event_for_key(
+                    room.own_user_id(),
+                    BeaconInfoEventContent::new(
+                        cached.description,
+                        Duration::from_millis(cached.duration_ms),
+                        false,
+                        None,
+                    ),
+                )
                 .await
                 .map(|_| ())
                 .map_err(|e| FfiError::Msg(e.to_string()))
+            } else {
+                room.stop_live_location_share()
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| FfiError::Msg(e.to_string()))
+            };
+
+            if result.is_ok() {
+                self.live_location_beacons.lock().unwrap().remove(&room_id);
+            }
+
+            result
         })
     }
 
     /// Send a single live location beacon update (geo:`geo:` URI) in the room.
     pub fn send_live_location(&self, room_id: String, geo_uri: String) -> Result<(), FfiError> {
         RT.block_on(async {
+            use matrix_sdk::ruma::{EventId, events::beacon::BeaconEventContent};
+
             let Ok(rid) = OwnedRoomId::try_from(room_id) else {
                 return Err(FfiError::Msg("bad room id".into()));
             };
@@ -5278,10 +5340,28 @@ impl Client {
                 return Err(FfiError::Msg("room not found".into()));
             };
 
-            room.send_location_beacon(geo_uri)
-                .await
-                .map(|_| ())
-                .map_err(|e| FfiError::Msg(e.to_string()))
+            let beacon_event_id = self
+                .live_location_beacons
+                .lock()
+                .unwrap()
+                .get(room.room_id().as_str())
+                .cloned();
+
+            if let Some(beacon_event_id) = beacon_event_id {
+                let beacon_event_id = EventId::parse(&beacon_event_id.event_id)
+                    .map_err(|e| FfiError::Msg(e.to_string()))?;
+                let content = BeaconEventContent::new(beacon_event_id, geo_uri, None);
+
+                room.send(content)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| FfiError::Msg(e.to_string()))
+            } else {
+                room.send_location_beacon(geo_uri)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| FfiError::Msg(e.to_string()))
+            }
         })
     }
 
@@ -5298,6 +5378,8 @@ impl Client {
         let obs: Arc<dyn LiveLocationObserver> = Arc::from(observer);
 
         sub_manager!(self, live_location_subs, async move {
+            let mut latest_shares: HashMap<String, LiveLocationShareInfo> = HashMap::new();
+
             let Some(room) = client.get_room(&rid) else {
                 return;
             };
@@ -5309,16 +5391,17 @@ impl Client {
             pin_mut!(stream);
 
             while let Some(event) = stream.next().await {
-                let Some(beacon_info) = event.beacon_info else {
-                    continue;
-                };
                 let info = LiveLocationShareInfo {
                     user_id: event.user_id.to_string(),
                     geo_uri: event.last_location.location.uri.to_string(),
                     ts_ms: event.last_location.ts.0.into(),
-                    is_live: beacon_info.is_live(),
+                    is_live: event.beacon_info.as_ref().map(|info| info.is_live()).unwrap_or(true),
                 };
-                let _ = catch_unwind(AssertUnwindSafe(|| obs.on_update(vec![info.clone()])));
+
+                latest_shares.insert(info.user_id.clone(), info);
+
+                let snapshot = latest_shares.values().cloned().collect();
+                let _ = catch_unwind(AssertUnwindSafe(|| obs.on_update(snapshot)));
             }
         })
     }
@@ -6106,9 +6189,7 @@ impl Client {
                     info.size = att.size_bytes.and_then(UInt::new);
                     info.width = att.width.map(UInt::from);
                     info.height = att.height.map(UInt::from);
-                    info.duration = att
-                        .duration_ms
-                        .map(|ms| std::time::Duration::from_millis(ms));
+                    info.duration = att.duration_ms.map(|ms| Duration::from_millis(ms));
 
                     let mut vid = VideoMessageEventContent::new(caption.clone(), media_source);
                     vid.info = Some(Box::new(info));
@@ -6962,6 +7043,7 @@ fn map_timeline_event(
     let mut poll_data: Option<PollData> = None;
     let mut reply_to_sender_display_name: Option<String> = None;
     let mut event_type = EventType::Message;
+    let mut live_location: Option<LiveLocationEvent> = None;
 
     match ev.content() {
         TimelineItemContent::MsgLike(ml) => {
@@ -7025,6 +7107,16 @@ fn map_timeline_event(
             body = "Call started".to_string();
             event_type = EventType::CallNotification;
         }
+        TimelineItemContent::LiveLocation(state) => {
+            body = render_timeline_text(ev);
+            event_type = EventType::LiveLocation;
+            live_location = state.latest_location().map(|location| LiveLocationEvent {
+                user_id: ev.sender().to_string(),
+                geo_uri: location.geo_uri().to_owned(),
+                ts_ms: location.ts().0.into(),
+                is_live: state.is_live(),
+            });
+        }
         _ => {
             body = render_timeline_text(ev);
         }
@@ -7060,6 +7152,7 @@ fn map_timeline_event(
         poll_data,
         reactions,
         event_type,
+        live_location,
     })
 }
 
@@ -7228,6 +7321,7 @@ fn render_timeline_text(ev: &EventTimelineItem) -> String {
         TimelineItemContent::MembershipChange(change) => render_membership_change(ev, change),
         TimelineItemContent::ProfileChange(change) => render_profile_change(ev, change),
         TimelineItemContent::OtherState(state) => render_other_state(ev, state),
+        TimelineItemContent::LiveLocation(_) => render_other_state_like(ev),
 
         TimelineItemContent::FailedToParseMessageLike { event_type, .. } => {
             format!("Unsupported message-like event: {}", event_type)
@@ -7240,6 +7334,10 @@ fn render_timeline_text(ev: &EventTimelineItem) -> String {
         TimelineItemContent::CallInvite => String::new(),
         TimelineItemContent::RtcNotification => String::new(),
     }
+}
+
+fn render_other_state_like(ev: &EventTimelineItem) -> String {
+    format!("{} shared live location", ev.sender())
 }
 
 fn render_msg_like(_ev: &EventTimelineItem, ml: &MsgLikeContent) -> String {
@@ -7533,7 +7631,7 @@ fn render_profile_change(
 }
 
 fn map_other_state_type(s: &matrix_sdk_ui::timeline::OtherState) -> EventType {
-    use matrix_sdk_ui::timeline::AnyOtherFullStateEventContent as A;
+    use matrix_sdk_ui::timeline::AnyOtherStateEventContentChange as A;
 
     match s.content() {
         A::RoomName(_) => EventType::RoomName,
@@ -7548,7 +7646,8 @@ fn map_other_state_type(s: &matrix_sdk_ui::timeline::OtherState) -> EventType {
 }
 
 fn render_other_state(ev: &EventTimelineItem, s: &matrix_sdk_ui::timeline::OtherState) -> String {
-    use matrix_sdk_ui::timeline::AnyOtherFullStateEventContent as A;
+    use matrix_sdk::ruma::events::StateEventContentChange;
+    use matrix_sdk_ui::timeline::AnyOtherStateEventContentChange as A;
 
     let actor = ev.sender().to_string();
     let ty = s.content().event_type().to_string();
@@ -7561,14 +7660,14 @@ fn render_other_state(ev: &EventTimelineItem, s: &matrix_sdk_ui::timeline::Other
     match s.content() {
         A::RoomName(c) => {
             let mut name = "";
-            if let ruma::events::FullStateEventContent::Original { content, .. } = c {
+            if let StateEventContentChange::Original { content, .. } = c {
                 name = &content.name;
             }
             format!("{actor} changed the room name to {name}")
         }
         A::RoomTopic(c) => {
             let mut topic = "";
-            if let ruma::events::FullStateEventContent::Original { content, .. } = c {
+            if let StateEventContentChange::Original { content, .. } = c {
                 topic = &content.topic;
             }
             format!("{actor} changed the topic to {topic}")

@@ -50,6 +50,7 @@ import org.mlm.mages.ui.components.message.MessageBubble
 import org.mlm.mages.ui.components.message.MessageStatusLine
 import org.mlm.mages.ui.components.message.SystemMessageItem
 import org.mlm.mages.ui.components.message.SeenByChip
+import org.mlm.mages.ui.components.location.*
 import org.koin.compose.koinInject
 import org.mlm.mages.ui.components.snackbar.SnackbarManager
 import org.mlm.mages.ui.components.sheets.*
@@ -523,6 +524,11 @@ fun RoomScreen(
                     }
                 )
         ) {
+            val displayNameByUserId = remember(state.allEvents) {
+                state.allEvents
+                    .asReversed()
+                    .associate { event -> event.sender to (event.senderDisplayName ?: event.sender) }
+            }
 
             Column(
                 modifier = Modifier.fillMaxSize()
@@ -533,6 +539,17 @@ fun RoomScreen(
                     predecessor = state.predecessor,
                     onNavigateToRoom = { roomId -> onNavigateToRoom(roomId, "Room") }
                 )
+
+                if (state.liveLocationShares.values.any { it.isLive }) {
+                    LiveLocationBanner(
+                        shares = state.liveLocationShares,
+                        avatarPathByUserId = state.avatarByUserId,
+                        displayNameByUserId = displayNameByUserId,
+                        myUserId = state.myUserId,
+                        onViewAll = viewModel::showLiveLocationMap,
+                        onStopSharing = if (viewModel.isCurrentlySharingLocation) viewModel::stopLiveLocation else null,
+                    )
+                }
 
                 // Message list
                 Box(modifier = Modifier.weight(1f)) {
@@ -686,8 +703,7 @@ fun RoomScreen(
             } else null,
             onDismiss = viewModel::hideAttachmentPicker,
             onCreatePoll = viewModel::showPollCreator,
-            // TODO: Add Live Location sharing after Element X implements it (same org's team)
-            // onShareLocation = viewModel::showLiveLocation
+            onShareLocation = viewModel::showLiveLocation
         )
     }
 
@@ -698,14 +714,25 @@ fun RoomScreen(
         )
     }
 
-    // if (state.showLiveLocation) {
-    //     LiveLocationSheet(
-    //         isCurrentlySharing = viewModel.isCurrentlyShareingLocation,
-    //         onStartSharing = viewModel::startLiveLocation,
-    //         onStopSharing = viewModel::stopLiveLocation,
-    //         onDismiss = viewModel::hideLiveLocation
-    //     )
-    // }
+    if (state.showLiveLocation) {
+        LiveLocationSheet(
+            isCurrentlySharing = viewModel.isCurrentlySharingLocation,
+            onStartSharing = viewModel::startLiveLocation,
+            onStopSharing = viewModel::stopLiveLocation,
+            onDismiss = viewModel::hideLiveLocation
+        )
+    }
+
+    if (state.showLiveLocationMap) {
+        LiveLocationMapViewer(
+            shares = state.liveLocationShares,
+            avatarPathByUserId = state.avatarByUserId,
+            displayNameByUserId = state.allEvents.asReversed().associate { it.sender to (it.senderDisplayName ?: it.sender) },
+            onDismiss = viewModel::hideLiveLocationMap,
+            isCurrentlySharing = viewModel.isCurrentlySharingLocation,
+            onStopSharing = if (viewModel.isCurrentlySharingLocation) viewModel::stopLiveLocation else null,
+        )
+    }
 
     if (state.showNotificationSettings) {
         RoomNotificationSheet(

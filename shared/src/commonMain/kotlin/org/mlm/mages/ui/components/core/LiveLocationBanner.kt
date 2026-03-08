@@ -7,16 +7,19 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.mlm.mages.matrix.LiveLocationShare
-import org.mlm.mages.matrix.MemberSummary
 import org.mlm.mages.ui.theme.Spacing
 
 @Composable
 fun LiveLocationBanner(
     shares: Map<String, LiveLocationShare>,
-    members: List<MemberSummary>,
+    avatarPathByUserId: Map<String, String>,
+    displayNameByUserId: Map<String, String>,
+    myUserId: String?,
     onViewAll: () -> Unit,
+    onStopSharing: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     if (shares.isEmpty()) return
@@ -24,12 +27,10 @@ fun LiveLocationBanner(
     val activeShares = shares.values.filter { it.isLive }
     if (activeShares.isEmpty()) return
 
-    val avatarByUserId = remember(members) {
-        members.associateBy({ it.userId }, { it.avatarUrl })
-    }
+    val isMeSharing = myUserId != null && activeShares.any { it.userId == myUserId }
     
     Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
         modifier = modifier.fillMaxWidth()
     ) {
         Row(
@@ -51,7 +52,7 @@ fun LiveLocationBanner(
                 activeShares.take(3).forEachIndexed { index, share ->
                     Avatar(
                         name = share.userId,
-                        avatarPath = avatarByUserId[share.userId],
+                        avatarPath = avatarPathByUserId[share.userId],
                         size = 24.dp,
                         modifier = Modifier.offset(x = (-8 * index).dp)
                     )
@@ -62,16 +63,24 @@ fun LiveLocationBanner(
             
             Text(
                 when (activeShares.size) {
-                    1 -> "${formatDisplayName(activeShares[0].userId)} is sharing location"
+                    1 -> "${displayNameByUserId[activeShares[0].userId] ?: formatDisplayName(activeShares[0].userId)} is sharing location"
                     else -> "${activeShares.size} people sharing location"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+//                maxLines = 2,
+//                TextOverflow = TextOverflow.Ellipsis
             )
             
-            TextButton(onClick = onViewAll) {
-                Text("View")
+            if (isMeSharing && onStopSharing != null) {
+                IconButton(onClick = onStopSharing) {
+                    Icon(Icons.Default.Stop, "Stop")
+                }
+            }
+
+            IconButton(onClick = onViewAll) {
+                Icon(Icons.Default.OpenInFull, "View")
             }
         }
     }

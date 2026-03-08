@@ -36,7 +36,16 @@ data class MessageEvent(
     var isEdited: Boolean,
     var pollData: PollData?,
     var reactions: List<ReactionChip> = emptyList(),
-    var eventType: EventType = EventType.Message
+    var eventType: EventType = EventType.Message,
+    var liveLocation: LiveLocationEvent? = null,
+)
+
+@Serializable
+data class LiveLocationEvent(
+    val userId: String,
+    val geoUri: String,
+    val tsMs: Long,
+    val isLive: Boolean,
 )
 
 

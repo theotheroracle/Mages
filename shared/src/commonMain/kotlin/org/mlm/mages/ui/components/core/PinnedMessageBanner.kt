@@ -31,7 +31,7 @@ fun PinnedMessageBanner(
     if (pinnedEvent == null) return
 
     Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
         modifier = Modifier.fillMaxWidth()
     ) {
         Column {
