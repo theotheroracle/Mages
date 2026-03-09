@@ -18,9 +18,12 @@ import kotlinx.coroutines.launch
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import org.mlm.mages.MatrixService
+import org.mlm.mages.platform.SettingsProvider
+import org.mlm.mages.settings.appLanguageTagOrDefault
 import org.unifiedpush.android.connector.PushService
 import org.unifiedpush.android.connector.data.PushEndpoint
 import org.unifiedpush.android.connector.data.PushMessage
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 const val PUSH_PREFS = "unifiedpush_prefs"
@@ -127,13 +130,19 @@ class AppPushService : PushService(), KoinComponent {
             return
         }
 
+        val settingsRepo = SettingsProvider.get(context)
+        val languageTag = appLanguageTagOrDefault(
+            languageIndex = settingsRepo.get("language"),
+            defaultTag = Locale.getDefault().toLanguageTag()
+        )
+
         val ok = runCatching {
             port.registerUnifiedPush(
                 appId = context.packageName,
                 pushKey = pushKey,
                 gatewayUrl = gatewayUrl,
                 deviceName = android.os.Build.MODEL ?: "Android",
-                lang = java.util.Locale.getDefault().toLanguageTag(),
+                lang = languageTag,
                 profileTag = accountId
             )
         }.getOrDefault(false)

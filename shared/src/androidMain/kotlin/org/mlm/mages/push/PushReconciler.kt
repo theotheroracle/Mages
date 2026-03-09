@@ -5,7 +5,10 @@ import android.util.Log
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import org.mlm.mages.MatrixService
+import org.mlm.mages.platform.SettingsProvider
 import org.mlm.mages.push.PushManager.getEndpoint
+import org.mlm.mages.settings.appLanguageTagOrDefault
+import java.util.Locale
 
 object PusherReconciler : KoinComponent {
 
@@ -31,13 +34,19 @@ object PusherReconciler : KoinComponent {
             return
         }
 
+        val settingsRepo = SettingsProvider.get(context)
+        val languageTag = appLanguageTagOrDefault(
+            languageIndex = settingsRepo.get("language"),
+            defaultTag = Locale.getDefault().toLanguageTag()
+        )
+
         val ok = runCatching {
             port.registerUnifiedPush(
                 appId = context.packageName,
                 pushKey = endpoint,
                 gatewayUrl = gatewayUrl,
                 deviceName = android.os.Build.MODEL ?: "Android",
-                lang = java.util.Locale.getDefault().toLanguageTag(),
+                lang = languageTag,
                 profileTag = accountId
             )
         }.getOrDefault(false)

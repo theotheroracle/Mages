@@ -16,7 +16,7 @@ import kotlinx.serialization.Serializable
 enum class ThemeMode { System, Light, Dark }
 
 @Serializable
-enum class PresenceMode { Online, Offline,  Unavailable }
+enum class PresenceMode { Online, Offline, Unavailable }
 
 @Serializable
 enum class LocalRoomNotifMode {
@@ -53,6 +53,15 @@ data class AppSettings(
         platforms = [SettingPlatform.ANDROID]
     )
     val dynamicColors: Boolean = false,
+
+    @Setting(
+        title = "Language",
+        description = "System / English / Spanish",
+        category = Appearance::class,
+        type = Dropdown::class,
+        options = ["System", "English", "Spanish"]
+    )
+    val language: Int = AppLanguage.System.ordinal,
 
     @Setting(
         title = "Font size",

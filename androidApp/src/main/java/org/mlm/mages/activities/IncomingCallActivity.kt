@@ -41,7 +41,9 @@ import org.koin.android.ext.android.inject
 import org.mlm.mages.MainActivity
 import org.mlm.mages.calls.CallManager
 import org.mlm.mages.matrix.CallIntent
+import org.mlm.mages.platform.SettingsProvider
 import org.mlm.mages.push.AndroidNotificationHelper
+import org.mlm.mages.settings.appLanguageTagOrDefault
 import org.mlm.mages.ui.theme.MainTheme
 import org.mlm.mages.ui.components.core.Avatar
 import java.util.Locale
@@ -204,7 +206,10 @@ class IncomingCallActivity : ComponentActivity() {
                 intent = callIntent,
                 elementCallUrl = null,
                 parentUrl = null,
-                languageTag = Locale.getDefault().toLanguageTag(),
+                languageTag = appLanguageTagOrDefault(
+                    languageIndex = SettingsProvider.get(this@IncomingCallActivity).get("language"),
+                    defaultTag = Locale.getDefault().toLanguageTag()
+                ),
                 theme = "dark"
             )
 
