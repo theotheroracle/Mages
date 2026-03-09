@@ -28,7 +28,7 @@
     <string name="low_priority">Low Priority</string>
     <string name="new_activity">New activity</string>
     <string name="offline">Offline</string>
-    <string name="connect_to_internet">Connect to the internet to load rooms. If you\'ve opened this account before, your last room list will appear here instantly.</string>
+    <string name="connect_to_internet">Connect to the internet to load rooms. If you&apos;ve opened this account before, your last room list will appear here instantly.</string>
     <string name="retry">Retry</string>
     <string name="no_rooms_found">No rooms found</string>
     <string name="join_a_room">Join a room to start chatting</string>
@@ -134,7 +134,7 @@
     <string name="set_up_recovery">Set up recovery</string>
     <string name="change_recovery_key">Change recovery key</string>
     <string name="recovery_key">Recovery Key</string>
-    <string name="save_recovery_key_warning">Save this key somewhere safe. You\'ll need it to restore your encrypted messages if you lose access to your devices.</string>
+    <string name="save_recovery_key_warning">Save this key somewhere safe. You&apos;ll need it to restore your encrypted messages if you lose access to your devices.</string>
     <string name="copy">Copy</string>
     <string name="copied">Copied</string>
     <string name="your_devices">Your Devices</string>
@@ -142,7 +142,7 @@
     <string name="try_refreshing">Try refreshing the list</string>
     <string name="ignored_users">Ignored Users</string>
     <string name="no_ignored_users">No ignored users</string>
-    <string name="ignored_users_subtitle">Users you ignore won\'t be able to message you</string>
+    <string name="ignored_users_subtitle">Users you ignore won&apos;t be able to message you</string>
     <string name="unignore">Unignore</string>
 
     <string name="jump_to_bottom">Jump to bottom</string>
@@ -181,7 +181,7 @@
     <string name="preparing_verification">Preparing verification</string>
     <string name="waiting_for_acceptance">Waiting for acceptance</string>
     <string name="they_match">They match</string>
-    <string name="they_dont_match">They don\'t match</string>
+    <string name="they_dont_match">They don&apos;t match</string>
     <string name="reject">Reject</string>
 
     <string name="save">Save</string>
@@ -201,10 +201,10 @@
     <string name="edit_failed">Edit failed</string>
     <string name="delete_failed">Delete failed</string>
     <string name="retry_failed">Retry failed</string>
-    <string name="no_permission_pin">You don\'t have permission to pin messages</string>
+    <string name="no_permission_pin">You don&apos;t have permission to pin messages</string>
     <string name="message_pinned">Message pinned</string>
     <string name="failed_to_pin">Failed to pin message</string>
-    <string name="no_permission_unpin">You don\'t have permission to unpin messages</string>
+    <string name="no_permission_unpin">You don&apos;t have permission to unpin messages</string>
     <string name="message_unpinned">Message unpinned</string>
     <string name="failed_to_unpin">Failed to unpin message</string>
     <string name="report_submitted">Report submitted</string>
@@ -264,7 +264,7 @@
     <string name="recovery_enabled_subtitle">Your encrypted messages are backed up.</string>
     <string name="encryption">Encryption</string>
     <string name="key_storage">Key storage</string>
-    <string name="key_storage_subtitle">Storing your keys securely on the server. You can turn this off, but you won\'t be able to recover them.</string>
+    <string name="key_storage_subtitle">Storing your keys securely on the server. You can turn this off, but you won&apos;t be able to recover them.</string>
     <string name="incomplete_badge">Confirm</string>
     <string name="key_storage_disabled_error">Key storage is off. Turn it on to set up or change your recovery key.</string>
     <string name="generate_recovery_key">Generate recovery key</string>

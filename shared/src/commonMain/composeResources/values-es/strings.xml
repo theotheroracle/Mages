@@ -32,7 +32,7 @@
     <string name="retry">Reintentar</string>
     <string name="no_rooms_found">No se encontraron salas</string>
     <string name="join_a_room">Únete a una sala para comenzar a chatear</string>
-    <string name="no_rooms_match">No hay salas que coincidan con \"%1$s\"</string>
+    <string name="no_rooms_match">No hay salas que coincidan con &apos;%1$s&apos;</string>
     <string name="discover_rooms">Descubrir salas</string>
     <string name="search_rooms">Buscar salas...</string>
     <string name="unread_only">Sin leer</string>
@@ -107,7 +107,7 @@
     <string name="join_this_room">Únete a esta sala directamente por alias/ID</string>
     <string name="join">Unirse</string>
     <string name="message">Mensaje</string>
-    <string name="no_results_for">Sin resultados para \"%1$s\"</string>
+    <string name="no_results_for">Sin resultados para &apos;%1$s&apos;</string>
     <string name="try_different_search_term">Prueba con otro término de búsqueda o servidor de directorio</string>
     <string name="search_tips">Consejos de búsqueda</string>
     <string name="join_room_by_alias">Únete a una sala por su alias completo</string>
