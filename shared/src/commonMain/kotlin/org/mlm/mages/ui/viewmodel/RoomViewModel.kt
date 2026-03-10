@@ -24,6 +24,7 @@ import org.mlm.mages.ui.theme.Durations
 import org.mlm.mages.ui.RoomUiState
 import org.mlm.mages.ui.components.AttachmentData
 import org.mlm.mages.ui.util.mimeToExtension
+import org.mlm.mages.ui.util.nowMs
 import kotlin.collections.map
 
 class RoomViewModel(
@@ -99,12 +100,12 @@ class RoomViewModel(
         scope = viewModelScope,
         onLocationSent = { location ->
             val myUserId = currentState.myUserId ?: return@LiveLocationSession
-            val share = LiveLocationShare(
-                userId = myUserId,
-                geoUri = "geo:${location.latitude},${location.longitude}",
-                tsMs = System.currentTimeMillis(),
-                isLive = true,
-            )
+                val share = LiveLocationShare(
+                    userId = myUserId,
+                    geoUri = "geo:${location.latitude},${location.longitude}",
+                    tsMs = nowMs(),
+                    isLive = true,
+                )
             updateState { copy(liveLocationShares = liveLocationShares + (myUserId to share)) }
         }
     )
@@ -479,9 +480,7 @@ class RoomViewModel(
         }
         launch {
             val entries = runSafe {
-                withContext(Dispatchers.IO) {
-                    service.port.seenByForEvent(currentState.roomId, event.eventId, 20)
-                }
+                service.port.seenByForEvent(currentState.roomId, event.eventId, 20)
             } ?: emptyList()
             updateState { copy(messageInfoEntries = entries) }
         }
@@ -1509,9 +1508,7 @@ class RoomViewModel(
         }
         launch {
             val entries = runSafe {
-                withContext(Dispatchers.IO) {
-                    service.port.seenByForEvent(s.roomId, lastOutgoing.eventId, 10)
-                }
+                service.port.seenByForEvent(s.roomId, lastOutgoing.eventId, 10)
             } ?: emptyList()
             val resolvedEntries = entries.map { entry ->
                 entry.copy(avatarUrl = service.avatars.resolve(entry.avatarUrl, px = 64, crop = true))

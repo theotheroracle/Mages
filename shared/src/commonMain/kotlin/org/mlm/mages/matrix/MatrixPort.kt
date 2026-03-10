@@ -247,6 +247,7 @@ data class RoomPowerLevelChanges(
     val spaceChild: Long? = null
 )
 
+@Serializable
 data class LatestRoomEvent(
     val eventId: String,
     val sender: String,
@@ -258,6 +259,7 @@ data class LatestRoomEvent(
     val isEncrypted: Boolean
 )
 
+@Serializable
 data class RoomListEntry(
     val roomId: String,
     val name: String,

@@ -17,6 +17,7 @@ import org.mlm.mages.matrix.SeenByEntry
 import org.mlm.mages.matrix.SpaceChildInfo
 import org.mlm.mages.matrix.SpaceInfo
 import org.mlm.mages.ui.components.AttachmentData
+import org.mlm.mages.ui.util.nowMs
 
 
 data class LoginUiState(
@@ -175,7 +176,7 @@ data class VerificationRequestUi(
     val flowId: String,
     val fromUser: String,
     val fromDevice: String,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = nowMs()
 )
 
 data class SecurityUiState(

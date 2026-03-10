@@ -1,6 +1,7 @@
 package org.mlm.mages.nav
 
 import com.eygraber.uri.Uri
+import org.mlm.mages.ui.util.decodeUrl
 
 // Minimal,
 // supports:
@@ -21,10 +22,6 @@ sealed class MatrixLink {
     data class Room(val target: MatrixRoomTarget): MatrixLink()
     object Unsupported: MatrixLink()
 }
-
-private fun decodeUrl(s: String) = try {
-    java.net.URLDecoder.decode(s, "UTF-8")
-} catch (_: Throwable) { s }
 
 // Accept @user:server, !room:server, #alias:server, $event
 private fun looksLikeUser(id: String) = id.startsWith("@") && ':' in id

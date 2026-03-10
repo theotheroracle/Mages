@@ -20,7 +20,7 @@ kotlin {
         ))
     }
 
-    androidLibrary {
+    android {
         namespace = "org.mlm.mages.shared"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
@@ -256,7 +256,7 @@ kotlin {
         }
     }
 
-    androidLibrary {
+    android {
         compilations.all {
             compileTaskProvider.configure {
                 dependsOn(genUniFFIAndroid, cargoBuildAndroid)

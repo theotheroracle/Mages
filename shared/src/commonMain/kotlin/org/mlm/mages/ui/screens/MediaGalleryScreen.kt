@@ -38,17 +38,13 @@ import org.mlm.mages.MessageEvent
 import org.mlm.mages.platform.ShareContent
 import org.mlm.mages.platform.rememberShareHandler
 import org.mlm.mages.ui.theme.Spacing
+import org.mlm.mages.ui.util.monthYearLabel
 import org.mlm.mages.ui.viewmodel.ExtractedLink
 import org.mlm.mages.ui.viewmodel.MediaGalleryViewModel
 import org.mlm.mages.ui.viewmodel.MediaTab
 import org.mlm.mages.ui.components.snackbar.SnackbarManager
 import org.mlm.mages.ui.components.snackbar.snackbarHost
 import org.mlm.mages.ui.components.snackbar.rememberErrorPoster
-import java.io.File
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.util.Locale
 
 
 @Composable
@@ -402,19 +398,14 @@ fun MediaGrid(
     }
 }
 
-@Suppress("NewApi")
 private fun buildGalleryItems(sortedEvents: List<MessageEvent>): List<GalleryItem> {
     if (sortedEvents.isEmpty()) return emptyList()
-
-    val formatter = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault())
-    val zoneId = ZoneId.systemDefault()
 
     return buildList {
         var currentMonth: String? = null
 
         for (event in sortedEvents) {
-            val instant = Instant.ofEpochMilli(event.timestampMs)
-            val monthLabel = formatter.format(instant.atZone(zoneId))
+            val monthLabel = monthYearLabel(event.timestampMs)
 
             if (monthLabel != currentMonth) {
                 currentMonth = monthLabel
@@ -470,7 +461,7 @@ private fun MediaGridItem(
                 if (thumbPath != null) {
                     AsyncImage(
                         model = ImageRequest.Builder(LocalPlatformContext.current)
-                            .data(File(thumbPath))
+                            .data(thumbPath)
                             .crossfade(true)
                             .build(),
                         contentDescription = null,
@@ -574,9 +565,9 @@ private fun formatDuration(ms: Long): String {
     return if (minutes >= 60) {
         val hours = minutes / 60
         val mins = minutes % 60
-        "%d:%02d:%02d".format(hours, mins, seconds)
+        "$hours:${mins.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}"
     } else {
-        "%d:%02d".format(minutes, seconds)
+        "$minutes:${seconds.toString().padStart(2, '0')}"
     }
 }
 

@@ -35,7 +35,6 @@ import org.mlm.mages.ui.theme.Sizes
 import org.mlm.mages.ui.theme.Spacing
 import org.mlm.mages.ui.util.formatDuration
 import org.mlm.mages.ui.util.formatTime
-import java.io.File
 import kotlin.math.min
 
 @Composable
@@ -364,7 +363,7 @@ private fun AttachmentThumbnail(
         ) {
             AsyncImage(
                 model = ImageRequest.Builder(LocalPlatformContext.current)
-                    .data(File(thumbPath))
+                    .data(thumbPath)
                     .crossfade(true)
                     .build(),
                 contentDescription = null,

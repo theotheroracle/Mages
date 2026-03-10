@@ -22,7 +22,6 @@ import coil3.compose.LocalPlatformContext
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import org.mlm.mages.ui.theme.Sizes
-import java.util.Locale
 
 
 @Composable
@@ -100,5 +99,5 @@ fun extractInitials(name: String): String {
  */
 fun formatDisplayName(mxid: String): String {
     return mxid.substringAfter("@").substringBefore(":")
-        .replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
+        .replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
 }

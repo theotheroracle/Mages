@@ -15,7 +15,7 @@ import org.mlm.mages.matrix.MatrixPort
 class AvatarLoader(
     private val port: MatrixPort,
     parallelism: Int = 4,
-    dispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(parallelism),
+    dispatcher: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(parallelism),
     private val maxCacheEntries: Int = 1024
 ) {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
