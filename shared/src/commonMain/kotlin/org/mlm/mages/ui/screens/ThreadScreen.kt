@@ -148,7 +148,7 @@ fun ThreadScreen(
         bottomBar = {
             MessageComposer(
                 value = state.input,
-                enabled = !state.isLimitedWebMode,
+                enabled = true,
                 isOffline = false,
                 replyingTo = state.replyingTo,
                 editing = state.editingEvent,
@@ -158,7 +158,7 @@ fun ThreadScreen(
                 onSend = onSend,
                 onCancelReply = onCancelReply,
                 onCancelEdit = onCancelEdit,
-                enterSendsMessage = enterSendsMessage && !state.isLimitedWebMode,
+                enterSendsMessage = enterSendsMessage,
                 roomMembers = state.roomMembers,
                 avatarPathByUserId = state.avatarByUserId,
             )
@@ -203,13 +203,6 @@ fun ThreadScreen(
                 message = state.error,
                 type = BannerType.ERROR
             )
-
-            if (state.isLimitedWebMode) {
-                StatusBanner(
-                    message = "Threads are not supported on web yet",
-                    type = BannerType.LOADING
-                )
-            }
 
             when {
                 !state.hasInitialLoad && state.isLoading -> {
@@ -620,7 +613,7 @@ private fun ThreadReactionChipsRow(
                 color = if (chip.mine)
                     MaterialTheme.colorScheme.primaryContainer
                 else
-                        MaterialTheme.colorScheme.surfaceContainerLow,
+                    MaterialTheme.colorScheme.surfaceContainerLow,
                 shape = RoundedCornerShape(16.dp)
             ) {
                 Row(

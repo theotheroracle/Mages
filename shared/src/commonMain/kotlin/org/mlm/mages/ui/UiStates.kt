@@ -74,7 +74,6 @@ data class RoomUiState(
     val typingNames: List<String> = emptyList(),
     val isPaginatingBack: Boolean = false,
     val hasTimelineSnapshot: Boolean = false,
-    val isLimitedWebMode: Boolean = false,
     val hitStart: Boolean = false,
     val isOffline: Boolean = false,
     val attachments: List<AttachmentData> = emptyList(),
@@ -127,13 +126,13 @@ data class RoomUiState(
 
     val isSelectionMode: Boolean = false,
     val selectedEventIds: Set<String> = emptySet(),
-    
+
     val myPowerLevel: Long = 0L,
     val canRedactOthers: Boolean = false,
     val canKick: Boolean = false,
     val canBan: Boolean = false,
     val canPin: Boolean = false,
-    
+
     val pinnedEventIds: List<String> = emptyList(),
     val showPinnedMessagesSheet: Boolean = false,
 
@@ -165,7 +164,7 @@ data class ForwardableRoom(
     val avatarUrl: String?,
     val isDm: Boolean,
     val lastActivity: Long,
-  )
+)
 
 data class PresenceUiState(
     val currentPresence: Presence = Presence.Online,
@@ -280,7 +279,6 @@ data class ThreadUiState(
 
     val nextBatch: String? = null,
     val hasInitialLoad: Boolean = false,
-    val isLimitedWebMode: Boolean = false,
 
     val isLoading: Boolean = false,
     val error: String? = null,

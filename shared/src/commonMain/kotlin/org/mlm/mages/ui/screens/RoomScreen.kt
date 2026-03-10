@@ -426,13 +426,6 @@ fun RoomScreen(
                         enterSendsMessage = settings.enterSendsMessage,
                     )
                 }
-
-                if (state.isLimitedWebMode) {
-                    StatusBanner(
-                        message = "Web supports login and room list only right now",
-                        type = BannerType.LOADING
-                    )
-                }
             }
         },
         floatingActionButton = {
@@ -1022,7 +1015,7 @@ private fun RoomBottomBar(
 
         MessageComposer(
             value = state.input,
-            enabled = !state.isLimitedWebMode,
+            enabled = true,
             isOffline = state.isOffline,
             replyingTo = state.replyingTo,
             editing = state.editing,
@@ -1032,12 +1025,12 @@ private fun RoomBottomBar(
             onSend = onSend,
             onCancelReply = onCancelReply,
             onCancelEdit = onCancelEdit,
-            onAttach = if (state.isLimitedWebMode) ({}) else onAttach,
+            onAttach = onAttach,
             onCancelUpload = onCancelUpload,
             onRemoveAttachment = onRemoveAttachment,
             clipboardHandler = clipboardHandler,
             onAttachmentPasted = onAttachmentPasted,
-            enterSendsMessage = enterSendsMessage && !state.isLimitedWebMode,
+            enterSendsMessage = enterSendsMessage,
             roomMembers = state.roomMembers,
             avatarPathByUserId = state.avatarByUserId,
         )
@@ -1055,7 +1048,7 @@ private fun LoadEarlierButton(isLoading: Boolean, onClick: () -> Unit) {
         if (isLoading) {
             CircularWavyProgressIndicator(modifier = Modifier.size(24.dp))
         } else {
-            OutlinedButton(onClick = onClick, enabled = !isLoading) {
+            OutlinedButton(onClick = onClick) {
                 Text(stringResource(Res.string.load_earlier_messages))
             }
         }

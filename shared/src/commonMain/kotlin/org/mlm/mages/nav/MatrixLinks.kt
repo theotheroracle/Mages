@@ -67,7 +67,7 @@ private fun parseMatrixTo(u: String): MatrixLink {
         val first = decodeUrl(parts[0])
         val eventId = parts.getOrNull(1)?.let(::decodeUrl)?.takeIf(::looksLikeEvent)
 
-        val via = uri.getQueryParameters("via")?.map(::decodeUrl) ?: emptyList()
+        val via = uri.getQueryParameters("via").map(::decodeUrl)
 
         return when {
             looksLikeUser(first) -> MatrixLink.User(first)

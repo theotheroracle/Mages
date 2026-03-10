@@ -37,7 +37,6 @@ class RoomViewModel(
         roomAvatarUrl = savedStateHandle.get<String>("roomAvatarUrl") ?: "",
     )
 ) {
-    private fun isLimitedWebMode(): Boolean = service.port::class.simpleName == "WebStubMatrixPort"
     constructor(
         service: MatrixService,
         roomId: String,
@@ -101,12 +100,12 @@ class RoomViewModel(
         scope = viewModelScope,
         onLocationSent = { location ->
             val myUserId = currentState.myUserId ?: return@LiveLocationSession
-                val share = LiveLocationShare(
-                    userId = myUserId,
-                    geoUri = "geo:${location.latitude},${location.longitude}",
-                    tsMs = nowMs(),
-                    isLive = true,
-                )
+            val share = LiveLocationShare(
+                userId = myUserId,
+                geoUri = "geo:${location.latitude},${location.longitude}",
+                tsMs = nowMs(),
+                isLive = true,
+            )
             updateState { copy(liveLocationShares = liveLocationShares + (myUserId to share)) }
         }
     )
@@ -120,7 +119,7 @@ class RoomViewModel(
 
     private fun initialize() {
         val myUserId = service.port.whoami()
-        updateState { copy(myUserId = myUserId, isLimitedWebMode = isLimitedWebMode()) }
+        updateState { copy(myUserId = myUserId) }
         observeTimeline()
         observeTyping()
         observeOwnReceipt()
@@ -208,11 +207,6 @@ class RoomViewModel(
     }
 
     fun send() {
-        if (isLimitedWebMode()) {
-            launch { _events.send(Event.ShowError("Sending is not supported on web yet")) }
-            return
-        }
-
         val s = currentState
         val pending = s.attachments
         val hasText = s.input.isNotBlank()
@@ -291,11 +285,6 @@ class RoomViewModel(
     fun cancelEdit() = updateState { copy(editing = null, input = "") }
 
     fun confirmEdit() {
-        if (isLimitedWebMode()) {
-            launch { _events.send(Event.ShowError("Editing is not supported on web yet")) }
-            return
-        }
-
         val s = currentState
         val target = s.editing ?: return
         val newBody = s.input.trim()
@@ -328,14 +317,14 @@ class RoomViewModel(
     }
 
     private fun String.toPlainComposerText(): String =
-        Regex("\\[([^\\]]+)]\\(https://matrix\\.to/#/(@[^)]+)\\)")
+        Regex("\\[([^]]+)]\\(https://matrix\\.to/#/(@[^)]+)\\)")
             .replace(this) { matchResult ->
                 val label = matchResult.groupValues[1]
                 if (label.startsWith("@")) label else "@$label"
             }
 
     private fun String.toFormattedBodyOrNull(): String? {
-        val regex = Regex("\\[([^\\]]+)]\\(https://matrix\\.to/#/(@[^)]+)\\)")
+        val regex = Regex("\\[([^]]+)]\\(https://matrix\\.to/#/(@[^)]+)\\)")
         if (!regex.containsMatchIn(this)) return null
 
         val html = buildString {
@@ -367,10 +356,6 @@ class RoomViewModel(
     //  Reactions
 
     fun react(event: MessageEvent, emoji: String) {
-        if (isLimitedWebMode()) {
-            launch { _events.send(Event.ShowError("Reactions are not supported on web yet")) }
-            return
-        }
         if (event.eventId.isBlank()) return
         launch {
             runSafe { service.port.react(currentState.roomId, event.eventId, emoji) }
@@ -380,10 +365,6 @@ class RoomViewModel(
     //  Delete/Retry
 
     fun delete(event: MessageEvent) {
-        if (isLimitedWebMode()) {
-            launch { _events.send(Event.ShowError("Deleting is not supported on web yet")) }
-            return
-        }
         if (event.eventId.isBlank()) return
         launch {
             val ok = service.redact(currentState.roomId, event.eventId, null)
@@ -394,10 +375,6 @@ class RoomViewModel(
     }
 
     fun retry(event: MessageEvent) {
-        if (isLimitedWebMode()) {
-            launch { _events.send(Event.ShowError("Retry is not supported on web yet")) }
-            return
-        }
         if (event.body.isBlank()) return
         launch {
             val triedPrecise = event.txnId?.let { txn ->
@@ -415,14 +392,14 @@ class RoomViewModel(
         if (myUserId == null) return
         launch {
             val powerLevel = runSafe { service.port.getUserPowerLevel(currentState.roomId, myUserId) } ?: 0L
-            
+
             // Matrix defaults -> kick=50, ban=50, redact=50, state_default=50
             val canRedactOthers = powerLevel >= 50
             val canKick = powerLevel >= 50
             val canBan = powerLevel >= 50
             val canPin = powerLevel >= 50
-            
-            updateState { 
+
+            updateState {
                 copy(
                     myPowerLevel = powerLevel,
                     canRedactOthers = canRedactOthers,
@@ -580,10 +557,6 @@ class RoomViewModel(
     // Pagination
 
     fun paginateBack() {
-        if (isLimitedWebMode()) {
-            launch { _events.send(Event.ShowError("Timeline pagination is not supported on web yet")) }
-            return
-        }
         val s = currentState
         if (s.isPaginatingBack || s.hitStart) return
 
@@ -943,7 +916,7 @@ class RoomViewModel(
     fun setNotificationMode(mode: RoomNotificationMode) {
         launch {
             val result = service.port.setRoomNotificationMode(currentState.roomId, mode)
-            if (result?.isSuccess == true) {
+            if (result.isSuccess) {
                 updateState { copy(notificationMode = mode, showNotificationSettings = false) }
                 _events.send(Event.ShowSuccess("Notification settings updated"))
             } else {
@@ -1382,12 +1355,6 @@ class RoomViewModel(
             service.timelineDiffs(currentState.roomId)
                 .buffer(capacity = Channel.BUFFERED)
                 .collect { diff -> processDiff(diff) }
-        }
-
-        if (isLimitedWebMode()) {
-            launch {
-                _events.send(Event.ShowError("Web room timeline is not supported yet"))
-            }
         }
     }
 
