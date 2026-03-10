@@ -24,6 +24,7 @@ class ForwardPickerViewModel(
     private val sourceRoomId: String,
     private val eventIds: List<String>
 ) : BaseViewModel<ForwardPickerUiState>(ForwardPickerUiState(eventCount = eventIds.size)) {
+    private fun isLimitedWebMode(): Boolean = service.port::class.simpleName == "WebStubMatrixPort"
 
     sealed class Event {
         data class ForwardSuccess(val roomId: String, val roomName: String) : Event()
@@ -91,6 +92,14 @@ class ForwardPickerViewModel(
     }
 
     private fun loadEvents() {
+        if (isLimitedWebMode()) {
+            launch {
+                eventsToForward = emptyList()
+                updateState { copy(eventCount = 0) }
+            }
+            return
+        }
+
         launch {
             val snapshot = runSafe { service.port.recent(sourceRoomId, 500) } ?: emptyList()
             eventsToForward = snapshot.filter { it.eventId in eventIds }
@@ -103,6 +112,10 @@ class ForwardPickerViewModel(
     }
 
     fun forwardTo(targetRoomId: String, targetRoomName: String) {
+        if (isLimitedWebMode()) {
+            launch { _events.send(Event.ShowError("Forwarding is not supported on web yet")) }
+            return
+        }
         if (eventsToForward.isEmpty()) {
             launch { _events.send(Event.ShowError("No messages to forward")) }
             return

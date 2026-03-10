@@ -74,6 +74,7 @@ data class RoomUiState(
     val typingNames: List<String> = emptyList(),
     val isPaginatingBack: Boolean = false,
     val hasTimelineSnapshot: Boolean = false,
+    val isLimitedWebMode: Boolean = false,
     val hitStart: Boolean = false,
     val isOffline: Boolean = false,
     val attachments: List<AttachmentData> = emptyList(),
@@ -279,6 +280,7 @@ data class ThreadUiState(
 
     val nextBatch: String? = null,
     val hasInitialLoad: Boolean = false,
+    val isLimitedWebMode: Boolean = false,
 
     val isLoading: Boolean = false,
     val error: String? = null,

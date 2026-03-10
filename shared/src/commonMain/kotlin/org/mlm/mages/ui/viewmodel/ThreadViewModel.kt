@@ -26,9 +26,11 @@ class ThreadViewModel(
     ThreadUiState(
         roomId = roomId,
         rootEventId = rootEventId,
-        roomName = roomName
+        roomName = roomName,
+        isLimitedWebMode = service.port::class.simpleName == "WebStubMatrixPort"
     )
 ) {
+    private fun isLimitedWebMode(): Boolean = service.port::class.simpleName == "WebStubMatrixPort"
 
     sealed class Event {
         data class ShowError(val message: String) : Event()
@@ -91,6 +93,14 @@ class ThreadViewModel(
      * Observe the room timeline and extract thread events in real-time.
      */
     private fun observeTimeline() {
+        if (isLimitedWebMode()) {
+            launch {
+                updateState { copy(isLoading = false, error = "Threads are not supported on web yet") }
+                _events.send(Event.ShowError("Threads are not supported on web yet"))
+            }
+            return
+        }
+
         timelineJob?.cancel()
         timelineJob = viewModelScope.launch {
             service.timelineDiffs(roomId).collect { diff ->
@@ -279,6 +289,13 @@ class ThreadViewModel(
      * Load thread via API as fallback/supplement to timeline data.
      */
     private fun loadInitialThread() {
+        if (isLimitedWebMode()) {
+            launch {
+                updateState { copy(isLoading = false, error = "Threads are not supported on web yet") }
+            }
+            return
+        }
+
         launch(onError = {
             updateState { copy(isLoading = false, error = it.message ?: "Failed to load thread") }
         }) {
@@ -321,6 +338,10 @@ class ThreadViewModel(
      * Load more (older) messages in the thread.
      */
     fun loadMore() {
+        if (isLimitedWebMode()) {
+            launch { _events.send(Event.ShowError("Threads are not supported on web yet")) }
+            return
+        }
         val token = currentState.nextBatch ?: return
         if (currentState.isLoading) return
 
@@ -428,6 +449,10 @@ class ThreadViewModel(
      * Confirm an edit operation.
      */
     suspend fun confirmEdit(): Boolean {
+        if (isLimitedWebMode()) {
+            _events.send(Event.ShowError("Editing is not supported on web yet"))
+            return false
+        }
         val editEvent = currentState.editingEvent ?: return false
         val newBody = currentState.input.trim()
         if (newBody.isBlank()) return false
@@ -449,6 +474,10 @@ class ThreadViewModel(
      * Delete a message.
      */
     suspend fun delete(event: MessageEvent): Boolean {
+        if (isLimitedWebMode()) {
+            _events.send(Event.ShowError("Deleting is not supported on web yet"))
+            return false
+        }
         if (event.eventId.isBlank()) return false
 
         val ok = runSafe { service.redact(roomId, event.eventId, null) } ?: false
@@ -462,6 +491,10 @@ class ThreadViewModel(
      * Send a new message to the thread.
      */
     suspend fun sendMessage(text: String): Boolean {
+        if (isLimitedWebMode()) {
+            _events.send(Event.ShowError("Sending is not supported on web yet"))
+            return false
+        }
         val body = text.trim()
         if (body.isBlank()) return false
 

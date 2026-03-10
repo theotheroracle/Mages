@@ -64,8 +64,6 @@ import org.jetbrains.compose.resources.stringResource
 import mages.shared.generated.resources.*
 import org.mlm.mages.ui.components.snackbar.snackbarHost
 import org.mlm.mages.ui.components.snackbar.rememberErrorPoster
-import java.io.File
-import java.nio.file.Files
 import io.github.mlmgames.settings.core.SettingsRepository
 import io.github.vinceglb.filekit.dialogs.FileKitMode
 import io.github.vinceglb.filekit.dialogs.FileKitType
@@ -73,6 +71,8 @@ import io.github.vinceglb.filekit.dialogs.compose.rememberFilePickerLauncher
 import org.mlm.mages.settings.AppSettings
 import org.mlm.mages.ui.AttachmentUploadStage
 import org.mlm.mages.ui.RoomUiState
+import org.mlm.mages.ui.util.fileName
+import org.mlm.mages.ui.util.guessMimeType
 
 @Suppress("NewApi")
 @Composable
@@ -426,6 +426,13 @@ fun RoomScreen(
                         enterSendsMessage = settings.enterSendsMessage,
                     )
                 }
+
+                if (state.isLimitedWebMode) {
+                    StatusBanner(
+                        message = "Web supports login and room list only right now",
+                        type = BannerType.LOADING
+                    )
+                }
             }
         },
         floatingActionButton = {
@@ -509,15 +516,13 @@ fun RoomScreen(
                         isDragging = false
                         paths.firstOrNull()?.let { path ->
                             try {
-                                val file = File(path)
-                                if (file.exists()) {
-                                    val mime = Files.probeContentType(file.toPath()) ?: "application/octet-stream"
+                                if (path.isNotBlank()) {
                                     viewModel.attachFile(
                                         AttachmentData(
                                             path = path,
-                                            fileName = file.name,
-                                            mimeType = mime,
-                                            sizeBytes = file.length()
+                                            fileName = fileName(path),
+                                            mimeType = guessMimeType(fileName(path)),
+                                            sizeBytes = 0L
                                         )
                                     )
                                 }
@@ -1017,7 +1022,7 @@ private fun RoomBottomBar(
 
         MessageComposer(
             value = state.input,
-            enabled = true,
+            enabled = !state.isLimitedWebMode,
             isOffline = state.isOffline,
             replyingTo = state.replyingTo,
             editing = state.editing,
@@ -1027,12 +1032,12 @@ private fun RoomBottomBar(
             onSend = onSend,
             onCancelReply = onCancelReply,
             onCancelEdit = onCancelEdit,
-            onAttach = onAttach,
+            onAttach = if (state.isLimitedWebMode) ({}) else onAttach,
             onCancelUpload = onCancelUpload,
             onRemoveAttachment = onRemoveAttachment,
             clipboardHandler = clipboardHandler,
             onAttachmentPasted = onAttachmentPasted,
-            enterSendsMessage = enterSendsMessage,
+            enterSendsMessage = enterSendsMessage && !state.isLimitedWebMode,
             roomMembers = state.roomMembers,
             avatarPathByUserId = state.avatarByUserId,
         )
@@ -1050,7 +1055,7 @@ private fun LoadEarlierButton(isLoading: Boolean, onClick: () -> Unit) {
         if (isLoading) {
             CircularWavyProgressIndicator(modifier = Modifier.size(24.dp))
         } else {
-            OutlinedButton(onClick = onClick) {
+            OutlinedButton(onClick = onClick, enabled = !isLoading) {
                 Text(stringResource(Res.string.load_earlier_messages))
             }
         }
