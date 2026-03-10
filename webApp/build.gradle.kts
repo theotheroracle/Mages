@@ -16,8 +16,6 @@ val sharedWasmBridgeDir = rootProject.layout.projectDirectory.dir(
 )
 val rustDir = rootProject.layout.projectDirectory.dir("rust")
 val webAppGeneratedWasmResources = layout.buildDirectory.dir("generated/wasmJsApp/wasm")
-val webMatrixRuntimeGeneratedDir = layout.buildDirectory.dir("generated/webMatrixRuntime")
-
 @DisableCachingByDefault(because = "Invokes external Rust tooling")
 abstract class GenerateRustWasmBindingsTask @Inject constructor(
     private val execOps: ExecOperations,
@@ -56,55 +54,12 @@ val generateRustWasmBindings = tasks.register<GenerateRustWasmBindingsTask>("gen
     outputDir.set(layout.buildDirectory.dir("generated/rustWasmBindings"))
 }
 
-val generateWebMatrixRuntimeEntrypoint = tasks.register("generateWebMatrixRuntimeEntrypoint") {
-    val outputFile = webMatrixRuntimeGeneratedDir.map { it.file("runtime/generated_runtime_entry.js") }
-    outputs.file(outputFile)
-
-    doLast {
-        val file = outputFile.get().asFile
-        file.parentFile.mkdirs()
-        file.writeText(
-            """
-            import { WasmClient } from "../mages_ffi.js";
-
-            export async function createRuntimeClient({ homeserverUrl, baseStoreDir, accountId }) {
-              if (typeof WasmClient.createAsync === "function") {
-                return await WasmClient.createAsync(
-                  homeserverUrl,
-                  baseStoreDir,
-                  accountId ?? undefined,
-                );
-              }
-
-              return new WasmClient(homeserverUrl, baseStoreDir, accountId ?? undefined);
-            }
-
-            export async function restoreRuntimeClient({ homeserverUrl, baseStoreDir, accountId, sessionRecord }) {
-              void sessionRecord;
-              return await createRuntimeClient({ homeserverUrl, baseStoreDir, accountId });
-            }
-
-            export async function logoutRuntimeClient(client, sessionRecord) {
-              void client;
-              void sessionRecord;
-              return false;
-            }
-            """.trimIndent()
-        )
-    }
-}
-
 val syncWasmAppResources = tasks.register<Sync>("syncWasmAppResources") {
-    dependsOn(generateRustWasmBindings, generateWebMatrixRuntimeEntrypoint)
+    dependsOn(generateRustWasmBindings)
     from(generateRustWasmBindings.flatMap { it.outputDir })
-    from(webMatrixRuntimeGeneratedDir)
     from(sharedWasmBridgeDir) {
         include(
-            "mages_ffi_init.js",
-            "mages_ffi_client.js",
-            "web_matrix_facade.js",
-            "session_store.js",
-            "runtime/*.js",
+            "mages_bridge.js",
         )
     }
     into(webAppGeneratedWasmResources)

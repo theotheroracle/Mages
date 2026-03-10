@@ -59,6 +59,90 @@ fn call_js0(f: &Function) {
     let _ = f.call0(&JsValue::NULL);
 }
 
+macro_rules! js_observer_json {
+    ($name:ident : $trait:ident :: $method:ident, $arg:ident : $ty:ty) => {
+        struct $name(Function);
+        impl $trait for $name {
+            fn $method(&self, $arg: $ty) {
+                call_js(&self.0, to_json(&$arg));
+            }
+        }
+        unsafe impl Send for $name {}
+        unsafe impl Sync for $name {}
+    };
+}
+
+macro_rules! js_observer_noargs {
+    ($name:ident : $trait:ident :: $method:ident) => {
+        struct $name(Function);
+        impl $trait for $name {
+            fn $method(&self) {
+                call_js0(&self.0);
+            }
+        }
+        unsafe impl Send for $name {}
+        unsafe impl Sync for $name {}
+    };
+}
+
+macro_rules! wasm_delegate_bool {
+    ($($name:ident($($arg:ident : $ty:ty),* $(,)?));+ $(;)?) => {
+        #[wasm_bindgen]
+        impl WasmClient {
+            $(
+                pub fn $name(&self, $($arg: $ty),*) -> bool {
+                    self.with_client(|c| c.$name($($arg),*))
+                        .unwrap_or(false)
+                }
+            )+
+        }
+    };
+}
+
+macro_rules! wasm_delegate_json {
+    ($($name:ident($($arg:ident : $ty:ty),* $(,)?));+ $(;)?) => {
+        #[wasm_bindgen]
+        impl WasmClient {
+            $(
+                pub fn $name(&self, $($arg: $ty),*) -> JsValue {
+                    let value = self.with_client(|c| c.$name($($arg),*)).unwrap_or_default();
+                    to_json(&value)
+                }
+            )+
+        }
+    };
+}
+
+macro_rules! wasm_delegate_bool_result {
+    ($($name:ident($($arg:ident : $ty:ty),* $(,)?));+ $(;)?) => {
+        #[wasm_bindgen]
+        impl WasmClient {
+            $(
+                pub fn $name(&self, $($arg: $ty),*) -> bool {
+                    self.with_client(|c| c.$name($($arg),*).unwrap_or(false))
+                        .unwrap_or(false)
+                }
+            )+
+        }
+    };
+}
+
+macro_rules! wasm_delegate_json_result_default {
+    ($($name:ident($($arg:ident : $ty:ty),* $(,)?));+ $(;)?) => {
+        #[wasm_bindgen]
+        impl WasmClient {
+            $(
+                pub fn $name(&self, $($arg: $ty),*) -> JsValue {
+                    let value = self
+                        .with_client(|c| c.$name($($arg),*).unwrap_or_default())
+                        .unwrap_or_default();
+                    to_json(&value)
+                }
+            )+
+        }
+    };
+}
+
 #[cfg(target_family = "wasm")]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct WasmSessionInfo {
@@ -137,23 +221,8 @@ async fn wasm_login(
     Ok(())
 }
 
-struct JsConnectionObserver(Function);
-impl ConnectionObserver for JsConnectionObserver {
-    fn on_connection_change(&self, state: ConnectionState) {
-        call_js(&self.0, to_json(&state));
-    }
-}
-unsafe impl Send for JsConnectionObserver {}
-unsafe impl Sync for JsConnectionObserver {}
-
-struct JsSyncObserver(Function);
-impl SyncObserver for JsSyncObserver {
-    fn on_state(&self, status: SyncStatus) {
-        call_js(&self.0, to_json(&status));
-    }
-}
-unsafe impl Send for JsSyncObserver {}
-unsafe impl Sync for JsSyncObserver {}
+js_observer_json!(JsConnectionObserver: ConnectionObserver::on_connection_change, state: ConnectionState);
+js_observer_json!(JsSyncObserver: SyncObserver::on_state, status: SyncStatus);
 
 struct JsTimelineObserver(Function, Function);
 impl TimelineObserver for JsTimelineObserver {
@@ -179,32 +248,9 @@ impl RoomListObserver for JsRoomListObserver {
 unsafe impl Send for JsRoomListObserver {}
 unsafe impl Sync for JsRoomListObserver {}
 
-struct JsSendObserver(Function);
-impl SendObserver for JsSendObserver {
-    fn on_update(&self, update: SendUpdate) {
-        call_js(&self.0, to_json(&update));
-    }
-}
-unsafe impl Send for JsSendObserver {}
-unsafe impl Sync for JsSendObserver {}
-
-struct JsReceiptsObserver(Function);
-impl ReceiptsObserver for JsReceiptsObserver {
-    fn on_changed(&self) {
-        call_js0(&self.0);
-    }
-}
-unsafe impl Send for JsReceiptsObserver {}
-unsafe impl Sync for JsReceiptsObserver {}
-
-struct JsTypingObserver(Function);
-impl TypingObserver for JsTypingObserver {
-    fn on_update(&self, names: Vec<String>) {
-        call_js(&self.0, to_json(&names));
-    }
-}
-unsafe impl Send for JsTypingObserver {}
-unsafe impl Sync for JsTypingObserver {}
+js_observer_json!(JsSendObserver: SendObserver::on_update, update: SendUpdate);
+js_observer_noargs!(JsReceiptsObserver: ReceiptsObserver::on_changed);
+js_observer_json!(JsTypingObserver: TypingObserver::on_update, names: Vec<String>);
 
 struct JsVerificationInboxObserver(Function, Function);
 impl VerificationInboxObserver for JsVerificationInboxObserver {
@@ -255,32 +301,9 @@ impl RecoveryObserver for JsRecoveryObserver {
 unsafe impl Send for JsRecoveryObserver {}
 unsafe impl Sync for JsRecoveryObserver {}
 
-struct JsCallObserver(Function);
-impl CallObserver for JsCallObserver {
-    fn on_invite(&self, invite: CallInvite) {
-        call_js(&self.0, to_json(&invite));
-    }
-}
-unsafe impl Send for JsCallObserver {}
-unsafe impl Sync for JsCallObserver {}
-
-struct JsLiveLocationObserver(Function);
-impl LiveLocationObserver for JsLiveLocationObserver {
-    fn on_update(&self, shares: Vec<crate::LiveLocationShareInfo>) {
-        call_js(&self.0, to_json(&shares));
-    }
-}
-unsafe impl Send for JsLiveLocationObserver {}
-unsafe impl Sync for JsLiveLocationObserver {}
-
-struct JsCallWidgetObserver(Function);
-impl CallWidgetObserver for JsCallWidgetObserver {
-    fn on_to_widget(&self, message: String) {
-        call_js(&self.0, JsValue::from_str(&message));
-    }
-}
-unsafe impl Send for JsCallWidgetObserver {}
-unsafe impl Sync for JsCallWidgetObserver {}
+js_observer_json!(JsCallObserver: CallObserver::on_invite, invite: CallInvite);
+js_observer_json!(JsLiveLocationObserver: LiveLocationObserver::on_update, shares: Vec<crate::LiveLocationShareInfo>);
+js_observer_json!(JsCallWidgetObserver: CallWidgetObserver::on_to_widget, message: String);
 
 struct WasmAsyncState {
     client: SdkClient,
@@ -858,12 +881,6 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn react(&self, room_id: String, event_id: String, emoji: String) -> bool {
-        self.with_client(|c| c.react(room_id, event_id, emoji))
-            .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
     pub fn reply(&self, room_id: String, in_reply_to: String, body: String) -> bool {
         self.with_client(|c| c.reply(room_id, in_reply_to, body, None))
             .unwrap_or(false)
@@ -978,17 +995,6 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn mark_read(&self, room_id: String) -> bool {
-        self.with_client(|c| c.mark_read(room_id)).unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn mark_read_at(&self, room_id: String, event_id: String) -> bool {
-        self.with_client(|c| c.mark_read_at(room_id, event_id))
-            .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
     pub fn mark_fully_read_at(&self, room_id: String, event_id: String) -> bool {
         self.with_client(|c| c.mark_fully_read_at(room_id, event_id))
             .unwrap_or(false)
@@ -1003,12 +1009,6 @@ impl WasmClient {
                 ts_ms: None,
             });
         to_json(&r)
-    }
-
-    #[wasm_bindgen]
-    pub fn set_typing(&self, room_id: String, typing: bool) -> bool {
-        self.with_client(|c| c.set_typing(room_id, typing))
-            .unwrap_or(false)
     }
 
     #[wasm_bindgen]
@@ -1138,18 +1138,6 @@ impl WasmClient {
             return false;
         }
         self.with_client(|c| c.unobserve_timeline(sub_id as u64))
-            .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn paginate_backwards(&self, room_id: String, count: u32) -> bool {
-        self.with_client(|c| c.paginate_backwards(room_id, count as u16))
-            .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn paginate_forwards(&self, room_id: String, count: u32) -> bool {
-        self.with_client(|c| c.paginate_forwards(room_id, count as u16))
             .unwrap_or(false)
     }
 
@@ -1416,23 +1404,9 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn accept_invite(&self, room_id: String) -> bool {
-        self.with_client(|c| c.accept_invite(room_id))
-            .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
     pub fn leave_room(&self, room_id: String) -> bool {
         self.with_client(|c| c.leave_room(room_id).is_ok())
             .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn list_invited(&self) -> JsValue {
-        let v = self
-            .with_client(|c| c.list_invited().unwrap_or_default())
-            .unwrap_or_default();
-        to_json(&v)
     }
 
     #[wasm_bindgen]
@@ -1462,18 +1436,6 @@ impl WasmClient {
         })
         .ok()
         .flatten()
-    }
-
-    #[wasm_bindgen]
-    pub fn set_room_name(&self, room_id: String, name: String) -> bool {
-        self.with_client(|c| c.set_room_name(room_id, name))
-            .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn set_room_topic(&self, room_id: String, topic: String) -> bool {
-        self.with_client(|c| c.set_room_topic(room_id, topic))
-            .unwrap_or(false)
     }
 
     #[wasm_bindgen]
@@ -1519,14 +1481,6 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn list_members(&self, room_id: String) -> JsValue {
-        let v = self
-            .with_client(|c| c.list_members(room_id).unwrap_or_default())
-            .unwrap_or_default();
-        to_json(&v)
-    }
-
-    #[wasm_bindgen]
     pub fn get_user_power_level(&self, room_id: String, user_id: String) -> f64 {
         self.with_client(|c| c.get_user_power_level(room_id, user_id) as f64)
             .unwrap_or(-1.0)
@@ -1566,54 +1520,6 @@ impl WasmClient {
                 .is_ok()
         })
         .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn can_user_ban(&self, room_id: String, user_id: String) -> bool {
-        self.with_client(|c| c.can_user_ban(room_id, user_id).unwrap_or(false))
-            .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn can_user_invite(&self, room_id: String, user_id: String) -> bool {
-        self.with_client(|c| c.can_user_invite(room_id, user_id).unwrap_or(false))
-            .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn can_user_redact_other(&self, room_id: String, user_id: String) -> bool {
-        self.with_client(|c| c.can_user_redact_other(room_id, user_id).unwrap_or(false))
-            .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn enable_room_encryption(&self, room_id: String) -> bool {
-        self.with_client(|c| c.enable_room_encryption(room_id))
-            .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn ban_user(&self, room_id: String, user_id: String, reason: Option<String>) -> bool {
-        self.with_client(|c| c.ban_user(room_id, user_id, reason))
-            .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn unban_user(&self, room_id: String, user_id: String, reason: Option<String>) -> bool {
-        self.with_client(|c| c.unban_user(room_id, user_id, reason))
-            .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn kick_user(&self, room_id: String, user_id: String, reason: Option<String>) -> bool {
-        self.with_client(|c| c.kick_user(room_id, user_id, reason))
-            .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn invite_user(&self, room_id: String, user_id: String) -> bool {
-        self.with_client(|c| c.invite_user(room_id, user_id))
-            .unwrap_or(false)
     }
 
     #[wasm_bindgen]
@@ -1684,26 +1590,6 @@ impl WasmClient {
             }
             None => JsValue::NULL,
         }
-    }
-
-    #[wasm_bindgen]
-    pub fn set_room_favourite(&self, room_id: String, fav: bool) -> bool {
-        self.with_client(|c| c.set_room_favourite(room_id, fav))
-            .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn set_room_low_priority(&self, room_id: String, low: bool) -> bool {
-        self.with_client(|c| c.set_room_low_priority(room_id, low))
-            .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn reactions_for_event(&self, room_id: String, event_id: String) -> JsValue {
-        let v = self
-            .with_client(|c| c.reactions_for_event(room_id, event_id))
-            .unwrap_or_default();
-        to_json(&v)
     }
 
     #[wasm_bindgen]
@@ -1831,11 +1717,6 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn is_space(&self, room_id: String) -> bool {
-        self.with_client(|c| c.is_space(room_id)).unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
     pub fn my_spaces(&self) -> JsValue {
         let v = self.with_client(|c| c.my_spaces()).unwrap_or_default();
         to_json(&v)
@@ -1895,12 +1776,6 @@ impl WasmClient {
             Some(p) => to_json(&p),
             None => JsValue::NULL,
         }
-    }
-
-    #[wasm_bindgen]
-    pub fn space_invite_user(&self, space_id: String, user_id: String) -> bool {
-        self.with_client(|c| c.space_invite_user(space_id, user_id))
-            .unwrap_or(false)
     }
 
     #[wasm_bindgen]
@@ -2465,5 +2340,52 @@ async fn homeserver_login_details_from_client(client: &SdkClient) -> HomeserverL
         supports_oauth,
         supports_sso,
         supports_password,
+    }
+}
+
+wasm_delegate_bool! {
+    react(room_id: String, event_id: String, emoji: String);
+    mark_read(room_id: String);
+    mark_read_at(room_id: String, event_id: String);
+    set_typing(room_id: String, typing: bool);
+    accept_invite(room_id: String);
+    set_room_name(room_id: String, name: String);
+    set_room_topic(room_id: String, topic: String);
+    enable_room_encryption(room_id: String);
+    ban_user(room_id: String, user_id: String, reason: Option<String>);
+    unban_user(room_id: String, user_id: String, reason: Option<String>);
+    kick_user(room_id: String, user_id: String, reason: Option<String>);
+    invite_user(room_id: String, user_id: String);
+    set_room_favourite(room_id: String, fav: bool);
+    set_room_low_priority(room_id: String, low: bool);
+    is_space(room_id: String);
+    space_invite_user(space_id: String, user_id: String)
+}
+
+wasm_delegate_json! {
+    reactions_for_event(room_id: String, event_id: String)
+}
+
+wasm_delegate_bool_result! {
+    can_user_ban(room_id: String, user_id: String);
+    can_user_invite(room_id: String, user_id: String);
+    can_user_redact_other(room_id: String, user_id: String)
+}
+
+wasm_delegate_json_result_default! {
+    list_invited();
+    list_members(room_id: String)
+}
+
+#[wasm_bindgen]
+impl WasmClient {
+    pub fn paginate_backwards(&self, room_id: String, count: u32) -> bool {
+        self.with_client(|c| c.paginate_backwards(room_id, count as u16))
+            .unwrap_or(false)
+    }
+
+    pub fn paginate_forwards(&self, room_id: String, count: u32) -> bool {
+        self.with_client(|c| c.paginate_forwards(room_id, count as u16))
+            .unwrap_or(false)
     }
 }
