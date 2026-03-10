@@ -5,7 +5,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.await
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -68,6 +68,37 @@ class WebStubMatrixPort : MatrixPort {
 
             else -> null
         }
+    }
+
+    private inline fun <reified T> decodeValue(value: JsAny?): T =
+        wasmJson.decodeFromJsonElement(value.toJsonElement())
+
+    private inline fun <reified T> decodeValueOrNull(value: JsAny?): T? =
+        runCatching { decodeValue<T>(value) }.getOrNull()
+
+    private inline fun <reified T : Enum<T>> decodeEnum(name: String?): T? =
+        name?.let { runCatching { enumValueOf<T>(it) }.getOrNull() }
+
+    private fun unitResult(ok: Boolean, action: String): Result<Unit> =
+        if (ok) Result.success(Unit) else Result.failure(IllegalStateException("Failed to $action"))
+
+    private fun decodeStringList(value: JsAny?): List<String> =
+        decodeValueOrNull<List<String>>(value) ?: emptyList()
+
+    private fun decodeRoomTags(value: JsAny?): Pair<Boolean, Boolean>? {
+        val obj = value.toJsonObject() ?: return null
+        val favourite = obj["favourite"]?.let { it as? JsonPrimitive }?.content == "true"
+        val lowPriority = obj["low_priority"]?.let { it as? JsonPrimitive }?.content == "true"
+        return favourite to lowPriority
+    }
+
+    private fun decodeOwnLastRead(value: JsAny?): Pair<String?, Long?> {
+        val obj = value.toJsonObject() ?: return null to null
+        val eventPrimitive = obj["event_id"] as? JsonPrimitive
+        val eventId = eventPrimitive?.content?.takeUnless { it == "null" }
+        val tsPrimitive = obj["ts_ms"] as? JsonPrimitive
+        val tsMs = tsPrimitive?.content?.toLongOrNull()
+        return eventId to tsMs
     }
 
     override suspend fun init(hs: String, accountId: String?) {
@@ -185,13 +216,14 @@ class WebStubMatrixPort : MatrixPort {
         awaitClose { requireFacade().unobserveSends(token) }
     }
 
-    override suspend fun roomTags(roomId: String): Pair<Boolean, Boolean>? = null
+    override suspend fun roomTags(roomId: String): Pair<Boolean, Boolean>? =
+        decodeRoomTags(requireFacade().roomTags(roomId))
 
     override suspend fun setRoomFavourite(roomId: String, favourite: Boolean): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(requireFacade().setRoomFavourite(roomId, favourite), "update room favourite")
 
     override suspend fun setRoomLowPriority(roomId: String, lowPriority: Boolean): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(requireFacade().setRoomLowPriority(roomId, lowPriority), "update room priority")
 
     override suspend fun thumbnailToCache(
         info: AttachmentInfo,
@@ -248,11 +280,14 @@ class WebStubMatrixPort : MatrixPort {
     override suspend fun redact(roomId: String, eventId: String, reason: String?): Boolean =
         requireFacade().redact(roomId, eventId, reason)
 
-    override suspend fun getUserPowerLevel(roomId: String, userId: String): Long = 0
+    override suspend fun getUserPowerLevel(roomId: String, userId: String): Long =
+        requireFacade().getUserPowerLevel(roomId, userId).toLong()
 
-    override suspend fun getPinnedEvents(roomId: String): List<String> = emptyList()
+    override suspend fun getPinnedEvents(roomId: String): List<String> =
+        decodeStringList(requireFacade().getPinnedEvents(roomId))
 
-    override suspend fun setPinnedEvents(roomId: String, eventIds: List<String>): Boolean = false
+    override suspend fun setPinnedEvents(roomId: String, eventIds: List<String>): Boolean =
+        requireFacade().setPinnedEvents(roomId, wasmJson.encodeToString(eventIds).toJsReference())
 
     override fun observeTyping(roomId: String, onUpdate: (List<String>) -> Unit): ULong =
         requireFacade().observeTyping(roomId) { users ->
@@ -358,13 +393,17 @@ class WebStubMatrixPort : MatrixPort {
 
     override suspend fun recoverWithKey(recoveryKey: String): Boolean = false
 
-    override fun observeReceipts(roomId: String, observer: ReceiptsObserver): ULong = 0uL
+    override fun observeReceipts(roomId: String, observer: ReceiptsObserver): ULong =
+        requireFacade().observeReceipts(roomId) { observer.onChanged() }.toULong()
 
-    override fun stopReceiptsObserver(token: ULong) {}
+    override fun stopReceiptsObserver(token: ULong) {
+        requireFacade().unobserveReceipts(token.toDouble())
+    }
 
-    override suspend fun dmPeerUserId(roomId: String): String? = null
+    override suspend fun dmPeerUserId(roomId: String): String? = requireFacade().dmPeerUserId(roomId)
 
-    override suspend fun isEventReadBy(roomId: String, eventId: String, userId: String): Boolean = false
+    override suspend fun isEventReadBy(roomId: String, eventId: String, userId: String): Boolean =
+        requireFacade().isEventReadBy(roomId, eventId, userId)
 
     override fun startCallInbox(observer: MatrixPort.CallObserver): ULong = 0uL
 
@@ -381,13 +420,17 @@ class WebStubMatrixPort : MatrixPort {
 
     override suspend fun unregisterUnifiedPush(appId: String, pushKey: String): Boolean = false
 
-    override suspend fun roomUnreadStats(roomId: String): UnreadStats? = null
+    override suspend fun roomUnreadStats(roomId: String): UnreadStats? =
+        decodeValueOrNull(requireFacade().roomUnreadStats(roomId))
 
-    override suspend fun ownLastRead(roomId: String): Pair<String?, Long?> = null to null
+    override suspend fun ownLastRead(roomId: String): Pair<String?, Long?> =
+        decodeOwnLastRead(requireFacade().ownLastRead(roomId))
 
-    override fun observeOwnReceipt(roomId: String, observer: ReceiptsObserver): ULong = 0uL
+    override fun observeOwnReceipt(roomId: String, observer: ReceiptsObserver): ULong =
+        requireFacade().observeOwnReceipt(roomId) { observer.onChanged() }.toULong()
 
-    override suspend fun markFullyReadAt(roomId: String, eventId: String): Boolean = false
+    override suspend fun markFullyReadAt(roomId: String, eventId: String): Boolean =
+        requireFacade().markFullyReadAt(roomId, eventId)
 
     override suspend fun encryptionCatchupOnce(): Boolean = false
 
@@ -395,7 +438,7 @@ class WebStubMatrixPort : MatrixPort {
         val token = requireFacade().observeRoomList(
             onReset = { itemsValue ->
                 val raw = runCatching { itemsValue.toJsonArray() }.getOrElse {
-                    kotlinx.serialization.json.JsonArray(emptyList())
+                    JsonArray(emptyList())
                 }
                 val items = runCatching {
                     wasmJson.decodeFromJsonElement<List<RoomListEntry>>(raw)
@@ -418,7 +461,8 @@ class WebStubMatrixPort : MatrixPort {
         requireFacade().unobserveRoomList(token.toDouble())
     }
 
-    override suspend fun fetchNotification(roomId: String, eventId: String): RenderedNotification? = null
+    override suspend fun fetchNotification(roomId: String, eventId: String): RenderedNotification? =
+        decodeValueOrNull(requireFacade().fetchNotification(roomId, eventId))
 
     override suspend fun fetchNotificationsSince(
         sinceMs: Long,
@@ -438,9 +482,11 @@ class WebStubMatrixPort : MatrixPort {
             requireFacade().homeserverLoginDetails().toJsonElement()
         )
 
-    override suspend fun searchUsers(term: String, limit: Int): List<DirectoryUser> = emptyList()
+    override suspend fun searchUsers(term: String, limit: Int): List<DirectoryUser> =
+        decodeValueOrNull(requireFacade().searchUsers(term, limit)) ?: emptyList()
 
-    override suspend fun getUserProfile(userId: String): DirectoryUser? = null
+    override suspend fun getUserProfile(userId: String): DirectoryUser? =
+        decodeValueOrNull(requireFacade().getUserProfile(userId))
 
     override suspend fun publicRooms(
         server: String?,
@@ -452,18 +498,20 @@ class WebStubMatrixPort : MatrixPort {
             requireFacade().publicRooms(server, search, limit, since).await<WebPublicRoomsPageValue?>().toJsonElement()
         )
 
-    override suspend fun joinByIdOrAlias(idOrAlias: String): Result<Unit> = Result.failure(UnsupportedOperationException()) // requireFacade().joinByIdOrAlias(idOrAlias)
+    override suspend fun joinByIdOrAlias(idOrAlias: String): Result<Unit> =
+        runCatching { requireFacade().joinByIdOrAlias(idOrAlias) }.map { }
 
     override suspend fun ensureDm(userId: String): String? = requireFacade().ensureDm(userId)
 
     override suspend fun resolveRoomId(idOrAlias: String): String? = requireFacade().resolveRoomId(idOrAlias)
 
-    override suspend fun listInvited(): List<RoomProfile> = emptyList()
+    override suspend fun listInvited(): List<RoomProfile> =
+        decodeValueOrNull(requireFacade().listInvited()) ?: emptyList()
 
-    override suspend fun acceptInvite(roomId: String): Boolean = false
+    override suspend fun acceptInvite(roomId: String): Boolean = requireFacade().acceptInvite(roomId)
 
     override suspend fun leaveRoom(roomId: String): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(requireFacade().leaveRoom(roomId), "leave room")
 
     override suspend fun createRoom(
         name: String?,
@@ -471,22 +519,33 @@ class WebStubMatrixPort : MatrixPort {
         invitees: List<String>,
         isPublic: Boolean,
         roomAlias: String?
-    ): String? = null
+    ): String? = requireFacade().createRoom(
+        name,
+        topic,
+        wasmJson.encodeToString(invitees).toJsReference(),
+        isPublic,
+        roomAlias,
+    )
 
     override suspend fun setRoomName(roomId: String, name: String): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(requireFacade().setRoomName(roomId, name), "set room name")
 
     override suspend fun setRoomTopic(roomId: String, topic: String): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(requireFacade().setRoomTopic(roomId, topic), "set room topic")
 
-    override suspend fun roomProfile(roomId: String): RoomProfile? = null
+    override suspend fun roomProfile(roomId: String): RoomProfile? =
+        decodeValueOrNull(requireFacade().roomProfile(roomId))
 
-    override suspend fun roomNotificationMode(roomId: String): RoomNotificationMode? = null
+    override suspend fun roomNotificationMode(roomId: String): RoomNotificationMode? =
+        decodeEnum(requireFacade().roomNotificationMode(roomId))
 
     override suspend fun setRoomNotificationMode(
         roomId: String,
         mode: RoomNotificationMode
-    ): Result<Unit> = Result.failure(UnsupportedOperationException())
+    ): Result<Unit> = unitResult(
+        requireFacade().setRoomNotificationMode(roomId, mode.name),
+        "set room notification mode"
+    )
 
     override suspend fun listMembers(roomId: String): List<MemberSummary> =
         wasmJson.decodeFromJsonElement(requireFacade().listMembers(roomId).toJsonElement())
@@ -570,87 +629,120 @@ class WebStubMatrixPort : MatrixPort {
     override suspend fun getPresence(userId: String): Pair<Presence, String?>? = null
 
     override suspend fun ignoreUser(userId: String): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(requireFacade().ignoreUser(userId), "ignore user")
 
     override suspend fun unignoreUser(userId: String): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(requireFacade().unignoreUser(userId), "unignore user")
 
-    override suspend fun ignoredUsers(): List<String> = emptyList()
+    override suspend fun ignoredUsers(): List<String> =
+        decodeStringList(requireFacade().ignoredUsers())
 
-    override suspend fun roomDirectoryVisibility(roomId: String): RoomDirectoryVisibility? = null
+    override suspend fun roomDirectoryVisibility(roomId: String): RoomDirectoryVisibility? =
+        decodeEnum(requireFacade().roomDirectoryVisibility(roomId))
 
     override suspend fun setRoomDirectoryVisibility(
         roomId: String,
         visibility: RoomDirectoryVisibility
-    ): Result<Unit> = Result.failure(UnsupportedOperationException())
+    ): Result<Unit> = unitResult(
+        requireFacade().setRoomDirectoryVisibility(roomId, visibility.name),
+        "set room directory visibility"
+    )
 
-    override suspend fun publishRoomAlias(roomId: String, alias: String): Boolean = false
+    override suspend fun publishRoomAlias(roomId: String, alias: String): Boolean =
+        requireFacade().publishRoomAlias(roomId, alias)
 
-    override suspend fun unpublishRoomAlias(roomId: String, alias: String): Boolean = false
+    override suspend fun unpublishRoomAlias(roomId: String, alias: String): Boolean =
+        requireFacade().unpublishRoomAlias(roomId, alias)
 
     override suspend fun setRoomCanonicalAlias(
         roomId: String,
         alias: String?,
         altAliases: List<String>
-    ): Result<Unit> = Result.failure(UnsupportedOperationException())
+    ): Result<Unit> = unitResult(
+        requireFacade().setRoomCanonicalAlias(
+            roomId,
+            alias,
+            wasmJson.encodeToString(altAliases).toJsReference(),
+        ),
+        "set room canonical alias"
+    )
 
-    override suspend fun roomAliases(roomId: String): List<String> = emptyList()
+    override suspend fun roomAliases(roomId: String): List<String> =
+        decodeStringList(requireFacade().roomAliases(roomId))
 
-    override suspend fun roomJoinRule(roomId: String): RoomJoinRule? = null
+    override suspend fun roomJoinRule(roomId: String): RoomJoinRule? =
+        decodeEnum(requireFacade().roomJoinRule(roomId))
 
     override suspend fun setRoomJoinRule(roomId: String, rule: RoomJoinRule): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(requireFacade().setRoomJoinRule(roomId, rule.name), "set room join rule")
 
-    override suspend fun roomHistoryVisibility(roomId: String): RoomHistoryVisibility? = null
+    override suspend fun roomHistoryVisibility(roomId: String): RoomHistoryVisibility? =
+        decodeEnum(requireFacade().roomHistoryVisibility(roomId))
 
     override suspend fun setRoomHistoryVisibility(
         roomId: String,
         visibility: RoomHistoryVisibility
-    ): Result<Unit> = Result.failure(UnsupportedOperationException())
+    ): Result<Unit> = unitResult(
+        requireFacade().setRoomHistoryVisibility(roomId, visibility.name),
+        "set room history visibility"
+    )
 
-    override suspend fun roomPowerLevels(roomId: String): RoomPowerLevels? = null
+    override suspend fun roomPowerLevels(roomId: String): RoomPowerLevels? =
+        decodeValueOrNull(requireFacade().roomPowerLevels(roomId))
 
-    override suspend fun canUserBan(roomId: String, userId: String): Boolean = false
+    override suspend fun canUserBan(roomId: String, userId: String): Boolean =
+        requireFacade().canUserBan(roomId, userId)
 
-    override suspend fun canUserInvite(roomId: String, userId: String): Boolean = false
+    override suspend fun canUserInvite(roomId: String, userId: String): Boolean =
+        requireFacade().canUserInvite(roomId, userId)
 
-    override suspend fun canUserRedactOther(roomId: String, userId: String): Boolean = false
+    override suspend fun canUserRedactOther(roomId: String, userId: String): Boolean =
+        requireFacade().canUserRedactOther(roomId, userId)
 
     override suspend fun updatePowerLevelForUser(
         roomId: String,
         userId: String,
         powerLevel: Long
-    ): Result<Unit> = Result.failure(UnsupportedOperationException())
+    ): Result<Unit> = unitResult(
+        requireFacade().updatePowerLevelForUser(roomId, userId, powerLevel.toDouble()),
+        "update power level"
+    )
 
     override suspend fun applyPowerLevelChanges(
         roomId: String,
         changes: RoomPowerLevelChanges
-    ): Result<Unit> = Result.failure(UnsupportedOperationException())
+    ): Result<Unit> = unitResult(
+        requireFacade().applyPowerLevelChanges(roomId, wasmJson.encodeToString(changes)),
+        "apply power level changes"
+    )
 
     override suspend fun reportContent(
         roomId: String,
         eventId: String,
         score: Int?,
         reason: String?
-    ): Result<Unit> = Result.failure(UnsupportedOperationException())
+    ): Result<Unit> = unitResult(
+        requireFacade().reportContent(roomId, eventId, score, reason),
+        "report content"
+    )
 
     override suspend fun reportRoom(roomId: String, reason: String?): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(requireFacade().reportRoom(roomId, reason), "report room")
 
     override suspend fun banUser(roomId: String, userId: String, reason: String?): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(requireFacade().banUser(roomId, userId, reason), "ban user")
 
     override suspend fun unbanUser(roomId: String, userId: String, reason: String?): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(requireFacade().unbanUser(roomId, userId, reason), "unban user")
 
     override suspend fun kickUser(roomId: String, userId: String, reason: String?): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(requireFacade().kickUser(roomId, userId, reason), "kick user")
 
     override suspend fun inviteUser(roomId: String, userId: String): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(requireFacade().inviteUser(roomId, userId), "invite user")
 
     override suspend fun enableRoomEncryption(roomId: String): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(requireFacade().enableRoomEncryption(roomId), "enable room encryption")
 
     override suspend fun roomSuccessor(roomId: String): RoomUpgradeInfo? =
         runCatching { wasmJson.decodeFromJsonElement<RoomUpgradeInfo>(requireFacade().roomSuccessor(roomId).toJsonElement()) }.getOrNull()
@@ -671,9 +763,11 @@ class WebStubMatrixPort : MatrixPort {
 
     override fun stopObserveLiveLocation(token: ULong) {}
 
-    override suspend fun sendPoll(roomId: String, question: String, answers: List<String>): Boolean = false
+    override suspend fun sendPoll(roomId: String, question: String, answers: List<String>): Boolean =
+        requireFacade().sendPollStart(roomId, question, wasmJson.encodeToString(answers).toJsReference())
 
-    override fun seenByForEvent(roomId: String, eventId: String, limit: Int): List<SeenByEntry> = emptyList()
+    override fun seenByForEvent(roomId: String, eventId: String, limit: Int): List<SeenByEntry> =
+        decodeValueOrNull(requireFacade().seenByForEvent(roomId, eventId, limit)) ?: emptyList()
 
     override suspend fun mxcThumbnailToCache(mxcUri: String, width: Int, height: Int, crop: Boolean): String =
         requireFacade().mxcThumbnailToCache(mxcUri, width, height, crop).orEmpty()
@@ -681,9 +775,11 @@ class WebStubMatrixPort : MatrixPort {
     override suspend fun loadRoomListCache(): List<RoomListEntry> =
         wasmJson.decodeFromJsonElement(requireFacade().loadRoomListCache().toJsonArray())
 
-    override suspend fun sendPollResponse(roomId: String, pollEventId: String, answers: List<String>): Boolean = false
+    override suspend fun sendPollResponse(roomId: String, pollEventId: String, answers: List<String>): Boolean =
+        requireFacade().sendPollResponse(roomId, pollEventId, wasmJson.encodeToString(answers).toJsReference())
 
-    override suspend fun sendPollEnd(roomId: String, pollEventId: String): Boolean = false
+    override suspend fun sendPollEnd(roomId: String, pollEventId: String): Boolean =
+        requireFacade().sendPollEnd(roomId, pollEventId)
 
     override suspend fun startElementCall(
         roomId: String,

@@ -26,6 +26,21 @@ export function normalizeWasmValue(value) {
   return value;
 }
 
+function normalizeBridgeValue(value) {
+  if (typeof value === "string") {
+    try {
+      return normalizeWasmValue(JSON.parse(value));
+    } catch {
+      return value;
+    }
+  }
+  return normalizeWasmValue(value);
+}
+
+function parseJsonArray(value) {
+  return Array.isArray(value) ? value : JSON.parse(value);
+}
+
 const SESSION_KEY = "mages_web_sessions_v1";
 
 function loadAllSessions() {
@@ -198,6 +213,242 @@ class WasmClientBridge {
 
   list_members(roomId) {
     return normalizeWasmValue(this.client.list_members(roomId));
+  }
+
+  list_invited() {
+    return normalizeWasmValue(this.client.list_invited() ?? []);
+  }
+
+  accept_invite(roomId) {
+    return this.client.accept_invite(roomId);
+  }
+
+  leave_room(roomId) {
+    return this.client.leave_room(roomId);
+  }
+
+  create_room(name, topic, invitees, isPublic, roomAlias) {
+    return this.client.create_room(
+      name ?? undefined,
+      topic ?? undefined,
+      parseJsonArray(invitees),
+      isPublic,
+      roomAlias ?? undefined,
+    ) ?? null;
+  }
+
+  room_profile(roomId) {
+    return normalizeWasmValue(this.client.room_profile(roomId));
+  }
+
+  set_room_name(roomId, name) {
+    return this.client.set_room_name(roomId, name);
+  }
+
+  set_room_topic(roomId, topic) {
+    return this.client.set_room_topic(roomId, topic);
+  }
+
+  room_notification_mode(roomId) {
+    return this.client.room_notification_mode(roomId) ?? null;
+  }
+
+  set_room_notification_mode(roomId, mode) {
+    return this.client.set_room_notification_mode(roomId, mode);
+  }
+
+  room_power_levels(roomId) {
+    return normalizeWasmValue(this.client.room_power_levels(roomId));
+  }
+
+  get_user_power_level(roomId, userId) {
+    return this.client.get_user_power_level(roomId, userId);
+  }
+
+  can_user_ban(roomId, userId) {
+    return this.client.can_user_ban(roomId, userId);
+  }
+
+  can_user_invite(roomId, userId) {
+    return this.client.can_user_invite(roomId, userId);
+  }
+
+  can_user_redact_other(roomId, userId) {
+    return this.client.can_user_redact_other(roomId, userId);
+  }
+
+  update_power_level_for_user(roomId, userId, powerLevel) {
+    return this.client.update_power_level_for_user(roomId, userId, powerLevel);
+  }
+
+  apply_power_level_changes(roomId, changesJson) {
+    return this.client.apply_power_level_changes(roomId, changesJson);
+  }
+
+  ban_user(roomId, userId, reason) {
+    return this.client.ban_user(roomId, userId, reason ?? undefined);
+  }
+
+  unban_user(roomId, userId, reason) {
+    return this.client.unban_user(roomId, userId, reason ?? undefined);
+  }
+
+  kick_user(roomId, userId, reason) {
+    return this.client.kick_user(roomId, userId, reason ?? undefined);
+  }
+
+  invite_user(roomId, userId) {
+    return this.client.invite_user(roomId, userId);
+  }
+
+  enable_room_encryption(roomId) {
+    return this.client.enable_room_encryption(roomId);
+  }
+
+  report_content(roomId, eventId, score, reason) {
+    return this.client.report_content(roomId, eventId, score ?? undefined, reason ?? undefined);
+  }
+
+  report_room(roomId, reason) {
+    return this.client.report_room(roomId, reason ?? undefined);
+  }
+
+  room_join_rule(roomId) {
+    return this.client.room_join_rule(roomId) ?? null;
+  }
+
+  set_room_join_rule(roomId, rule) {
+    return this.client.set_room_join_rule(roomId, rule);
+  }
+
+  room_history_visibility(roomId) {
+    return this.client.room_history_visibility(roomId) ?? null;
+  }
+
+  set_room_history_visibility(roomId, visibility) {
+    return this.client.set_room_history_visibility(roomId, visibility);
+  }
+
+  room_directory_visibility(roomId) {
+    return this.client.room_directory_visibility(roomId) ?? null;
+  }
+
+  set_room_directory_visibility(roomId, visibility) {
+    return this.client.set_room_directory_visibility(roomId, visibility);
+  }
+
+  room_aliases(roomId) {
+    return normalizeWasmValue(this.client.room_aliases(roomId) ?? []);
+  }
+
+  publish_room_alias(roomId, alias) {
+    return this.client.publish_room_alias(roomId, alias);
+  }
+
+  unpublish_room_alias(roomId, alias) {
+    return this.client.unpublish_room_alias(roomId, alias);
+  }
+
+  set_room_canonical_alias(roomId, alias, altAliases) {
+    return this.client.set_room_canonical_alias(roomId, alias ?? undefined, JSON.stringify(parseJsonArray(altAliases)));
+  }
+
+  room_unread_stats(roomId) {
+    return normalizeWasmValue(this.client.room_unread_stats(roomId));
+  }
+
+  fetch_notification(roomId, eventId) {
+    return normalizeWasmValue(this.client.fetch_notification(roomId, eventId));
+  }
+
+  room_tags(roomId) {
+    return normalizeBridgeValue(this.client.room_tags(roomId));
+  }
+
+  set_room_favourite(roomId, favourite) {
+    return this.client.set_room_favourite(roomId, favourite);
+  }
+
+  set_room_low_priority(roomId, lowPriority) {
+    return this.client.set_room_low_priority(roomId, lowPriority);
+  }
+
+  own_last_read(roomId) {
+    return normalizeWasmValue(this.client.own_last_read(roomId));
+  }
+
+  mark_fully_read_at(roomId, eventId) {
+    return this.client.mark_fully_read_at(roomId, eventId);
+  }
+
+  observe_receipts(roomId, onChanged) {
+    return this.client.observe_receipts(roomId, () => onChanged());
+  }
+
+  observe_own_receipt(roomId, onChanged) {
+    return this.client.observe_own_receipt(roomId, () => onChanged());
+  }
+
+  unobserve_receipts(id) {
+    return this.client.unobserve_receipts(id);
+  }
+
+  is_event_read_by(roomId, eventId, userId) {
+    return this.client.is_event_read_by(roomId, eventId, userId);
+  }
+
+  dm_peer_user_id(roomId) {
+    return this.client.dm_peer_user_id(roomId) ?? null;
+  }
+
+  search_users(term, limit) {
+    return normalizeWasmValue(this.client.search_users(term, limit) ?? []);
+  }
+
+  get_user_profile(userId) {
+    return normalizeWasmValue(this.client.get_user_profile(userId));
+  }
+
+  ignore_user(userId) {
+    return this.client.ignore_user(userId);
+  }
+
+  unignore_user(userId) {
+    return this.client.unignore_user(userId);
+  }
+
+  ignored_users() {
+    return normalizeWasmValue(this.client.ignored_users() ?? []);
+  }
+
+  get_pinned_events(roomId) {
+    return normalizeWasmValue(this.client.get_pinned_events(roomId) ?? []);
+  }
+
+  set_pinned_events(roomId, eventIds) {
+    return this.client.set_pinned_events(roomId, parseJsonArray(eventIds));
+  }
+
+  seen_by_for_event(roomId, eventId, limit) {
+    return normalizeBridgeValue(this.client.seen_by_for_event(roomId, eventId, limit));
+  }
+
+  send_poll_start(roomId, question, answers, kind, maxSelections) {
+    return this.client.send_poll_start(
+      roomId,
+      question,
+      JSON.stringify(parseJsonArray(answers)),
+      kind,
+      maxSelections,
+    );
+  }
+
+  send_poll_response(roomId, pollEventId, answers) {
+    return this.client.send_poll_response(roomId, pollEventId, JSON.stringify(parseJsonArray(answers)));
+  }
+
+  send_poll_end(roomId, pollEventId) {
+    return this.client.send_poll_end(roomId, pollEventId);
   }
 
   load_room_list_cache() {
@@ -393,6 +644,18 @@ export class WebMatrixFacade {
     return this.client.load_room_list_cache();
   }
 
+  roomTags(roomId) {
+    return this.client.room_tags(roomId);
+  }
+
+  setRoomFavourite(roomId, favourite) {
+    return this.client.set_room_favourite(roomId, favourite);
+  }
+
+  setRoomLowPriority(roomId, lowPriority) {
+    return this.client.set_room_low_priority(roomId, lowPriority);
+  }
+
   async getRoomTimeline(roomId, limit = 50) {
     return await this.client.recent_events(roomId, limit);
   }
@@ -473,16 +736,229 @@ export class WebMatrixFacade {
     return await this.client.public_rooms(server ?? undefined, search ?? undefined, limit, since ?? undefined);
   }
 
-  joinByIdOrAlias(idOrAlias) {
-    return this.client.join_by_id_or_alias(idOrAlias);
-  }
-
   resolveRoomId(idOrAlias) {
     return this.client.resolve_room_id(idOrAlias) ?? null;
   }
 
+  joinByIdOrAlias(idOrAlias) {
+    this.client.join_by_id_or_alias(idOrAlias);
+    return true;
+  }
+
+  listInvited() {
+    return this.client.list_invited();
+  }
+
+  acceptInvite(roomId) {
+    return this.client.accept_invite(roomId);
+  }
+
+  leaveRoom(roomId) {
+    return this.client.leave_room(roomId);
+  }
+
+  createRoom(name, topic, invitees, isPublic, roomAlias) {
+    return this.client.create_room(name ?? undefined, topic ?? undefined, invitees, isPublic, roomAlias ?? undefined);
+  }
+
+  setRoomName(roomId, name) {
+    return this.client.set_room_name(roomId, name);
+  }
+
+  setRoomTopic(roomId, topic) {
+    return this.client.set_room_topic(roomId, topic);
+  }
+
+  roomProfile(roomId) {
+    return this.client.room_profile(roomId);
+  }
+
+  roomNotificationMode(roomId) {
+    return this.client.room_notification_mode(roomId) ?? null;
+  }
+
+  setRoomNotificationMode(roomId, mode) {
+    return this.client.set_room_notification_mode(roomId, mode);
+  }
+
   listMembers(roomId) {
     return this.client.list_members(roomId);
+  }
+
+  roomPowerLevels(roomId) {
+    return this.client.room_power_levels(roomId);
+  }
+
+  getUserPowerLevel(roomId, userId) {
+    return this.client.get_user_power_level(roomId, userId);
+  }
+
+  canUserBan(roomId, userId) {
+    return this.client.can_user_ban(roomId, userId);
+  }
+
+  canUserInvite(roomId, userId) {
+    return this.client.can_user_invite(roomId, userId);
+  }
+
+  canUserRedactOther(roomId, userId) {
+    return this.client.can_user_redact_other(roomId, userId);
+  }
+
+  updatePowerLevelForUser(roomId, userId, powerLevel) {
+    return this.client.update_power_level_for_user(roomId, userId, powerLevel);
+  }
+
+  applyPowerLevelChanges(roomId, changesJson) {
+    return this.client.apply_power_level_changes(roomId, changesJson);
+  }
+
+  reportContent(roomId, eventId, score, reason) {
+    return this.client.report_content(roomId, eventId, score ?? undefined, reason ?? undefined);
+  }
+
+  reportRoom(roomId, reason) {
+    return this.client.report_room(roomId, reason ?? undefined);
+  }
+
+  roomJoinRule(roomId) {
+    return this.client.room_join_rule(roomId) ?? null;
+  }
+
+  setRoomJoinRule(roomId, rule) {
+    return this.client.set_room_join_rule(roomId, rule);
+  }
+
+  roomHistoryVisibility(roomId) {
+    return this.client.room_history_visibility(roomId) ?? null;
+  }
+
+  setRoomHistoryVisibility(roomId, visibility) {
+    return this.client.set_room_history_visibility(roomId, visibility);
+  }
+
+  roomDirectoryVisibility(roomId) {
+    return this.client.room_directory_visibility(roomId) ?? null;
+  }
+
+  setRoomDirectoryVisibility(roomId, visibility) {
+    return this.client.set_room_directory_visibility(roomId, visibility);
+  }
+
+  roomAliases(roomId) {
+    return this.client.room_aliases(roomId);
+  }
+
+  publishRoomAlias(roomId, alias) {
+    return this.client.publish_room_alias(roomId, alias);
+  }
+
+  unpublishRoomAlias(roomId, alias) {
+    return this.client.unpublish_room_alias(roomId, alias);
+  }
+
+  setRoomCanonicalAlias(roomId, alias, altAliases) {
+    return this.client.set_room_canonical_alias(roomId, alias ?? undefined, altAliases);
+  }
+
+  roomUnreadStats(roomId) {
+    return this.client.room_unread_stats(roomId);
+  }
+
+  fetchNotification(roomId, eventId) {
+    return this.client.fetch_notification(roomId, eventId);
+  }
+
+  ownLastRead(roomId) {
+    return this.client.own_last_read(roomId);
+  }
+
+  markFullyReadAt(roomId, eventId) {
+    return this.client.mark_fully_read_at(roomId, eventId);
+  }
+
+  observeReceipts(roomId, onChanged) {
+    return this.client.observe_receipts(roomId, onChanged);
+  }
+
+  observeOwnReceipt(roomId, onChanged) {
+    return this.client.observe_own_receipt(roomId, onChanged);
+  }
+
+  unobserveReceipts(token) {
+    return this.client.unobserve_receipts(token);
+  }
+
+  dmPeerUserId(roomId) {
+    return this.client.dm_peer_user_id(roomId) ?? null;
+  }
+
+  isEventReadBy(roomId, eventId, userId) {
+    return this.client.is_event_read_by(roomId, eventId, userId);
+  }
+
+  searchUsers(term, limit) {
+    return this.client.search_users(term, limit);
+  }
+
+  getUserProfile(userId) {
+    return this.client.get_user_profile(userId);
+  }
+
+  ignoreUser(userId) {
+    return this.client.ignore_user(userId);
+  }
+
+  unignoreUser(userId) {
+    return this.client.unignore_user(userId);
+  }
+
+  ignoredUsers() {
+    return this.client.ignored_users();
+  }
+
+  getPinnedEvents(roomId) {
+    return this.client.get_pinned_events(roomId);
+  }
+
+  setPinnedEvents(roomId, eventIds) {
+    return this.client.set_pinned_events(roomId, eventIds);
+  }
+
+  seenByForEvent(roomId, eventId, limit) {
+    return this.client.seen_by_for_event(roomId, eventId, limit);
+  }
+
+  banUser(roomId, userId, reason) {
+    return this.client.ban_user(roomId, userId, reason ?? undefined);
+  }
+
+  unbanUser(roomId, userId, reason) {
+    return this.client.unban_user(roomId, userId, reason ?? undefined);
+  }
+
+  kickUser(roomId, userId, reason) {
+    return this.client.kick_user(roomId, userId, reason ?? undefined);
+  }
+
+  inviteUser(roomId, userId) {
+    return this.client.invite_user(roomId, userId);
+  }
+
+  enableRoomEncryption(roomId) {
+    return this.client.enable_room_encryption(roomId);
+  }
+
+  sendPollStart(roomId, question, answers, kind = "Disclosed", maxSelections = 1) {
+    return this.client.send_poll_start(roomId, question, answers, kind, maxSelections);
+  }
+
+  sendPollResponse(roomId, pollEventId, answers) {
+    return this.client.send_poll_response(roomId, pollEventId, answers);
+  }
+
+  sendPollEnd(roomId, pollEventId) {
+    return this.client.send_poll_end(roomId, pollEventId);
   }
 
   observeRoomList(onReset, onUpdate) {
