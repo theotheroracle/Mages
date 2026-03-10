@@ -30,6 +30,17 @@ kotlin {
 
     jvm()
 
+    @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
+    wasmJs {
+        browser {
+            commonWebpackConfig {
+                outputFileName = "mages.js"
+            }
+        }
+        binaries.executable()
+        // compileKotlinWeb does NOT depend on genUniFFIWasm
+    }
+
     sourceSets {
         commonMain.dependencies {
             implementation(libs.compose.ui)
@@ -92,7 +103,11 @@ kotlin {
             implementation(libs.systemtray)
             implementation(libs.jcefmaven)
             implementation(libs.json)
+        }
 
+        wasmJsMain.dependencies {
+            implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.kotlinx.serialization.json)
         }
     }
 }
@@ -101,6 +116,7 @@ dependencies {
     add("kspCommonMainMetadata", libs.kmp.settings.ksp)
     add("kspAndroid", libs.kmp.settings.ksp)
     add("kspJvm", libs.kmp.settings.ksp)
+    add("kspWasmJs", libs.kmp.settings.ksp)
 }
 
 val cargoAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
@@ -112,6 +128,9 @@ val hostLibName = when {
     else -> "libmages_ffi.so"
 }
 val hostLibFile = rustDirDefault.file("target/release/$hostLibName")
+val wasmLibFile = rustDirDefault.file("target/wasm32-unknown-unknown/release/mages_ffi.wasm")
+val webAppWasmDir = rootProject.layout.projectDirectory.dir("webApp/src/wasm")
+val generatedWebWasmResources = layout.buildDirectory.dir("generated/web/wasm")
 
 val useCargoFallback = providers.provider { true }
 val cargoBinDefault = providers.provider { if (os.isWindows) "cargo.exe" else "cargo" }
@@ -130,8 +149,14 @@ val cargoBuildDesktop = tasks.register<CargoBuildOnlyTask>("cargoBuildDesktop") 
     rustDir.set(rustDirDefault)
 }
 
+val cargoBuildWasm = tasks.register<CargoBuildWasmTask>("cargoBuildWasm") {
+    cargoBin.set(cargoBinDefault)
+    rustDir.set(rustDirDefault)
+}
+
 val uniffiAndroidOut = layout.buildDirectory.dir("generated/uniffi/androidMain/kotlin")
 val uniffiJvmOut = layout.buildDirectory.dir("generated/uniffi/jvmMain/kotlin")
+val uniffiWasmOut = layout.buildDirectory.dir("generated/uniffi/wasmJsMain/kotlin")
 
 val genUniFFIAndroid = tasks.register<GenerateUniFFITask>("genUniFFIAndroid") {
     dependsOn(cargoBuildDesktop)
@@ -155,6 +180,23 @@ val genUniFFIJvm = tasks.register<GenerateUniFFITask>("genUniFFIJvm") {
     cargoBin.set(cargoBinDefault)
     vendoredManifest.set(vendoredManifestVar)
     outDir.set(uniffiJvmOut)
+}
+
+val genUniFFIWasm = tasks.register<GenerateUniFFITask>("genUniFFIWasm") {
+    dependsOn(cargoBuildDesktop)
+    libraryFile.set(hostLibFile)
+    configFile.set(rustDirDefault.file("uniffi.wasm.toml"))
+    language.set("kotlin")
+    uniffiPath.set("")
+    useFallbackCargo.set(useCargoFallback)
+    cargoBin.set(cargoBinDefault)
+    vendoredManifest.set(vendoredManifestVar)
+    outDir.set(uniffiWasmOut)
+}
+
+val syncWebWasmAssets = tasks.register<Copy>("syncWebWasmAssets") {
+    from(webAppWasmDir)
+    into(generatedWebWasmResources)
 }
 
 val jnaPlatformDir: String = run {
@@ -188,6 +230,18 @@ abstract class CargoBuildOnlyTask @Inject constructor(private val execOps: ExecO
         execOps.exec {
             workingDir = rustDir.get().asFile
             commandLine(cargoBin.get(), "build", "--release")
+        }
+    }
+}
+
+@DisableCachingByDefault(because = "Builds WASM code")
+abstract class CargoBuildWasmTask @Inject constructor(private val execOps: ExecOperations) : DefaultTask() {
+    @get:Input abstract val cargoBin: Property<String>
+    @get:InputDirectory abstract val rustDir: DirectoryProperty
+    @TaskAction fun run() {
+        execOps.exec {
+            workingDir = rustDir.get().asFile
+            commandLine(cargoBin.get(), "build", "--target", "wasm32-unknown-unknown", "--release")
         }
     }
 }
@@ -284,4 +338,10 @@ tasks.matching { it.name.startsWith("kspAndroid") }.configureEach {
 }
 tasks.matching { it.name.startsWith("kspJvm") || it.name == "kspKotlinJvm" }.configureEach {
     dependsOn(genUniFFIJvm)
+}
+tasks.named<ProcessResources>("wasmJsProcessResources") {
+    dependsOn(syncWebWasmAssets)
+    from(generatedWebWasmResources) {
+        into("wasm")
+    }
 }
