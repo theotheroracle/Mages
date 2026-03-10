@@ -166,6 +166,17 @@ data class UnreadStats(val messages: Long, val notifications: Long, val mentions
 data class DirectoryUser(val userId: String, val displayName: String?, val avatarUrl: String?)
 data class PublicRoom(val roomId: String, val name: String?, val topic: String?, val alias: String?, val avatarUrl: String?, val memberCount: Long, val worldReadable: Boolean, val guestCanJoin: Boolean)
 data class PublicRoomsPage(val rooms: List<PublicRoom>, val nextBatch: String?, val prevBatch: String?)
+data class RoomPreview(
+    val roomId: String,
+    val canonicalAlias: String?,
+    val name: String?,
+    val topic: String?,
+    val avatarUrl: String?,
+    val memberCount: Long,
+    val worldReadable: Boolean?,
+    val joinRule: RoomJoinRule?,
+    val membership: RoomPreviewMembership?
+)
 data class RoomProfile(
     val roomId: String,
     val name: String,
@@ -185,6 +196,14 @@ enum class RoomJoinRule {
     Knock,
     Restricted,
     KnockRestricted
+}
+
+enum class RoomPreviewMembership {
+    Joined,
+    Invited,
+    Knocked,
+    Left,
+    Banned
 }
 
 enum class RoomHistoryVisibility {
@@ -576,7 +595,9 @@ interface MatrixPort {
     suspend fun searchUsers(term: String, limit: Int = 20): List<DirectoryUser>
     suspend fun getUserProfile(userId: String): DirectoryUser?
     suspend fun publicRooms(server: String? = null, search: String? = null, limit: Int = 50, since: String? = null): PublicRoomsPage
-    suspend fun joinByIdOrAlias(idOrAlias: String): Boolean
+    suspend fun roomPreview(idOrAlias: String): Result<RoomPreview>
+    suspend fun joinByIdOrAlias(idOrAlias: String): Result<Unit>
+    suspend fun knock(idOrAlias: String): Boolean
     suspend fun ensureDm(userId: String): String?
     suspend fun resolveRoomId(idOrAlias: String): String?
 

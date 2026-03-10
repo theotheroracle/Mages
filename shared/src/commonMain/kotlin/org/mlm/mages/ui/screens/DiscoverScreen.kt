@@ -17,6 +17,8 @@ import org.mlm.mages.matrix.DirectoryUser
 import org.mlm.mages.matrix.PublicRoom
 import org.mlm.mages.ui.components.core.StatusBanner
 import org.mlm.mages.ui.components.core.BannerType
+import org.mlm.mages.ui.viewmodel.DirectJoinAction
+import org.mlm.mages.ui.viewmodel.DirectJoinPreview
 import org.mlm.mages.ui.viewmodel.DiscoverUi
 import org.mlm.mages.ui.viewmodel.DiscoverViewModel
 import org.jetbrains.compose.resources.stringResource
@@ -46,6 +48,7 @@ fun DiscoverRoute(
         onClose = onClose,
         onOpenUser = { u -> viewModel.openUser(u) },
         onOpenRoom = { r -> viewModel.openRoom(r) },
+        onKnockRoom = { r -> viewModel.knockRoom(r) },
         onJoinByIdOrAlias = { idOrAlias -> viewModel.joinDirect(idOrAlias) },
         onLoadMore = viewModel::loadMoreRooms
     )
@@ -58,6 +61,7 @@ fun DiscoverScreen(
     onClose: () -> Unit,
     onOpenUser: (DirectoryUser) -> Unit,
     onOpenRoom: (PublicRoom) -> Unit,
+    onKnockRoom: (PublicRoom) -> Unit,
     onJoinByIdOrAlias: (String) -> Unit,
     onLoadMore: () -> Unit
 ) {
@@ -117,6 +121,7 @@ fun DiscoverScreen(
                 state.directJoinCandidate?.let { target ->
                     item(key = "direct_join") {
                         DirectJoinCard(
+                            preview = state.directJoinPreview,
                             target = target,
                             onJoin = { onJoinByIdOrAlias(target) },
                             isBusy = state.isBusy
@@ -166,7 +171,8 @@ fun DiscoverScreen(
                     items(state.rooms, key = { it.roomId }) { room ->
                         RoomListItem(
                             room = room,
-                            onJoin = { onOpenRoom(room) }
+                            onJoin = { onOpenRoom(room) },
+                            onKnock = { onKnockRoom(room) }
                         )
                     }
 
@@ -224,10 +230,20 @@ fun DiscoverScreen(
 
 @Composable
 private fun DirectJoinCard(
+    preview: DirectJoinPreview?,
     target: String,
     onJoin: () -> Unit,
     isBusy: Boolean
 ) {
+    val title = preview?.title ?: target
+    val subtitle = preview?.subtitle ?: stringResource(Res.string.join_this_room)
+    val actionLabel = when (preview?.action ?: DirectJoinAction.Join) {
+        DirectJoinAction.Join -> stringResource(Res.string.join)
+        DirectJoinAction.Knock -> stringResource(Res.string.knock)
+        DirectJoinAction.None -> stringResource(Res.string.unavailable)
+    }
+    val canAct = (preview?.action ?: DirectJoinAction.Join) != DirectJoinAction.None
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -237,12 +253,21 @@ private fun DirectJoinCard(
         ListItem(
             headlineContent = {
                 Text(
-                    target,
+                    title,
                     style = MaterialTheme.typography.titleMedium
                 )
             },
             supportingContent = {
-                Text(stringResource(Res.string.join_this_room))
+                Column {
+                    Text(subtitle)
+                    if (preview?.title != null && preview.target != preview.title) {
+                        Text(
+                            preview.target,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             },
             leadingContent = {
                 Icon(
@@ -254,9 +279,9 @@ private fun DirectJoinCard(
             trailingContent = {
                 Button(
                     onClick = onJoin,
-                    enabled = !isBusy
+                    enabled = !isBusy && canAct
                 ) {
-                    Text(stringResource(Res.string.join))
+                    Text(actionLabel)
                 }
             },
             colors = ListItemDefaults.colors(
@@ -296,7 +321,8 @@ private fun UserListItem(
 @Composable
 private fun RoomListItem(
     room: PublicRoom,
-    onJoin: () -> Unit
+    onJoin: () -> Unit,
+    onKnock: (() -> Unit)? = null
 ) {
     Card(
         modifier = Modifier.fillMaxWidth()
@@ -323,21 +349,21 @@ private fun RoomListItem(
                             maxLines = 2
                         )
                     }
-//                    room.numJoinedMembers?.let { members ->
-//                        Text(
-//                            "$members members",
-//                            style = MaterialTheme.typography.labelSmall,
-//                            color = MaterialTheme.colorScheme.onSurfaceVariant
-//                        )
-//                    }
                 }
             },
             leadingContent = {
                 Icon(Icons.Default.Group, contentDescription = null)
             },
             trailingContent = {
-                TextButton(onClick = onJoin) {
-                    Text(stringResource(Res.string.join))
+                Row {
+                    if (onKnock != null) {
+                        TextButton(onClick = onKnock) {
+                            Text(stringResource(Res.string.knock))
+                        }
+                    }
+                    TextButton(onClick = onJoin) {
+                        Text(stringResource(Res.string.join))
+                    }
                 }
             }
         )

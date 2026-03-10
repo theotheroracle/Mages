@@ -106,6 +106,8 @@
     <string name="cancel">Cancel</string>
     <string name="join_this_room">Join this room directly by alias/ID</string>
     <string name="join">Join</string>
+    <string name="knock">Knock</string>
+    <string name="unavailable">Unavailable</string>
     <string name="message">Message</string>
     <string name="no_results_for">No results for "%1$s"</string>
     <string name="try_different_search_term">Try a different search term or directory server</string>

@@ -16,8 +16,8 @@ suspend fun handleMatrixLink(
         }
         is MatrixLink.Room -> {
             val target = link.target.roomIdOrAlias
-            val ok = service.port.joinByIdOrAlias(target)
-            if (!ok) return false
+            val result = service.port.joinByIdOrAlias(target)
+            if (result.isFailure) return false
             // We joined; use roomId if known = target (when it is !id) or alias text otherwise
             openRoom(target, target)
             true

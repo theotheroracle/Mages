@@ -11,6 +11,7 @@ use matrix_sdk::authentication::oauth::registration::{
 use matrix_sdk::reqwest::Url;
 use matrix_sdk::ruma::events::room::power_levels::UserPowerLevel;
 use matrix_sdk::ruma::events::{AnySyncMessageLikeEvent, AnySyncTimelineEvent};
+use matrix_sdk::ruma::room::JoinRuleSummary;
 use matrix_sdk::ruma::room_version_rules::RoomVersionRules;
 use matrix_sdk::ruma::serde::Raw;
 use matrix_sdk::search_index::SearchIndexStoreKind;
@@ -37,7 +38,10 @@ use matrix_sdk::{
 use matrix_sdk_base::notification_settings::RoomNotificationMode as RsMode;
 use matrix_sdk_ui::notification_client::NotificationItem;
 use matrix_sdk_ui::timeline::default_event_filter;
-use matrix_sdk_ui::{eyeball_im::Vector, timeline::{TimelineDetails, TimelineEventItemId}};
+use matrix_sdk_ui::{
+    eyeball_im::Vector,
+    timeline::{TimelineDetails, TimelineEventItemId},
+};
 use mime::Mime;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -767,6 +771,28 @@ pub enum RoomJoinRule {
 }
 
 #[derive(Clone, Enum)]
+pub enum RoomPreviewMembership {
+    Joined,
+    Invited,
+    Knocked,
+    Left,
+    Banned,
+}
+
+#[derive(Clone, Record)]
+pub struct RoomPreview {
+    pub room_id: String,
+    pub canonical_alias: Option<String>,
+    pub name: Option<String>,
+    pub topic: Option<String>,
+    pub avatar_url: Option<String>,
+    pub member_count: u64,
+    pub world_readable: Option<bool>,
+    pub join_rule: Option<RoomJoinRule>,
+    pub membership: Option<RoomPreviewMembership>,
+}
+
+#[derive(Clone, Enum)]
 pub enum RoomHistoryVisibility {
     Invited,
     Joined,
@@ -949,12 +975,12 @@ async fn await_room_send_queue_completion_with_progress(
             Ok(U::SentEvent { transaction_id, .. }) if transaction_id.to_string() == txn_id => {
                 return true;
             }
-            Ok(U::SendError { transaction_id, .. })
-                if transaction_id.to_string() == txn_id =>
-            {
+            Ok(U::SendError { transaction_id, .. }) if transaction_id.to_string() == txn_id => {
                 return false;
             }
-            Ok(U::CancelledLocalEvent { transaction_id }) if transaction_id.to_string() == txn_id => {
+            Ok(U::CancelledLocalEvent { transaction_id })
+                if transaction_id.to_string() == txn_id =>
+            {
                 return false;
             }
             Ok(_) => {}
@@ -1776,7 +1802,12 @@ impl Client {
         self.send_observers.lock().unwrap().remove(&id).is_some()
     }
 
-    pub fn send_message(&self, room_id: String, body: String, formatted_body: Option<String>) -> bool {
+    pub fn send_message(
+        &self,
+        room_id: String,
+        body: String,
+        formatted_body: Option<String>,
+    ) -> bool {
         RT.block_on(async {
             use matrix_sdk::ruma::events::room::message::RoomMessageEventContent as Msg;
 
@@ -2085,7 +2116,13 @@ impl Client {
         })
     }
 
-    pub fn reply(&self, room_id: String, in_reply_to: String, body: String, formatted_body: Option<String>) -> bool {
+    pub fn reply(
+        &self,
+        room_id: String,
+        in_reply_to: String,
+        body: String,
+        formatted_body: Option<String>,
+    ) -> bool {
         with_timeline_async!(self, room_id, |tl: Arc<Timeline>, _rid| async move {
             use matrix_sdk::ruma::events::room::message::RoomMessageEventContentWithoutRelation as MsgNoRel;
 
@@ -2101,7 +2138,13 @@ impl Client {
         })
     }
 
-    pub fn edit(&self, room_id: String, target_event_id: String, new_body: String, formatted_body: Option<String>) -> bool {
+    pub fn edit(
+        &self,
+        room_id: String,
+        target_event_id: String,
+        new_body: String,
+        formatted_body: Option<String>,
+    ) -> bool {
         with_timeline_async!(self, room_id, |tl: Arc<Timeline>, _rid| async move {
             use matrix_sdk::room::edit::EditedContent;
             use matrix_sdk::ruma::events::room::message::RoomMessageEventContentWithoutRelation as MsgNoRel;
@@ -3982,15 +4025,67 @@ impl Client {
         })
     }
 
-    pub fn join_by_id_or_alias(&self, id_or_alias: String) -> bool {
+    pub fn join_by_id_or_alias(&self, id_or_alias: String) -> Result<(), FfiError> {
+        RT.block_on(async {
+            let target = OwnedRoomOrAliasId::try_from(id_or_alias)
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+            self.inner
+                .join_room_by_id_or_alias(&target, &[])
+                .await
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+            Ok(())
+        })
+    }
+
+    pub fn room_preview(&self, id_or_alias: String) -> Result<RoomPreview, FfiError> {
+        RT.block_on(async {
+            let target = OwnedRoomOrAliasId::try_from(id_or_alias)
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+            let preview = self
+                .inner
+                .get_room_preview(&target, vec![])
+                .await
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+
+            let join_rule = preview.join_rule.map(|rule| match rule {
+                JoinRuleSummary::Public => RoomJoinRule::Public,
+                JoinRuleSummary::Invite => RoomJoinRule::Invite,
+                JoinRuleSummary::Knock => RoomJoinRule::Knock,
+                JoinRuleSummary::Restricted(_) => RoomJoinRule::Restricted,
+                JoinRuleSummary::KnockRestricted(_) => RoomJoinRule::KnockRestricted,
+                JoinRuleSummary::Private => RoomJoinRule::Invite,
+                JoinRuleSummary::_Custom(_) | _ => RoomJoinRule::Invite,
+            });
+
+            let membership = preview.state.map(|state| match state {
+                RoomState::Joined => RoomPreviewMembership::Joined,
+                RoomState::Invited => RoomPreviewMembership::Invited,
+                RoomState::Knocked => RoomPreviewMembership::Knocked,
+                RoomState::Left => RoomPreviewMembership::Left,
+                RoomState::Banned => RoomPreviewMembership::Banned,
+            });
+
+            Ok(RoomPreview {
+                room_id: preview.room_id.to_string(),
+                canonical_alias: preview.canonical_alias.map(|a| a.to_string()),
+                name: preview.name,
+                topic: preview.topic,
+                avatar_url: preview.avatar_url.map(|m| m.to_string()),
+                member_count: preview.num_joined_members,
+                world_readable: preview.is_world_readable,
+                join_rule,
+                membership,
+            })
+        })
+    }
+
+    /// Knock on a room to request access (for rooms with knock join rule).
+    pub fn knock(&self, id_or_alias: String) -> bool {
         RT.block_on(async {
             let Ok(target) = OwnedRoomOrAliasId::try_from(id_or_alias) else {
                 return false;
             };
-            self.inner
-                .join_room_by_id_or_alias(&target, &[])
-                .await
-                .is_ok()
+            self.inner.knock(target, None, vec![]).await.is_ok()
         })
     }
 
@@ -5492,7 +5587,11 @@ impl Client {
                     user_id: event.user_id.to_string(),
                     geo_uri: event.last_location.location.uri.to_string(),
                     ts_ms: event.last_location.ts.0.into(),
-                    is_live: event.beacon_info.as_ref().map(|info| info.is_live()).unwrap_or(true),
+                    is_live: event
+                        .beacon_info
+                        .as_ref()
+                        .map(|info| info.is_live())
+                        .unwrap_or(true),
                 };
 
                 latest_shares.insert(info.user_id.clone(), info);

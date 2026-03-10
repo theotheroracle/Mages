@@ -920,9 +920,19 @@ class RustMatrixPort : MatrixPort {
         )
     }
 
-    override suspend fun joinByIdOrAlias(idOrAlias: String): Boolean =
+    override suspend fun joinByIdOrAlias(idOrAlias: String): Result<Unit> =
         withContext(Dispatchers.IO) {
-            runCatching { withClient { it.joinByIdOrAlias(idOrAlias) } }.getOrDefault(false)
+            runCatching { withClient { it.joinByIdOrAlias(idOrAlias) } }
+        }
+
+    override suspend fun roomPreview(idOrAlias: String): Result<RoomPreview> =
+        withContext(Dispatchers.IO) {
+            runCatching { withClient { it.roomPreview(idOrAlias).toModel() } }
+        }
+
+    override suspend fun knock(idOrAlias: String): Boolean =
+        withContext(Dispatchers.IO) {
+            runCatching { withClient { it.knock(idOrAlias) } }.getOrDefault(false)
         }
 
     override suspend fun ensureDm(userId: String): String? =
@@ -1529,6 +1539,18 @@ class RustMatrixPort : MatrixPort {
 
 private fun FfiRoom.toModel() = RoomSummary(id = id, name = name)
 
+private fun mages.RoomPreview.toModel() = RoomPreview(
+    roomId = roomId,
+    canonicalAlias = canonicalAlias,
+    name = name,
+    topic = topic,
+    avatarUrl = avatarUrl,
+    memberCount = memberCount.toLong(),
+    worldReadable = worldReadable,
+    joinRule = joinRule?.toKotlin(),
+    membership = membership?.toKotlin(),
+)
+
 private fun mages.MessageEvent.toModel() = MessageEvent(
     itemId = itemId,
     eventId = eventId,
@@ -1674,6 +1696,14 @@ private fun mages.RoomJoinRule.toKotlin(): RoomJoinRule = when (this) {
     mages.RoomJoinRule.KNOCK -> RoomJoinRule.Knock
     mages.RoomJoinRule.RESTRICTED -> RoomJoinRule.Restricted
     mages.RoomJoinRule.KNOCK_RESTRICTED -> RoomJoinRule.KnockRestricted
+}
+
+private fun mages.RoomPreviewMembership.toKotlin(): RoomPreviewMembership = when (this) {
+    mages.RoomPreviewMembership.JOINED -> RoomPreviewMembership.Joined
+    mages.RoomPreviewMembership.INVITED -> RoomPreviewMembership.Invited
+    mages.RoomPreviewMembership.KNOCKED -> RoomPreviewMembership.Knocked
+    mages.RoomPreviewMembership.LEFT -> RoomPreviewMembership.Left
+    mages.RoomPreviewMembership.BANNED -> RoomPreviewMembership.Banned
 }
 
 private fun RoomHistoryVisibility.toFfi(): mages.RoomHistoryVisibility = when (this) {

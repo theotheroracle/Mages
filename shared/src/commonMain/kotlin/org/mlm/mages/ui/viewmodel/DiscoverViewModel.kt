@@ -6,6 +6,23 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import org.mlm.mages.MatrixService
 import org.mlm.mages.matrix.DirectoryUser
 import org.mlm.mages.matrix.PublicRoom
+import org.mlm.mages.matrix.RoomJoinRule
+import org.mlm.mages.matrix.RoomPreview
+import org.mlm.mages.matrix.RoomPreviewMembership
+
+enum class DirectJoinAction {
+    Join,
+    Knock,
+    None
+}
+
+data class DirectJoinPreview(
+    val target: String,
+    val title: String,
+    val subtitle: String,
+    val action: DirectJoinAction,
+    val actionLabel: String,
+)
 
 data class DiscoverUi(
     val query: String = "",
@@ -13,6 +30,7 @@ data class DiscoverUi(
     val rooms: List<PublicRoom> = emptyList(),
     val nextBatch: String? = null,
     val directJoinCandidate: String? = null,
+    val directJoinPreview: DirectJoinPreview? = null,
 
     val isBusy: Boolean = false,
     val isPaging: Boolean = false,
@@ -52,6 +70,7 @@ class DiscoverViewModel(
                         rooms = emptyList(),
                         nextBatch = null,
                         directJoinCandidate = null,
+                        directJoinPreview = null,
                         error = null,
                         isBusy = false
                     )
@@ -61,12 +80,14 @@ class DiscoverViewModel(
 
             val directJoinTarget = normalizeJoinTarget(term)
             val userLookup = normalizeUserLookup(term)
+            val directJoinPreview = directJoinTarget?.let { loadDirectJoinPreview(it) }
 
             updateState {
                 copy(
                     isBusy = true,
                     error = null,
-                    directJoinCandidate = directJoinTarget
+                    directJoinCandidate = directJoinTarget,
+                    directJoinPreview = null
                 )
             }
 
@@ -93,6 +114,7 @@ class DiscoverViewModel(
                     users = users,
                     rooms = page?.rooms ?: emptyList(),
                     nextBatch = page?.nextBatch,
+                    directJoinPreview = directJoinPreview,
                     isBusy = false
                 )
             }
@@ -166,7 +188,7 @@ class DiscoverViewModel(
     fun openRoom(room: PublicRoom) {
         launch {
             updateState { copy(isBusy = true, error = null) }
-            val rid = joinRoom(room.alias ?: room.roomId)
+            val rid = joinRoom(room.alias ?: room.roomId).getOrNull()
             updateState { copy(isBusy = false) }
 
             if (rid != null) {
@@ -182,25 +204,76 @@ class DiscoverViewModel(
         }
     }
 
-    fun joinDirect(idOrAlias: String) {
+    fun knockRoom(room: PublicRoom) {
         launch {
             updateState { copy(isBusy = true, error = null) }
-            val rid = joinRoom(idOrAlias)
+            val knockSuccess = runSafe { service.port.knock(room.alias ?: room.roomId) } ?: false
             updateState { copy(isBusy = false) }
 
-            if (rid != null) {
-                _events.send(Event.OpenRoom(rid, idOrAlias))
+            if (knockSuccess) {
+                _events.send(Event.ShowError("Knock request sent. Waiting for approval."))
             } else {
-                _events.send(Event.ShowError("Failed to join $idOrAlias"))
+                _events.send(Event.ShowError("Failed to knock on room"))
             }
         }
     }
 
-    private suspend fun joinRoom(idOrAlias: String): String? {
+    fun joinDirect(idOrAlias: String) {
+        launch {
+            updateState { copy(isBusy = true, error = null) }
+            val preview = currentState.directJoinPreview
+            val result = when (preview?.action) {
+                DirectJoinAction.Knock -> knockAndResolve(idOrAlias)
+                DirectJoinAction.None -> Result.failure(IllegalStateException(preview.subtitle))
+                else -> joinRoom(idOrAlias)
+            }
+            updateState { copy(isBusy = false) }
+
+            result.fold(
+                onSuccess = { rid ->
+                    _events.send(Event.OpenRoom(rid, idOrAlias))
+                },
+                onFailure = { error ->
+                    _events.send(Event.ShowError(error.message ?: "Failed to join $idOrAlias"))
+                }
+            )
+        }
+    }
+
+    private suspend fun loadDirectJoinPreview(idOrAlias: String): DirectJoinPreview {
+        val result = service.port.roomPreview(idOrAlias)
+        return result.fold(
+            onSuccess = { preview -> preview.toDirectJoinPreview(idOrAlias) },
+            onFailure = { error ->
+                DirectJoinPreview(
+                    target = idOrAlias,
+                    title = idOrAlias,
+                    subtitle = error.message ?: "Room not found",
+                    action = DirectJoinAction.None,
+                    actionLabel = "Unavailable"
+                )
+            }
+        )
+    }
+
+    private suspend fun knockAndResolve(idOrAlias: String): Result<String> {
+        val knockSuccess = runSafe { service.port.knock(idOrAlias) } ?: false
+        return if (knockSuccess) {
+            Result.failure(IllegalStateException("Knock request sent. Waiting for approval."))
+        } else {
+            Result.failure(IllegalStateException("Failed to knock on room"))
+        }
+    }
+
+    private suspend fun joinRoom(idOrAlias: String): Result<String> {
+        if (!looksLikeRoomIdOrAlias(idOrAlias)) {
+            return Result.failure(IllegalArgumentException("Enter a full room alias like #room:server or room ID like !id:server"))
+        }
+
         if (idOrAlias.startsWith("!")) {
             val rooms = runSafe { service.port.listRooms() } ?: emptyList()
             if (rooms.any { it.id == idOrAlias }) {
-                return idOrAlias
+                return Result.success(idOrAlias)
             }
         }
 
@@ -210,26 +283,78 @@ class DiscoverViewModel(
             if (resolvedId != null && resolvedId.startsWith("!")) {
                 val rooms = runSafe { service.port.listRooms() } ?: emptyList()
                 if (rooms.any { it.id == resolvedId }) {
-                    return resolvedId
+                    return Result.success(resolvedId)
                 }
             }
         }
 
-        val joinSuccess = runSafe { service.port.joinByIdOrAlias(idOrAlias) } ?: false
-        if (!joinSuccess) {
-            return null
+        val joinResult = service.port.joinByIdOrAlias(idOrAlias)
+        if (joinResult.isFailure) {
+            return Result.failure(joinResult.exceptionOrNull() ?: IllegalStateException("Failed to join room"))
         }
 
         // After successful join, resolve the room ID
         return when {
-            idOrAlias.startsWith("!") -> idOrAlias
+            idOrAlias.startsWith("!") -> Result.success(idOrAlias)
             idOrAlias.startsWith("#") -> {
                 // Give the server a moment to process
                 delay(100)
-                runSafe { service.port.resolveRoomId(idOrAlias) }
+                val resolved = runSafe { service.port.resolveRoomId(idOrAlias) }
+                if (resolved != null) Result.success(resolved)
+                else Result.failure(IllegalStateException("Joined room, but could not resolve its room ID yet"))
             }
-            else -> null
+            else -> Result.failure(IllegalStateException("Joined room, but could not determine room ID"))
         }
+    }
+
+    private fun looksLikeRoomIdOrAlias(value: String): Boolean {
+        val trimmed = value.trim()
+        return (trimmed.startsWith("#") || trimmed.startsWith("!")) && trimmed.contains(":")
+    }
+
+    private fun RoomPreview.toDirectJoinPreview(target: String): DirectJoinPreview {
+        val title = name ?: canonicalAlias ?: roomId
+        val subtitle = when (membership) {
+            RoomPreviewMembership.Joined -> "Already joined"
+            RoomPreviewMembership.Invited -> "You are invited to this room"
+            RoomPreviewMembership.Knocked -> "Already requested access"
+            RoomPreviewMembership.Banned -> "You are banned from this room"
+            else -> when (joinRule) {
+                RoomJoinRule.Public -> "Anyone can join"
+                RoomJoinRule.Knock, RoomJoinRule.KnockRestricted -> "Knock required before joining"
+                RoomJoinRule.Restricted -> "Restricted room membership"
+                RoomJoinRule.Invite -> "Invite only"
+                null -> "Join rule unavailable"
+            }
+        }
+
+        val action = when (membership) {
+            RoomPreviewMembership.Joined -> DirectJoinAction.Join
+            RoomPreviewMembership.Knocked,
+            RoomPreviewMembership.Banned,
+            RoomPreviewMembership.Invited -> DirectJoinAction.None
+            else -> when (joinRule) {
+                RoomJoinRule.Public -> DirectJoinAction.Join
+                RoomJoinRule.Knock, RoomJoinRule.KnockRestricted -> DirectJoinAction.Knock
+                RoomJoinRule.Restricted,
+                RoomJoinRule.Invite,
+                null -> DirectJoinAction.None
+            }
+        }
+
+        val actionLabel = when (action) {
+            DirectJoinAction.Join -> "Join"
+            DirectJoinAction.Knock -> "Knock"
+            DirectJoinAction.None -> "Unavailable"
+        }
+
+        return DirectJoinPreview(
+            target = target,
+            title = title,
+            subtitle = subtitle,
+            action = action,
+            actionLabel = actionLabel,
+        )
     }
 
     private fun normalizeJoinTarget(input: String): String? {
