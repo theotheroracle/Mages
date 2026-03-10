@@ -1017,6 +1017,23 @@ class RustMatrixPort : MatrixPort {
                 }
         }
 
+    override suspend fun listKnockRequests(roomId: String): List<KnockRequestSummary> =
+        withContext(Dispatchers.IO) {
+            runCatching { withClient { it.listKnockRequests(roomId) } }
+                .getOrElse { emptyList() }
+                .map {
+                    KnockRequestSummary(
+                        eventId = it.eventId,
+                        userId = it.userId,
+                        displayName = it.displayName,
+                        avatarUrl = it.avatarUrl,
+                        reason = it.reason,
+                        tsMs = it.tsMs?.toLong(),
+                        isSeen = it.isSeen,
+                    )
+                }
+        }
+
     override suspend fun reactions(roomId: String, eventId: String): List<ReactionChip> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -1336,6 +1353,16 @@ class RustMatrixPort : MatrixPort {
     override suspend fun kickUser(roomId: String, userId: String, reason: String?): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching { withClient { it.kickUser(roomId, userId, reason) } }.map { }
+        }
+
+    override suspend fun acceptKnockRequest(roomId: String, userId: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching { withClient { it.acceptKnockRequest(roomId, userId) } }.map { }
+        }
+
+    override suspend fun declineKnockRequest(roomId: String, userId: String, reason: String?): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching { withClient { it.declineKnockRequest(roomId, userId, reason) } }.map { }
         }
 
     override suspend fun inviteUser(roomId: String, userId: String): Result<Unit> =

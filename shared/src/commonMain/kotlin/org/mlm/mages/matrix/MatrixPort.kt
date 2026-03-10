@@ -286,6 +286,16 @@ data class MemberSummary(
     val membership: String
 )
 
+data class KnockRequestSummary(
+    val eventId: String,
+    val userId: String,
+    val displayName: String?,
+    val avatarUrl: String?,
+    val reason: String?,
+    val tsMs: Long?,
+    val isSeen: Boolean,
+)
+
 @Serializable
 data class ReactionChip(val key: String, val count: Int, val mine: Boolean)
 
@@ -615,6 +625,7 @@ interface MatrixPort {
     suspend fun setRoomNotificationMode(roomId: String, mode: RoomNotificationMode): Result<Unit>
 
     suspend fun listMembers(roomId: String): List<MemberSummary>
+    suspend fun listKnockRequests(roomId: String): List<KnockRequestSummary>
 
     suspend fun reactions(roomId: String, eventId: String): List<ReactionChip>
     suspend fun reactionsBatch(
@@ -696,6 +707,8 @@ interface MatrixPort {
     suspend fun banUser(roomId: String, userId: String, reason: String? = null): Result<Unit>
     suspend fun unbanUser(roomId: String, userId: String, reason: String? = null): Result<Unit>
     suspend fun kickUser(roomId: String, userId: String, reason: String? = null): Result<Unit>
+    suspend fun acceptKnockRequest(roomId: String, userId: String): Result<Unit>
+    suspend fun declineKnockRequest(roomId: String, userId: String, reason: String? = null): Result<Unit>
     suspend fun inviteUser(roomId: String, userId: String): Result<Unit>
     suspend fun enableRoomEncryption(roomId: String): Result<Unit>
 

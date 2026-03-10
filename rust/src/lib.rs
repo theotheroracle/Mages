@@ -457,6 +457,17 @@ pub struct MemberSummary {
     pub membership: String,
 }
 
+#[derive(Clone, Debug, Record)]
+pub struct KnockRequestSummary {
+    pub event_id: String,
+    pub user_id: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub reason: Option<String>,
+    pub ts_ms: Option<u64>,
+    pub is_seen: bool,
+}
+
 enum RoomListCmd {
     SetUnreadOnly(bool),
 }
@@ -3543,6 +3554,80 @@ impl Client {
                     membership: m.membership().to_string(),
                 })
                 .collect())
+        })
+    }
+
+    pub fn list_knock_requests(&self, room_id: String) -> Result<Vec<KnockRequestSummary>, FfiError> {
+        RT.block_on(async {
+            use matrix_sdk_base::RoomMemberships;
+
+            let rid =
+                ruma::OwnedRoomId::try_from(room_id).map_err(|e| FfiError::Msg(e.to_string()))?;
+            let room = self
+                .inner
+                .get_room(&rid)
+                .ok_or_else(|| FfiError::Msg("room not found".into()))?;
+
+            let members = room
+                .members(RoomMemberships::KNOCK)
+                .await
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+
+            Ok(members
+                .into_iter()
+                .filter_map(|member| {
+                    let event = member.event();
+                    let event_id = event.event_id()?;
+                    Some(KnockRequestSummary {
+                        event_id: event_id.to_string(),
+                        user_id: member.user_id().to_string(),
+                        display_name: member.display_name().map(|n| n.to_string()),
+                        avatar_url: member.avatar_url().map(|u| u.to_string()),
+                        reason: event.reason().map(|r| r.to_string()),
+                        ts_ms: event.timestamp().map(u64::from),
+                        is_seen: false,
+                    })
+                })
+                .collect())
+        })
+    }
+
+    pub fn accept_knock_request(&self, room_id: String, user_id: String) -> Result<(), FfiError> {
+        RT.block_on(async {
+            let rid =
+                ruma::OwnedRoomId::try_from(room_id).map_err(|e| FfiError::Msg(e.to_string()))?;
+            let uid =
+                ruma::OwnedUserId::try_from(user_id).map_err(|e| FfiError::Msg(e.to_string()))?;
+            let room = self
+                .inner
+                .get_room(&rid)
+                .ok_or_else(|| FfiError::Msg("room not found".into()))?;
+
+            room.invite_user_by_id(&uid)
+                .await
+                .map_err(|e| FfiError::Msg(e.to_string()))
+        })
+    }
+
+    pub fn decline_knock_request(
+        &self,
+        room_id: String,
+        user_id: String,
+        reason: Option<String>,
+    ) -> Result<(), FfiError> {
+        RT.block_on(async {
+            let rid =
+                ruma::OwnedRoomId::try_from(room_id).map_err(|e| FfiError::Msg(e.to_string()))?;
+            let uid =
+                ruma::OwnedUserId::try_from(user_id).map_err(|e| FfiError::Msg(e.to_string()))?;
+            let room = self
+                .inner
+                .get_room(&rid)
+                .ok_or_else(|| FfiError::Msg("room not found".into()))?;
+
+            room.kick_user(&uid, reason.as_deref())
+                .await
+                .map_err(|e| FfiError::Msg(e.to_string()))
         })
     }
 

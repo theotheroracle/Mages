@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import org.mlm.mages.MatrixService
 import org.mlm.mages.matrix.MemberSummary
+import org.mlm.mages.matrix.KnockRequestSummary
 import org.mlm.mages.matrix.RoomDirectoryVisibility
 import org.mlm.mages.matrix.RoomHistoryVisibility
 import org.mlm.mages.matrix.RoomJoinRule
@@ -50,6 +51,8 @@ data class RoomInfoUiState(
     val canInvite: Boolean = false,
     val canRedact: Boolean = false,
     val canKick: Boolean = false,
+    val knockRequests: List<KnockRequestSummary> = emptyList(),
+    val showKnockRequests: Boolean = false,
 
     val myUserId: String? = null,
     val showMembers: Boolean = false,
@@ -135,6 +138,11 @@ class RoomInfoViewModel(
             val canInvite = runSafe { service.port.canUserInvite(roomId, myUserId) } ?: false
             val canRedact = runSafe { service.port.canUserRedactOther(roomId, myUserId) } ?: false
             val canKick = powerLevel >= 50
+            val knockRequests = if (canInvite) {
+                runSafe { service.port.listKnockRequests(roomId) }.orEmpty()
+            } else {
+                emptyList()
+            }
             val canEditName = powerLevel >= 50
             val canEditTopic = powerLevel >= 50
             val canManageSettings = powerLevel >= 100
@@ -163,6 +171,7 @@ class RoomInfoViewModel(
                     canInvite = canInvite,
                     canRedact = canRedact,
                     canKick = canKick,
+                    knockRequests = knockRequests,
                     myUserId = myUserId,
                     notificationMode = notificationMode,
                     isLoadingNotificationMode = false
@@ -176,20 +185,40 @@ class RoomInfoViewModel(
                 }
             }
 
-            sorted.forEach { m ->
-                val avatar = m.avatarUrl ?: return@forEach
+            resolveMemberAvatars(sorted)
+            resolveKnockRequestAvatars(knockRequests)
+        }
+    }
 
-                launch {
-                    val path = service.avatars.resolve(avatar, px = 64, crop = true) ?: return@launch
-                    updateState {
-                        copy(
-                            members = this.members.map { mm ->
-                                if (mm.userId == m.userId) mm.copy(avatarUrl = path) else mm
-                            }
-                        )
+    private fun resolveMemberAvatars(members: List<MemberSummary>) {
+        members.forEach { member ->
+            resolveAvatar(member.avatarUrl, 64) { path ->
+                copy(
+                    members = this.members.map { current ->
+                        if (current.userId == member.userId) current.copy(avatarUrl = path) else current
                     }
-                }
+                )
             }
+        }
+    }
+
+    private fun resolveKnockRequestAvatars(requests: List<KnockRequestSummary>) {
+        requests.forEach { request ->
+            resolveAvatar(request.avatarUrl, 64) { path ->
+                copy(
+                    knockRequests = this.knockRequests.map { current ->
+                        if (current.eventId == request.eventId) current.copy(avatarUrl = path) else current
+                    }
+                )
+            }
+        }
+    }
+
+    private fun resolveAvatar(avatarUrl: String?, px: Int, update: RoomInfoUiState.(String) -> RoomInfoUiState) {
+        val avatar = avatarUrl ?: return
+        launch {
+            val path = service.avatars.resolve(avatar, px = px, crop = true) ?: return@launch
+            updateState { update(path) }
         }
     }
 
@@ -468,6 +497,10 @@ class RoomInfoViewModel(
 
     fun hideMembers() = updateState { copy(showMembers = false, selectedMemberForAction = null) }
 
+    fun showKnockRequests() = updateState { copy(showKnockRequests = true) }
+
+    fun hideKnockRequests() = updateState { copy(showKnockRequests = false) }
+
     fun selectMemberForAction(member: MemberSummary) = updateState { copy(selectedMemberForAction = member) }
 
     fun clearSelectedMember() = updateState { copy(selectedMemberForAction = null) }
@@ -549,6 +582,30 @@ class RoomInfoViewModel(
                 _events.send(Event.ShowSuccess("Invitation sent"))
             } else {
                 _events.send(Event.ShowError(result.toUserMessage("Failed to send invitation")))
+            }
+        }
+    }
+
+    fun acceptKnockRequest(userId: String) {
+        launch {
+            val result = runSafe { service.port.acceptKnockRequest(roomId, userId) }
+            if (result?.isSuccess == true) {
+                refresh()
+                _events.send(Event.ShowSuccess("Knock request accepted"))
+            } else {
+                _events.send(Event.ShowError(result.toUserMessage("Failed to accept knock request")))
+            }
+        }
+    }
+
+    fun declineKnockRequest(userId: String, reason: String? = null) {
+        launch {
+            val result = runSafe { service.port.declineKnockRequest(roomId, userId, reason) }
+            if (result?.isSuccess == true) {
+                refresh()
+                _events.send(Event.ShowSuccess("Knock request declined"))
+            } else {
+                _events.send(Event.ShowError(result.toUserMessage("Failed to decline knock request")))
             }
         }
     }

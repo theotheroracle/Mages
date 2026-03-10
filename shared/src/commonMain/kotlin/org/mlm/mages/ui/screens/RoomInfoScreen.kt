@@ -27,6 +27,7 @@ import org.mlm.mages.matrix.MemberSummary
 import org.mlm.mages.ui.components.dialogs.ConfirmationDialog
 import org.mlm.mages.ui.components.dialogs.InviteUserDialog
 import org.mlm.mages.ui.components.sheets.GranularPermissionsSheet
+import org.mlm.mages.ui.components.sheets.KnockRequestsSheet
 import org.mlm.mages.ui.components.sheets.MemberActionsSheet
 import org.mlm.mages.ui.components.sheets.MemberListSheet
 import org.mlm.mages.ui.components.sheets.PowerLevelsSheet
@@ -93,8 +94,9 @@ fun RoomInfoRoute(
         onSetNotificationMode = viewModel::setNotificationMode,
         onShowMembers = viewModel::showMembers,
         onHideMembers = viewModel::hideMembers,
+        onShowKnockRequests = viewModel::showKnockRequests,
+        onHideKnockRequests = viewModel::hideKnockRequests,
         onSelectMember = viewModel::selectMemberForAction,
-        onClearSelectedMember = viewModel::clearSelectedMember,
         onKickUser = viewModel::kickUser,
         onBanUser = viewModel::banUser,
         onUnbanUser = viewModel::unbanUser,
@@ -102,7 +104,10 @@ fun RoomInfoRoute(
         onStartDm = viewModel::startDmWith,
         onShowInviteDialog = viewModel::showInviteDialog,
         onHideInviteDialog = viewModel::hideInviteDialog,
-        onInviteUser = viewModel::inviteUser
+        onInviteUser = viewModel::inviteUser,
+        onAcceptKnockRequest = viewModel::acceptKnockRequest,
+        onDeclineKnockRequest = viewModel::declineKnockRequest,
+        onClearSelectedMember = viewModel::clearSelectedMember,
     )
 }
 
@@ -133,8 +138,9 @@ fun RoomInfoScreen(
     onSetNotificationMode: (RoomNotificationMode) -> Unit,
     onShowMembers: () -> Unit,
     onHideMembers: () -> Unit,
+    onShowKnockRequests: () -> Unit,
+    onHideKnockRequests: () -> Unit,
     onSelectMember: (MemberSummary) -> Unit,
-    onClearSelectedMember: () -> Unit,
     onKickUser: (String, String?) -> Unit,
     onBanUser: (String, String?) -> Unit,
     onUnbanUser: (String, String?) -> Unit,
@@ -142,7 +148,10 @@ fun RoomInfoScreen(
     onStartDm: (String) -> Unit,
     onShowInviteDialog: () -> Unit,
     onHideInviteDialog: () -> Unit,
-    onInviteUser: (String) -> Unit
+    onInviteUser: (String) -> Unit,
+    onAcceptKnockRequest: (String) -> Unit,
+    onDeclineKnockRequest: (String, String?) -> Unit,
+    onClearSelectedMember: () -> Unit,
 ) {
     var showLeaveDialog by remember { mutableStateOf(false) }
     var showAliasesSheet by remember { mutableStateOf(false) }
@@ -257,6 +266,15 @@ fun RoomInfoScreen(
                             subtitle = "${state.members.size} members",
                             onClick = onShowMembers
                         )
+                        if (state.canInvite) {
+                            HorizontalDivider(Modifier.padding(horizontal = Spacing.md))
+                            SettingsNavRow(
+                                icon = Icons.Default.HowToReg,
+                                title = "Knock requests",
+                                subtitle = if (state.knockRequests.isEmpty()) "No pending requests" else "${state.knockRequests.size} pending",
+                                onClick = onShowKnockRequests
+                            )
+                        }
                         HorizontalDivider(Modifier.padding(horizontal = Spacing.md))
                         SettingsNavRow(
                             icon = Icons.Default.Notifications,
@@ -507,6 +525,15 @@ fun RoomInfoScreen(
                 onDismiss = onHideMembers,
                 onMemberClick = onSelectMember,
                 onInvite = onShowInviteDialog
+            )
+        }
+
+        if (state.showKnockRequests) {
+            KnockRequestsSheet(
+                requests = state.knockRequests,
+                onDismiss = onHideKnockRequests,
+                onAccept = onAcceptKnockRequest,
+                onDecline = onDeclineKnockRequest,
             )
         }
 
