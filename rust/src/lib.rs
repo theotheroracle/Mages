@@ -62,14 +62,12 @@ use std::{
 use std::{mem::ManuallyDrop, sync::atomic::AtomicBool};
 use tokio::runtime::Runtime;
 use tracing::{error, info, warn};
-#[cfg(not(target_family = "wasm"))]
-use tracing_subscriber::{EnvFilter, fmt};
 use uniffi::{Enum, Object, Record, export, setup_scaffolding};
-use uuid::Uuid;
 
 // wasm-bindgen bridge for Kotlin/Wasm
 #[cfg(target_family = "wasm")]
 mod wasm_bridge;
+mod platform;
 
 use matrix_sdk::{
     Client as SdkClient, OwnedServerName, Room, RoomMemberships, SessionTokens,
@@ -953,13 +951,6 @@ fn cache_dir(dir: &PathBuf) -> PathBuf {
     dir.join("media_cache")
 }
 
-fn ensure_dir(d: &PathBuf) {
-    #[cfg(not(target_family = "wasm"))]
-    let _ = std::fs::create_dir_all(d);
-    #[cfg(target_family = "wasm")]
-    let _ = d;
-}
-
 // Runtime - multi-threaded for native, single-threaded for WASM
 #[cfg(not(target_arch = "wasm32"))]
 static RT: Lazy<Runtime> = Lazy::new(|| {
@@ -1072,14 +1063,6 @@ struct LiveLocationBeaconState {
     event_id: String,
     duration_ms: u64,
     description: Option<String>,
-}
-
-fn session_file(dir: &PathBuf) -> PathBuf {
-    dir.join("session.json")
-}
-
-fn room_list_cache_file(dir: &PathBuf) -> PathBuf {
-    dir.join("room_list_cache.json")
 }
 
 #[derive(Debug, Error, Serialize, uniffi::Error)]
@@ -1233,25 +1216,6 @@ macro_rules! with_timeline_async {
 
 const INITIAL_BACK_PAGINATION: u16 = 20;
 
-#[cfg(not(target_family = "wasm"))]
-static TRACING_INIT: Lazy<()> = Lazy::new(|| {
-    let filter = EnvFilter::from_default_env()
-        .add_directive("mages_ffi=debug".parse().unwrap())
-        .add_directive("matrix_sdk=info".parse().unwrap())
-        .add_directive("matrix_sdk_crypto=info".parse().unwrap());
-
-    fmt()
-        .with_env_filter(filter)
-        .with_target(true)
-        .without_time() // avoids weird timestamps on Android
-        .init();
-});
-
-fn init_tracing() {
-    #[cfg(not(target_family = "wasm"))]
-    Lazy::force(&TRACING_INIT);
-}
-
 #[export]
 impl Client {
     #[uniffi::constructor]
@@ -1260,7 +1224,7 @@ impl Client {
         base_store_dir: String,
         account_id: Option<String>,
     ) -> Result<Self, FfiError> {
-        init_tracing();
+        platform::init_tracing();
 
         let normalized = {
             let raw = homeserver_url.trim();
@@ -1300,14 +1264,13 @@ impl Client {
 
                 #[cfg(not(target_arch = "wasm32"))]
                 let client = {
-                    let idx_dir = search_index_dir(&store_dir_path);
-                    let _ = std::fs::create_dir_all(&idx_dir);
-                    let idx_key = load_or_create_search_index_key(&store_dir_path);
+                    let idx = platform::search_index_config(&store_dir_path)
+                        .expect("native builds require search index config");
                     SdkClient::builder()
                         .server_name_or_homeserver_url(normalized)
                         .sqlite_store(&store_dir_path, None)
                         .search_index_store(SearchIndexStoreKind::EncryptedDirectory(
-                            idx_dir, idx_key,
+                            idx.dir, idx.key,
                         ))
                         .with_encryption_settings(EncryptionSettings {
                             auto_enable_cross_signing: true,
@@ -1380,42 +1343,39 @@ impl Client {
         #[cfg(not(target_family = "wasm"))]
         RT.block_on(async {
             // Restore session from session.json if present
-            let path = session_file(&this.store_dir);
-            if let Ok(txt) = tokio::fs::read_to_string(&path).await {
-                if let Ok(info) = serde_json::from_str::<SessionInfo>(&txt) {
-                    if let Ok(user_id) = info.user_id.parse::<OwnedUserId>() {
-                        let session = MatrixSession {
-                            meta: matrix_sdk::SessionMeta {
-                                user_id,
-                                device_id: info.device_id.clone().into(),
-                            },
-                            tokens: SessionTokens {
-                                access_token: info.access_token.clone(),
-                                refresh_token: info.refresh_token.clone(),
-                            },
-                        };
-                        if this.inner.restore_session(session).await.is_ok() {
-                            // Wait for E2EE init to fetch recovery state from server
-                            this.inner
-                                .encryption()
-                                .wait_for_e2ee_initialization_tasks()
-                                .await;
+            if let Some(info) = platform::load_session(&this.store_dir).await {
+                if let Ok(user_id) = info.user_id.parse::<OwnedUserId>() {
+                    let session = MatrixSession {
+                        meta: matrix_sdk::SessionMeta {
+                            user_id,
+                            device_id: info.device_id.clone().into(),
+                        },
+                        tokens: SessionTokens {
+                            access_token: info.access_token.clone(),
+                            refresh_token: info.refresh_token.clone(),
+                        },
+                    };
+                    if this.inner.restore_session(session).await.is_ok() {
+                        // Wait for E2EE init to fetch recovery state from server
+                        this.inner
+                            .encryption()
+                            .wait_for_e2ee_initialization_tasks()
+                            .await;
 
-                            this.ensure_sync_service().await;
+                        this.ensure_sync_service().await;
 
-                            if let Err(e) = this.inner.event_cache().subscribe() {
-                                warn!("event_cache.subscribe() failed after login: {e:?}");
-                            }
-
-                            this.ensure_send_queue_supervision();
-                            this.inner
-                                .send_queue()
-                                .respawn_tasks_for_rooms_with_unsent_requests()
-                                .await;
-                        } else {
-                            let _ = tokio::fs::remove_file(&path).await;
-                            reset_store_dir(&this.store_dir);
+                        if let Err(e) = this.inner.event_cache().subscribe() {
+                            warn!("event_cache.subscribe() failed after login: {e:?}");
                         }
+
+                        this.ensure_send_queue_supervision();
+                        this.inner
+                            .send_queue()
+                            .respawn_tasks_for_rooms_with_unsent_requests()
+                            .await;
+                    } else {
+                        platform::remove_session_file(&this.store_dir);
+                        platform::reset_store_dir(&this.store_dir);
                     }
                 }
             }
@@ -1429,29 +1389,19 @@ impl Client {
                 while let Ok(update) = session_rx.recv().await {
                     if let matrix_sdk::SessionChange::TokensRefreshed = update {
                         if let Some(sess) = inner.matrix_auth().session() {
-                            #[cfg(not(target_family = "wasm"))]
-                            {
-                                let path = session_file(&store);
+                            let recovery_state = platform::load_session(&store)
+                                .await
+                                .and_then(|info| info.recovery_state);
 
-                                let recovery_state = std::fs::read_to_string(&path)
-                                    .ok()
-                                    .and_then(|txt| serde_json::from_str::<SessionInfo>(&txt).ok())
-                                    .and_then(|info| info.recovery_state);
-
-                                let info = SessionInfo {
-                                    user_id: sess.meta.user_id.to_string(),
-                                    device_id: sess.meta.device_id.to_string(),
-                                    access_token: sess.tokens.access_token.clone(),
-                                    refresh_token: sess.tokens.refresh_token.clone(),
-                                    homeserver: inner.homeserver().to_string(),
-                                    recovery_state,
-                                };
-                                let _ =
-                                    tokio::fs::write(path, serde_json::to_string(&info).unwrap())
-                                        .await;
-                            }
-                            #[cfg(target_family = "wasm")]
-                            let _ = (&inner, &store, &sess);
+                            let info = SessionInfo {
+                                user_id: sess.meta.user_id.to_string(),
+                                device_id: sess.meta.device_id.to_string(),
+                                access_token: sess.tokens.access_token.clone(),
+                                refresh_token: sess.tokens.refresh_token.clone(),
+                                homeserver: inner.homeserver().to_string(),
+                                recovery_state,
+                            };
+                            let _ = platform::persist_session(&store, &info).await;
                         }
                     }
                 }
@@ -1514,17 +1464,7 @@ impl Client {
     }
 
     pub fn load_room_list_cache(&self) -> Vec<RoomListEntry> {
-        #[cfg(target_family = "wasm")]
-        return Vec::new();
-
-        #[cfg(not(target_family = "wasm"))]
-        RT.block_on(async {
-            let path = room_list_cache_file(&self.store_dir);
-            match tokio::fs::read_to_string(&path).await {
-                Ok(txt) => serde_json::from_str::<Vec<RoomListEntry>>(&txt).unwrap_or_default(),
-                Err(_) => Vec::new(),
-            }
-        })
+        RT.block_on(async { platform::load_room_list_cache(&self.store_dir).await })
     }
 
     pub fn login(
@@ -1544,24 +1484,16 @@ impl Client {
 
             let res = req.send().await.map_err(|e| FfiError::Msg(e.to_string()))?;
 
-            #[cfg(not(target_family = "wasm"))]
-            {
-                let info = SessionInfo {
-                    user_id: res.user_id.to_string(),
-                    device_id: res.device_id.to_string(),
-                    access_token: res.access_token.clone(),
-                    refresh_token: res.refresh_token.clone(),
-                    homeserver: self.inner.homeserver().to_string(),
-                    recovery_state: None,
-                };
+            let info = SessionInfo {
+                user_id: res.user_id.to_string(),
+                device_id: res.device_id.to_string(),
+                access_token: res.access_token.clone(),
+                refresh_token: res.refresh_token.clone(),
+                homeserver: self.inner.homeserver().to_string(),
+                recovery_state: None,
+            };
 
-                tokio::fs::create_dir_all(&self.store_dir).await?;
-                tokio::fs::write(
-                    session_file(&self.store_dir),
-                    serde_json::to_string(&info).unwrap(),
-                )
-                .await?;
-            }
+            platform::persist_session(&self.store_dir, &info).await?;
 
             // Wait for E2EE init to fetch recovery state from server
             self.inner
@@ -1698,12 +1630,7 @@ impl Client {
                 if let Some(ev) = it.as_event() {
                     if let Some(eid) = missing_reply_event_id(ev) {
                         let tlc = tl.clone();
-                        #[cfg(not(target_family = "wasm"))]
-                        tokio::spawn(async move {
-                            let _ = tlc.fetch_details_for_event(eid.as_ref()).await;
-                        });
-                        #[cfg(target_family = "wasm")]
-                        tokio::task::spawn_local(async move {
+                        spawn_task!(async move {
                             let _ = tlc.fetch_details_for_event(eid.as_ref()).await;
                         });
                     }
@@ -1991,11 +1918,8 @@ impl Client {
     pub fn logout(&self) -> bool {
         self.shutdown();
         let _ = RT.block_on(async { self.inner.logout().await });
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = std::fs::remove_file(session_file(&self.store_dir));
-            reset_store_dir(&self.store_dir);
-        }
+        platform::remove_session_file(&self.store_dir);
+        platform::reset_store_dir(&self.store_dir);
         true
     }
 
@@ -2152,7 +2076,7 @@ impl Client {
         let req = MediaRequestParameters { source, format };
 
         let dir = cache_dir(&self.store_dir);
-        ensure_dir(&dir);
+        platform::ensure_dir(&dir);
         fn sanitize(name: &str) -> String {
             let mut s = String::with_capacity(name.len());
             for ch in name.chars() {
@@ -2757,24 +2681,7 @@ impl Client {
                 let mut progress = enable.subscribe_to_progress();
 
                 let obs_clone = obs.clone();
-                #[cfg(not(target_family = "wasm"))]
-                let progress_task = tokio::spawn(async move {
-                    while let Some(Ok(p)) = progress.next().await {
-                        let step = match p {
-                            matrix_sdk::encryption::recovery::EnableProgress::Starting => "Starting...",
-                            matrix_sdk::encryption::recovery::EnableProgress::CreatingBackup => "Creating backup...",
-                            matrix_sdk::encryption::recovery::EnableProgress::CreatingRecoveryKey => "Generating recovery key...",
-                            matrix_sdk::encryption::recovery::EnableProgress::BackingUp(_) => "Uploading keys...",
-                            matrix_sdk::encryption::recovery::EnableProgress::Done { .. } => "Done",
-                            _ => "In progress...",
-                        };
-                        let _ = catch_unwind(AssertUnwindSafe(|| {
-                            obs_clone.on_progress(step.to_string())
-                        }));
-                    }
-                });
-                #[cfg(target_family = "wasm")]
-                let progress_task = tokio::task::spawn_local(async move {
+                let progress_task = spawn_task!(async move {
                     while let Some(Ok(p)) = progress.next().await {
                         let step = match p {
                             matrix_sdk::encryption::recovery::EnableProgress::Starting => "Starting...",
@@ -4075,11 +3982,7 @@ impl Client {
                                 });
                             }
 
-                            #[cfg(not(target_family = "wasm"))]
-                            let _ = tokio::fs::write(
-                                room_list_cache_file(&store_dir),
-                                serde_json::to_string(&snapshot).unwrap_or_default(),
-                            ).await;
+                            let _ = platform::write_room_list_cache(&store_dir, &snapshot).await;
 
                             let obs_clone = obs.clone();
                             let _ = catch_unwind(AssertUnwindSafe(move || {
@@ -4359,7 +4262,7 @@ impl Client {
         #[cfg(not(target_family = "wasm"))]
         {
             let dir = cache_dir(&self.store_dir);
-            ensure_dir(&dir);
+            platform::ensure_dir(&dir);
 
             fn sanitize(name: &str) -> String {
                 let mut s = String::with_capacity(name.len());
@@ -4638,7 +4541,6 @@ impl Client {
                 .map_err(|e| FfiError::Msg(e.to_string()))?;
 
             if let Some(sess) = self.inner.matrix_auth().session() {
-                tokio::fs::create_dir_all(&self.store_dir).await?;
                 let info = SessionInfo {
                     user_id: sess.meta.user_id.to_string(),
                     device_id: sess.meta.device_id.to_string(),
@@ -4647,11 +4549,7 @@ impl Client {
                     homeserver: self.inner.homeserver().to_string(),
                     recovery_state: None,
                 };
-                tokio::fs::write(
-                    session_file(&self.store_dir),
-                    serde_json::to_string(&info).unwrap(),
-                )
-                .await?;
+                platform::persist_session(&self.store_dir, &info).await?;
             }
 
             self.ensure_sync_service().await;
@@ -4709,7 +4607,6 @@ impl Client {
             }
 
             if let Some(sess) = oauth.user_session() {
-                tokio::fs::create_dir_all(&self.store_dir).await?;
                 let info = SessionInfo {
                     user_id: sess.meta.user_id.to_string(),
                     device_id: sess.meta.device_id.to_string(),
@@ -4718,11 +4615,7 @@ impl Client {
                     homeserver: self.inner.homeserver().to_string(),
                     recovery_state: None,
                 };
-                tokio::fs::write(
-                    session_file(&self.store_dir),
-                    serde_json::to_string(&info).unwrap(),
-                )
-                .await?;
+                platform::persist_session(&self.store_dir, &info).await?;
             }
 
             self.ensure_sync_service().await;
@@ -4909,44 +4802,7 @@ impl Client {
                 let mgr2 = mgr.clone();
                 let client2 = client.clone();
 
-                #[cfg(not(target_family = "wasm"))]
-                joins.push(tokio::spawn(async move {
-                    let _permit = sem.acquire().await.ok()?;
-
-                    let rid = OwnedRoomId::try_from(rid_str).ok()?;
-                    let tl = mgr2.timeline_for(&rid).await?;
-
-                    let eid_parsed = ruma::OwnedEventId::try_from(eid.clone()).ok()?;
-
-                    // Best-effort: ensure details are fetched
-                    let _ = tl.fetch_details_for_event(eid_parsed.as_ref()).await;
-
-                    let item = tl.item_by_event_id(&eid_parsed).await?;
-                    let my_user_id = client2.user_id();
-
-                    let mut summaries = Vec::new();
-                    if let Some(reactions) = item.content().reactions() {
-                        for (key, senders) in reactions.iter() {
-                            let count = senders.len() as u32;
-                            let me = my_user_id
-                                .map(|me| senders.keys().any(|sender| sender == me))
-                                .unwrap_or(false);
-                            summaries.push(ReactionSummary {
-                                key: key.clone(),
-                                count,
-                                me,
-                            });
-                        }
-                    }
-
-                    if summaries.is_empty() {
-                        None
-                    } else {
-                        Some((eid, summaries))
-                    }
-                }));
-                #[cfg(target_family = "wasm")]
-                joins.push(tokio::task::spawn_local(async move {
+                joins.push(spawn_task!(async move {
                     let _permit = sem.acquire().await.ok()?;
 
                     let rid = OwnedRoomId::try_from(rid_str).ok()?;
@@ -5030,7 +4886,6 @@ impl Client {
         let client_updates = self.inner_clone();
         let tx_updates = self.send_tx.clone();
 
-        #[cfg(not(target_family = "wasm"))]
         let h_updates = spawn_task!(async move {
             let mut rx = client_updates.send_queue().subscribe();
 
@@ -5134,140 +4989,13 @@ impl Client {
                 }
             }
         });
-        #[cfg(target_family = "wasm")]
-        let h_updates = tokio::task::spawn_local(async move {
-            let mut rx = client_updates.send_queue().subscribe();
-
-            let mut attempts: HashMap<String, u32> = HashMap::new();
-
-            loop {
-                let upd = match rx.recv().await {
-                    Ok(u) => u,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                };
-
-                let room_id_str = upd.room_id.to_string();
-
-                use matrix_sdk::send_queue::RoomSendQueueUpdate as U;
-                match upd.update {
-                    U::NewLocalEvent(local) => {
-                        let key = format!("{room_id_str}|{}", local.transaction_id);
-                        attempts.entry(key).or_insert(0);
-
-                        let _ = tx_updates.send(SendUpdate {
-                            room_id: room_id_str,
-                            txn_id: local.transaction_id.to_string(),
-                            attempts: 0,
-                            state: SendState::Enqueued,
-                            event_id: None,
-                            error: None,
-                        });
-                    }
-
-                    U::RetryEvent { transaction_id } => {
-                        let key = format!("{room_id_str}|{transaction_id}");
-                        let n = attempts.entry(key).and_modify(|v| *v += 1).or_insert(1);
-
-                        let _ = tx_updates.send(SendUpdate {
-                            room_id: room_id_str,
-                            txn_id: transaction_id.to_string(),
-                            attempts: *n,
-                            state: SendState::Retrying,
-                            event_id: None,
-                            error: None,
-                        });
-                    }
-
-                    U::SentEvent {
-                        transaction_id,
-                        event_id,
-                    } => {
-                        let key = format!("{room_id_str}|{transaction_id}");
-                        let n = attempts.remove(&key).unwrap_or(0); // Prune on success
-
-                        let _ = tx_updates.send(SendUpdate {
-                            room_id: room_id_str,
-                            txn_id: transaction_id.to_string(),
-                            attempts: n,
-                            state: SendState::Sent,
-                            event_id: Some(event_id.to_string()),
-                            error: None,
-                        });
-                    }
-
-                    U::SendError {
-                        transaction_id,
-                        error,
-                        is_recoverable,
-                    } => {
-                        let key = format!("{room_id_str}|{transaction_id}");
-                        let n = attempts.entry(key).and_modify(|v| *v += 1).or_insert(1);
-
-                        let msg = format!("{:?} (recoverable={})", error, is_recoverable);
-
-                        let _ = tx_updates.send(SendUpdate {
-                            room_id: room_id_str,
-                            txn_id: transaction_id.to_string(),
-                            attempts: *n,
-                            state: SendState::Failed,
-                            event_id: None,
-                            error: Some(msg),
-                        });
-                    }
-
-                    U::CancelledLocalEvent { transaction_id } => {
-                        let key = format!("{room_id_str}|{transaction_id}");
-                        attempts.remove(&key); // Prune on cancel
-
-                        let _ = tx_updates.send(SendUpdate {
-                            room_id: room_id_str,
-                            txn_id: transaction_id.to_string(),
-                            attempts: 0,
-                            state: SendState::Failed,
-                            event_id: None,
-                            error: Some("Cancelled before sending".into()),
-                        });
-                    }
-
-                    U::ReplacedLocalEvent { .. } => {}
-
-                    U::MediaUpload { .. } => {}
-                }
-            }
-        });
 
         self.guards.lock().unwrap().push(h_updates);
 
         let client_errs = self.inner_clone();
         let tx_errs = self.send_tx.clone();
 
-        #[cfg(not(target_family = "wasm"))]
         let h_errs = spawn_task!(async move {
-            let mut rx = client_errs.send_queue().subscribe_errors();
-
-            loop {
-                let err = match rx.recv().await {
-                    Ok(e) => e,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                };
-
-                let _ = tx_errs.send(SendUpdate {
-                    room_id: err.room_id.to_string(),
-                    txn_id: "".into(),
-                    attempts: 0,
-                    state: SendState::Failed,
-                    event_id: None,
-                    error: Some(format!(
-                        "Room send queue disabled (recoverable={}): {:?}",
-                        err.is_recoverable, err.error
-                    )),
-                });
-            }
-        });
-        #[cfg(target_family = "wasm")]
-        let h_errs = tokio::task::spawn_local(async move {
             let mut rx = client_errs.send_queue().subscribe_errors();
 
             loop {
@@ -6975,7 +6703,7 @@ impl Client {
             use matrix_sdk::ruma::events::room::MediaSource;
 
             let dir = cache_dir(&self.store_dir);
-            ensure_dir(&dir);
+            platform::ensure_dir(&dir);
 
             let method = if crop { Method::Crop } else { Method::Scale };
             let settings = MediaThumbnailSettings::with_method(
@@ -7455,15 +7183,7 @@ impl Client {
     }
 
     async fn persist_oauth_session(client: &Client) -> Result<(), FfiError> {
-        #[cfg(target_family = "wasm")]
-        {
-            let _ = client;
-            return Ok(());
-        }
-
-        #[cfg(not(target_family = "wasm"))]
         if let Some(sess) = client.inner.oauth().user_session() {
-            tokio::fs::create_dir_all(&client.store_dir).await?;
             let info = SessionInfo {
                 user_id: sess.meta.user_id.to_string(),
                 device_id: sess.meta.device_id.to_string(),
@@ -7472,11 +7192,7 @@ impl Client {
                 homeserver: client.inner.homeserver().to_string(),
                 recovery_state: None,
             };
-            tokio::fs::write(
-                session_file(&client.store_dir),
-                serde_json::to_string(&info).unwrap(),
-            )
-            .await?;
+            platform::persist_session(&client.store_dir, &info).await?;
         }
         Ok(())
     }
@@ -7485,29 +7201,15 @@ impl Client {
         client: &Client,
         response: &matrix_sdk::ruma::api::client::session::login::v3::Response,
     ) -> Result<(), FfiError> {
-        #[cfg(target_family = "wasm")]
-        {
-            let _ = (client, response);
-            return Ok(());
-        }
-
-        #[cfg(not(target_family = "wasm"))]
-        {
-            tokio::fs::create_dir_all(&client.store_dir).await?;
-            let info = SessionInfo {
-                user_id: response.user_id.to_string(),
-                device_id: response.device_id.clone().to_string(),
-                access_token: response.access_token.clone(),
-                refresh_token: response.refresh_token.clone(),
-                homeserver: client.inner.homeserver().to_string(),
-                recovery_state: None,
-            };
-            tokio::fs::write(
-                session_file(&client.store_dir),
-                serde_json::to_string(&info).unwrap(),
-            )
-            .await?;
-        }
+        let info = SessionInfo {
+            user_id: response.user_id.to_string(),
+            device_id: response.device_id.clone().to_string(),
+            access_token: response.access_token.clone(),
+            refresh_token: response.refresh_token.clone(),
+            homeserver: client.inner.homeserver().to_string(),
+            recovery_state: None,
+        };
+        platform::persist_session(&client.store_dir, &info).await?;
         Ok(())
     }
 }
@@ -7547,12 +7249,7 @@ impl TimelineManager {
             };
             if should_fetch {
                 let tlc = tl.clone();
-                #[cfg(not(target_family = "wasm"))]
-                tokio::spawn(async move {
-                    let _ = tlc.fetch_members().await;
-                });
-                #[cfg(target_family = "wasm")]
-                tokio::task::spawn_local(async move {
+                spawn_task!(async move {
                     let _ = tlc.fetch_members().await;
                 });
             }
@@ -7576,12 +7273,7 @@ impl TimelineManager {
             if !s.contains(room_id) {
                 s.insert(room_id.clone());
                 let tlc = tl.clone();
-                #[cfg(not(target_family = "wasm"))]
-                tokio::spawn(async move {
-                    let _ = tlc.fetch_members().await;
-                });
-                #[cfg(target_family = "wasm")]
-                tokio::task::spawn_local(async move {
+                spawn_task!(async move {
                     let _ = tlc.fetch_members().await;
                 });
             }
@@ -8031,16 +7723,6 @@ fn render_msg_like(_ev: &EventTimelineItem, ml: &MsgLikeContent) -> String {
         UnableToDecrypt(_e) => "Unable to decrypt this message".to_string(),
         Other(_) => "Custom message".to_string(),
     }
-}
-
-fn reset_store_dir(dir: &PathBuf) {
-    #[cfg(not(target_family = "wasm"))]
-    {
-        let _ = std::fs::remove_dir_all(dir);
-        let _ = std::fs::create_dir_all(dir);
-    }
-    #[cfg(target_family = "wasm")]
-    let _ = dir;
 }
 
 async fn attach_sas_stream(
@@ -8570,42 +8252,10 @@ fn map_poll_state(state: &matrix_sdk_ui::timeline::PollState, me: &str) -> PollD
 fn fetch_reply_if_needed(ei: &EventTimelineItem, tl: &Arc<Timeline>) {
     if let Some(eid) = missing_reply_event_id(ei) {
         let tlc = tl.clone();
-        #[cfg(not(target_family = "wasm"))]
-        tokio::spawn(async move {
-            let _ = tlc.fetch_details_for_event(eid.as_ref()).await;
-        });
-        #[cfg(target_family = "wasm")]
-        tokio::task::spawn_local(async move {
+        spawn_task!(async move {
             let _ = tlc.fetch_details_for_event(eid.as_ref()).await;
         });
     }
-}
-
-#[cfg(not(target_family = "wasm"))]
-fn search_index_dir(store_dir: &PathBuf) -> PathBuf {
-    store_dir.join("search_index")
-}
-
-#[cfg(not(target_family = "wasm"))]
-fn search_index_key_file(store_dir: &PathBuf) -> PathBuf {
-    store_dir.join("search_index_key.txt")
-}
-
-#[cfg(not(target_family = "wasm"))]
-fn load_or_create_search_index_key(store_dir: &PathBuf) -> String {
-    let path = search_index_key_file(store_dir);
-
-    if let Ok(s) = std::fs::read_to_string(&path) {
-        let key = s.trim().to_string();
-        if !key.is_empty() {
-            return key;
-        }
-    }
-
-    let key = format!("{}{}", Uuid::new_v4(), Uuid::new_v4());
-
-    let _ = std::fs::write(&path, &key);
-    key
 }
 
 fn should_filter_notification_event(ev: &AnySyncTimelineEvent) -> bool {
