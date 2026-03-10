@@ -7,6 +7,16 @@ import org.mlm.mages.matrix.SpaceChildInfo
 import org.mlm.mages.matrix.SpaceInfo
 import org.mlm.mages.ui.SpaceDetailUiState
 
+private fun List<SpaceChildInfo>.withoutSpace(spaceId: String): List<SpaceChildInfo> =
+    filter { it.roomId != spaceId }
+
+private fun mergeSpaceChildren(
+    existing: List<SpaceChildInfo>,
+    incoming: List<SpaceChildInfo>,
+    append: Boolean,
+): List<SpaceChildInfo> =
+    if (!append) incoming else (existing + incoming).distinctBy { it.roomId }
+
 class SpaceDetailViewModel(
     private val service: MatrixService,
     spaceId: String,
@@ -63,8 +73,7 @@ class SpaceDetailViewModel(
             
             if (space != null) {
                 updateState { copy(space = space) }
-                val path = runSafe { service.avatars.resolve(space.avatarUrl, px = 96, crop = true) }
-                if (path != null) updateState { copy(spaceAvatarPath = path) }
+                resolveAvatar(service, space.avatarUrl, 96) { path -> copy(spaceAvatarPath = path) }
             } else {
                 updateState { 
                     copy(
@@ -110,50 +119,27 @@ class SpaceDetailViewModel(
             )
 
             if (page != null) {
-                val children = page.children.filter { it.roomId != currentState.spaceId }
-                
-                val newHierarchy = if (from == null) {
-                    children
-                } else {
-                    (currentState.hierarchy + children).distinctBy { it.roomId }
-                }
+                val children = page.children.withoutSpace(currentState.spaceId)
+                val newHierarchy = mergeSpaceChildren(currentState.hierarchy, children, append = from != null)
 
-                // Fetch room profiles for names (Matrix space hierarchy returns summaries without names)
-                newHierarchy.filter { !it.isSpace && it.name.isNullOrBlank() }.forEach { child ->
-                    launch {
-                        val profile = runSafe { service.port.roomProfile(child.roomId) }
-                        if (profile != null && profile.name.isNotBlank()) {
-                            updateState {
-                                val updatedHierarchy = hierarchy.map { existing ->
-                                    if (existing.roomId == child.roomId && existing.name.isNullOrBlank()) {
-                                        existing.copy(name = profile.name)
-                                    } else {
-                                        existing
-                                    }
-                                }
-                                val (subspaces, rooms) = updatedHierarchy.partition { it.isSpace }
-                                copy(
-                                    hierarchy = updatedHierarchy,
-                                    subspaces = subspaces,
-                                    rooms = rooms
-                                )
-                            }
+                hydrateMissingSpaceChildNames(service, newHierarchy) { roomId, name ->
+                    val updatedHierarchy = hierarchy.map { existing ->
+                        if (existing.roomId == roomId && existing.name.isNullOrBlank()) {
+                            existing.copy(name = name)
+                        } else {
+                            existing
                         }
                     }
+                    val (subspaces, rooms) = updatedHierarchy.partition { it.isSpace }
+                    copy(
+                        hierarchy = updatedHierarchy,
+                        subspaces = subspaces,
+                        rooms = rooms
+                    )
                 }
 
-                // Prefetch avatars
-                newHierarchy.forEach { child ->
-                    child.avatarUrl?.let { url ->
-                        launch {
-                            val path = service.avatars.resolve(url, px = 64, crop = true)
-                            if (path != null) {
-                                updateState { 
-                                    copy(avatarPathByRoomId = avatarPathByRoomId + (child.roomId to path))
-                                }
-                            }
-                        }
-                    }
+                resolveSpaceChildAvatars(service, newHierarchy) { roomId, path ->
+                    copy(avatarPathByRoomId = avatarPathByRoomId + (roomId to path))
                 }
 
                 val (subspaces, rooms) = newHierarchy.partition { it.isSpace }

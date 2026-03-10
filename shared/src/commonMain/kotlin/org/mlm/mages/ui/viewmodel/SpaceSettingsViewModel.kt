@@ -3,7 +3,11 @@ package org.mlm.mages.ui.viewmodel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
 import org.mlm.mages.MatrixService
+import org.mlm.mages.matrix.SpaceChildInfo
 import org.mlm.mages.ui.SpaceSettingsUiState
+
+private fun List<SpaceChildInfo>.withoutSpace(spaceId: String): List<SpaceChildInfo> =
+    filter { it.roomId != spaceId }
 
 class SpaceSettingsViewModel(
     private val service: MatrixService,
@@ -173,8 +177,7 @@ class SpaceSettingsViewModel(
             val spaces = runSafe { service.mySpaces() } ?: emptyList()
             val space = spaces.find { it.roomId == currentState.spaceId }
             updateState { copy(space = space) }
-            val path = runSafe { service.avatars.resolve(space?.avatarUrl, px = 96, crop = true) }
-            if (path != null) updateState { copy(spaceAvatarPath = path) }
+            resolveAvatar(service, space?.avatarUrl, 96) { path -> copy(spaceAvatarPath = path) }
         }
     }
 
@@ -195,40 +198,21 @@ class SpaceSettingsViewModel(
             )
 
             if (page != null) {
-                // Filter out the space itself
-                val children = page.children.filter { it.roomId != currentState.spaceId }
+                val children = page.children.withoutSpace(currentState.spaceId)
 
-                // Fetch room profiles for names
-                children.filter { !it.isSpace && it.name.isNullOrBlank() }.forEach { child ->
-                    launch {
-                        val profile = runSafe { service.port.roomProfile(child.roomId) }
-                        if (profile != null && profile.name.isNotBlank()) {
-                            updateState {
-                                val updatedChildren = children.map { existing ->
-                                    if (existing.roomId == child.roomId && existing.name.isNullOrBlank()) {
-                                        existing.copy(name = profile.name)
-                                    } else {
-                                        existing
-                                    }
-                                }
-                                copy(children = updatedChildren)
-                            }
+                hydrateMissingSpaceChildNames(service, children) { roomId, name ->
+                    val updatedChildren = this.children.map { existing ->
+                        if (existing.roomId == roomId && existing.name.isNullOrBlank()) {
+                            existing.copy(name = name)
+                        } else {
+                            existing
                         }
                     }
+                    copy(children = updatedChildren)
                 }
 
-                // Prefetch avatars
-                children.forEach { child ->
-                    child.avatarUrl?.let { url ->
-                        launch {
-                            val path = service.avatars.resolve(url, px = 64, crop = true)
-                            if (path != null) {
-                                updateState {
-                                    copy(avatarPathByRoomId = avatarPathByRoomId + (child.roomId to path))
-                                }
-                            }
-                        }
-                    }
+                resolveSpaceChildAvatars(service, children) { roomId, path ->
+                    copy(avatarPathByRoomId = avatarPathByRoomId + (roomId to path))
                 }
 
                 updateState { copy(children = children, isLoading = false) }

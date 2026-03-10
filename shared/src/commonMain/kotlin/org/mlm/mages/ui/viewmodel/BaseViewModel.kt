@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.mlm.mages.MatrixService
+import org.mlm.mages.matrix.SpaceChildInfo
 import org.koin.core.component.KoinComponent
 
 /**
@@ -59,5 +61,44 @@ abstract class BaseViewModel<S>(initialState: S) : ViewModel(), KoinComponent {
 
     protected fun Result<Unit>?.toUserMessage(userMessage: String): String {
         return this?.exceptionOrNull()?.message ?: userMessage
+    }
+
+    protected fun resolveAvatar(
+        service: MatrixService,
+        avatarUrl: String?,
+        px: Int,
+        update: S.(String) -> S,
+    ) {
+        val avatar = avatarUrl ?: return
+        launch {
+            val path = service.avatars.resolve(avatar, px = px, crop = true) ?: return@launch
+            updateState { update(path) }
+        }
+    }
+
+    protected fun hydrateMissingSpaceChildNames(
+        service: MatrixService,
+        children: List<SpaceChildInfo>,
+        update: S.(roomId: String, name: String) -> S,
+    ) {
+        children.filter { !it.isSpace && it.name.isNullOrBlank() }.forEach { child ->
+            launch {
+                val profile = runSafe { service.port.roomProfile(child.roomId) }
+                val name = profile?.name?.takeIf { it.isNotBlank() } ?: return@launch
+                updateState { update(child.roomId, name) }
+            }
+        }
+    }
+
+    protected fun resolveSpaceChildAvatars(
+        service: MatrixService,
+        children: List<SpaceChildInfo>,
+        update: S.(roomId: String, avatarPath: String) -> S,
+    ) {
+        children.forEach { child ->
+            resolveAvatar(service, child.avatarUrl, 64) { path ->
+                update(child.roomId, path)
+            }
+        }
     }
 }

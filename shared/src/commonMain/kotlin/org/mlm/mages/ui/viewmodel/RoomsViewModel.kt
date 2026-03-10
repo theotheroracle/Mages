@@ -334,13 +334,8 @@ class RoomsViewModel(
         if (avatarMxc.isNullOrBlank()) return
         if (currentState.roomAvatarPath.containsKey(roomId)) return
 
-        launch {
-            try {
-                val path = service.avatars.resolve(avatarMxc, px = 96, crop = true) ?: return@launch
-                updateState { copy(roomAvatarPath = roomAvatarPath + (roomId to path)) }
-            } catch (_: Exception) {
-                // Ignore
-            }
+        resolveAvatar(service, avatarMxc, 96) { path ->
+            copy(roomAvatarPath = roomAvatarPath + (roomId to path))
         }
     }
 

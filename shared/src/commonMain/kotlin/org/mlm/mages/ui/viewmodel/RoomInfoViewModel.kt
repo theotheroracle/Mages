@@ -192,7 +192,7 @@ class RoomInfoViewModel(
 
     private fun resolveMemberAvatars(members: List<MemberSummary>) {
         members.forEach { member ->
-            resolveAvatar(member.avatarUrl, 64) { path ->
+            resolveAvatar(service, member.avatarUrl, 64) { path ->
                 copy(
                     members = this.members.map { current ->
                         if (current.userId == member.userId) current.copy(avatarUrl = path) else current
@@ -204,21 +204,13 @@ class RoomInfoViewModel(
 
     private fun resolveKnockRequestAvatars(requests: List<KnockRequestSummary>) {
         requests.forEach { request ->
-            resolveAvatar(request.avatarUrl, 64) { path ->
+            resolveAvatar(service, request.avatarUrl, 64) { path ->
                 copy(
                     knockRequests = this.knockRequests.map { current ->
                         if (current.eventId == request.eventId) current.copy(avatarUrl = path) else current
                     }
                 )
             }
-        }
-    }
-
-    private fun resolveAvatar(avatarUrl: String?, px: Int, update: RoomInfoUiState.(String) -> RoomInfoUiState) {
-        val avatar = avatarUrl ?: return
-        launch {
-            val path = service.avatars.resolve(avatar, px = px, crop = true) ?: return@launch
-            updateState { update(path) }
         }
     }
 
