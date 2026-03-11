@@ -74,8 +74,13 @@ class WebStubMatrixPort : MatrixPort {
     private inline fun <reified T> decodeValue(value: JsAny?): T =
         wasmJson.decodeFromJsonElement(value.toJsonElement())
 
-    private inline fun <reified T> decodeValueOrNull(value: JsAny?): T? =
-        runCatching { decodeValue<T>(value) }.getOrNull()
+    private inline fun <reified T> decodeValueOrNull(value: JsAny?, label: String = "decode"): T? =
+        runCatching {
+            println("$label raw = ${value.toJsonString()}")
+            decodeValue<T>(value)
+        }.onFailure {
+            println("$label failed: ${it.message}")
+        }.getOrNull()
 
     private inline fun <reified T : Enum<T>> decodeEnum(name: String?): T? =
         name?.let { runCatching { enumValueOf<T>(it) }.getOrNull() }
@@ -134,18 +139,32 @@ class WebStubMatrixPort : MatrixPort {
             wasmJson.decodeFromJsonElement<List<RoomSummary>>(arr)
         }
 
-    override suspend fun recent(roomId: String, limit: Int): List<MessageEvent> =
-        wasmJson.decodeFromJsonElement(requireFacade().getRoomTimeline(roomId, limit).await<WebTimelineItemsValue?>().toJsonArray())
+    override suspend fun recent(roomId: String, limit: Int): List<MessageEvent> {
+        val raw = requireFacade().getRoomTimeline(roomId, limit).await<WebTimelineItemsValue?>()
+        return runCatching {
+            println("recent raw = ${raw.toJsonString()}")
+            wasmJson.decodeFromJsonElement<List<MessageEvent>>(raw.toJsonArray())
+        }.onFailure {
+            println("recent failed: ${it.message}")
+        }.getOrElse { emptyList() }
+    }
 
     override fun timelineDiffs(roomId: String): Flow<TimelineDiff<MessageEvent>> = callbackFlow {
         val subscription = requireFacade().observeTimeline(
             roomId = roomId,
             onDiff = { diffValue ->
-                val diff = decodeTimelineDiff(diffValue) ?: return@observeTimeline
-                trySend(diff)
+                runCatching {
+                    println("timeline diff raw = ${diffValue.toJsonString()}")
+                    decodeTimelineDiff(diffValue)
+                }.onFailure {
+                    println("timeline diff decode failed: ${it.message}")
+                }.getOrNull()?.let { diff ->
+                    trySend(diff)
+                }
             },
             onError = { error ->
                 val message = error ?: "Timeline error"
+                println("timeline observer error = $message")
                 close(IllegalStateException(message))
             }
         )
@@ -422,7 +441,7 @@ class WebStubMatrixPort : MatrixPort {
     override suspend fun unregisterUnifiedPush(appId: String, pushKey: String): Boolean = false
 
     override suspend fun roomUnreadStats(roomId: String): UnreadStats? =
-        decodeValueOrNull(requireFacade().roomUnreadStats(roomId))
+        decodeValueOrNull(requireFacade().roomUnreadStats(roomId), "roomUnreadStats")
 
     override suspend fun ownLastRead(roomId: String): Pair<String?, Long?> =
         decodeOwnLastRead(requireFacade().ownLastRead(roomId))
@@ -463,7 +482,7 @@ class WebStubMatrixPort : MatrixPort {
     }
 
     override suspend fun fetchNotification(roomId: String, eventId: String): RenderedNotification? =
-        decodeValueOrNull(requireFacade().fetchNotification(roomId, eventId))
+        decodeValueOrNull(requireFacade().fetchNotification(roomId, eventId), "fetchNotification")
 
     override suspend fun fetchNotificationsSince(
         sinceMs: Long,
@@ -484,10 +503,10 @@ class WebStubMatrixPort : MatrixPort {
         )
 
     override suspend fun searchUsers(term: String, limit: Int): List<DirectoryUser> =
-        decodeValueOrNull(requireFacade().searchUsers(term, limit)) ?: emptyList()
+        decodeValueOrNull(requireFacade().searchUsers(term, limit), "searchUsers") ?: emptyList()
 
     override suspend fun getUserProfile(userId: String): DirectoryUser? =
-        decodeValueOrNull(requireFacade().getUserProfile(userId))
+        decodeValueOrNull(requireFacade().getUserProfile(userId), "getUserProfile")
 
     override suspend fun publicRooms(
         server: String?,
@@ -507,7 +526,7 @@ class WebStubMatrixPort : MatrixPort {
     override suspend fun resolveRoomId(idOrAlias: String): String? = requireFacade().resolveRoomId(idOrAlias)
 
     override suspend fun listInvited(): List<RoomProfile> =
-        decodeValueOrNull(requireFacade().listInvited()) ?: emptyList()
+        decodeValueOrNull(requireFacade().listInvited(), "listInvited") ?: emptyList()
 
     override suspend fun acceptInvite(roomId: String): Boolean = requireFacade().acceptInvite(roomId)
 
@@ -525,7 +544,7 @@ class WebStubMatrixPort : MatrixPort {
         topic,
         wasmJson.encodeToString(invitees).toJsReference(),
         isPublic,
-        roomAlias,
+        roomAlias
     )
 
     override suspend fun setRoomName(roomId: String, name: String): Result<Unit> =
@@ -535,7 +554,7 @@ class WebStubMatrixPort : MatrixPort {
         unitResult(requireFacade().setRoomTopic(roomId, topic), "set room topic")
 
     override suspend fun roomProfile(roomId: String): RoomProfile? =
-        decodeValueOrNull(requireFacade().roomProfile(roomId))
+        decodeValueOrNull(requireFacade().roomProfile(roomId), "roomProfile")
 
     override suspend fun roomNotificationMode(roomId: String): RoomNotificationMode? =
         decodeEnum(requireFacade().roomNotificationMode(roomId))
@@ -689,7 +708,7 @@ class WebStubMatrixPort : MatrixPort {
     )
 
     override suspend fun roomPowerLevels(roomId: String): RoomPowerLevels? =
-        decodeValueOrNull(requireFacade().roomPowerLevels(roomId))
+        decodeValueOrNull(requireFacade().roomPowerLevels(roomId), "roomPowerLevels")
 
     override suspend fun canUserBan(roomId: String, userId: String): Boolean =
         requireFacade().canUserBan(roomId, userId)
@@ -768,7 +787,7 @@ class WebStubMatrixPort : MatrixPort {
         requireFacade().sendPollStart(roomId, question, wasmJson.encodeToString(answers).toJsReference())
 
     override fun seenByForEvent(roomId: String, eventId: String, limit: Int): List<SeenByEntry> =
-        decodeValueOrNull(requireFacade().seenByForEvent(roomId, eventId, limit)) ?: emptyList()
+        decodeValueOrNull(requireFacade().seenByForEvent(roomId, eventId, limit), "seenByForEvent") ?: emptyList()
 
     override suspend fun mxcThumbnailToCache(mxcUri: String, width: Int, height: Int, crop: Boolean): String =
         requireFacade().mxcThumbnailToCache(mxcUri, width, height, crop).orEmpty()
