@@ -338,10 +338,10 @@ class WebStubMatrixPort : MatrixPort {
     }
 
     override suspend fun paginateBack(roomId: String, count: Int): Boolean =
-        requireFacade().paginateBackwards(roomId, count)
+        requireFacade().paginateBackwards(roomId, count).await<JsBoolean>().toBoolean()
 
     override suspend fun paginateForward(roomId: String, count: Int): Boolean =
-        requireFacade().paginateForwards(roomId, count)
+        requireFacade().paginateForwards(roomId, count).await<JsBoolean>().toBoolean()
 
     override suspend fun markRead(roomId: String): Boolean = requireFacade().markRead(roomId)
 
@@ -582,9 +582,16 @@ class WebStubMatrixPort : MatrixPort {
     override suspend fun isEventReadBy(roomId: String, eventId: String, userId: String): Boolean =
         requireFacade().isEventReadBy(roomId, eventId, userId).await<JsBoolean>().toBoolean()
 
-    override fun startCallInbox(observer: MatrixPort.CallObserver): ULong = 0uL
+    override fun startCallInbox(observer: MatrixPort.CallObserver): ULong =
+        requireFacade().startCallInbox { payload ->
+            val invite = decodeValueOrNull<CallInvite>(payload, "startCallInbox")
+                ?: return@startCallInbox
+            observer.onInvite(invite)
+        }.toULong()
 
-    override fun stopCallInbox(token: ULong) {}
+    override fun stopCallInbox(token: ULong) {
+        requireFacade().stopCallInbox(token.toDouble())
+    }
 
     override suspend fun registerUnifiedPush(
         appId: String,
@@ -950,23 +957,39 @@ class WebStubMatrixPort : MatrixPort {
         unitResult(requireFacade().enableRoomEncryption(roomId), "enable room encryption")
 
     override suspend fun roomSuccessor(roomId: String): RoomUpgradeInfo? =
-        runCatching { wasmJson.decodeFromJsonElement<RoomUpgradeInfo>(requireFacade().roomSuccessor(roomId).toJsonElement()) }.getOrNull()
+        decodeValueOrNull(requireFacade().roomSuccessor(roomId).await(), "roomSuccessor")
 
     override suspend fun roomPredecessor(roomId: String): RoomPredecessorInfo? =
-        runCatching { wasmJson.decodeFromJsonElement<RoomPredecessorInfo>(requireFacade().roomPredecessor(roomId).toJsonElement()) }.getOrNull()
+        decodeValueOrNull(requireFacade().roomPredecessor(roomId).await(), "roomPredecessor")
 
     override suspend fun startLiveLocationShare(roomId: String, durationMs: Long): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(
+            requireFacade().startLiveLocation(roomId, durationMs.toDouble()).await<JsBoolean>().toBoolean(),
+            "start live location"
+        )
 
     override suspend fun stopLiveLocationShare(roomId: String): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(
+            requireFacade().stopLiveLocation(roomId).await<JsBoolean>().toBoolean(),
+            "stop live location"
+        )
 
     override suspend fun sendLiveLocation(roomId: String, geoUri: String): Result<Unit> =
-        Result.failure(UnsupportedOperationException())
+        unitResult(
+            requireFacade().sendLiveLocation(roomId, geoUri).await<JsBoolean>().toBoolean(),
+            "send live location"
+        )
 
-    override fun observeLiveLocation(roomId: String, onShares: (List<LiveLocationShare>) -> Unit): ULong = 0uL
+    override fun observeLiveLocation(roomId: String, onShares: (List<LiveLocationShare>) -> Unit): ULong =
+        requireFacade().observeLiveLocation(roomId) { payload ->
+            val shares = decodeValueOrNull<List<LiveLocationShare>>(payload, "observeLiveLocation")
+                ?: emptyList()
+            onShares(shares)
+        }.toULong()
 
-    override fun stopObserveLiveLocation(token: ULong) {}
+    override fun stopObserveLiveLocation(token: ULong) {
+        requireFacade().unobserveLiveLocation(token.toDouble())
+    }
 
     override suspend fun sendPoll(roomId: String, question: String, answers: List<String>): Boolean =
         requireFacade().sendPollStart(roomId, question, wasmJson.encodeToString(answers).toJsReference())

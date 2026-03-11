@@ -4,6 +4,7 @@
 //! values so Kotlin/Wasm can call into the Matrix SDK via
 //! `@JsModule("./mages_ffi_wasm.js")` declarations.
 use crate::HomeserverLoginDetails;
+use crate::OriginalSyncCallInviteEvent;
 use crate::RsMode;
 use crate::VerifMap;
 use crate::owned_device_id;
@@ -354,6 +355,9 @@ struct WasmAsyncState {
     inbox: RefCell<HashMap<String, (OwnedUserId, OwnedDeviceId)>>,
     verifs: VerifMap,
     app_in_foreground: Cell<bool>,
+    call_subs: RefCell<HashMap<u64, AbortHandle>>,
+    live_location_subs: RefCell<HashMap<u64, AbortHandle>>,
+    live_location_beacons: RefCell<HashMap<String, crate::LiveLocationBeaconState>>,
 }
 
 impl WasmAsyncState {
@@ -719,6 +723,9 @@ impl WasmClient {
             inbox: RefCell::new(HashMap::new()),
             verifs: Arc::new(std::sync::Mutex::new(HashMap::new())),
             app_in_foreground: Cell::new(false),
+            call_subs: RefCell::new(HashMap::new()),
+            live_location_subs: RefCell::new(HashMap::new()),
+            live_location_beacons: RefCell::new(HashMap::new()),
         });
 
         Ok(WasmClient {
@@ -1958,6 +1965,9 @@ impl WasmClient {
                                         let topic = room.topic();
                                         let is_invited = matches!(room.state(), RoomState::Invited);
 
+                                        let latest_event =
+                                            latest_room_event_for(&state_for_loop.timeline_mgr, room).await;
+
                                         snapshot.push(RoomListEntry {
                                             room_id: room.room_id().to_string(),
                                             name: item.cached_display_name()
@@ -1977,7 +1987,7 @@ impl WasmClient {
                                             is_encrypted,
                                             member_count,
                                             topic,
-                                            latest_event: None,
+                                            latest_event,
                                         });
                                     }
 
@@ -3494,7 +3504,20 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn room_successor(&self, room_id: String) -> JsValue {
+    pub async fn room_successor(&self, room_id: String) -> JsValue {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+                return JsValue::NULL;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return JsValue::NULL;
+            };
+            return match room.successor_room() {
+                Some(s) => to_json(&crate::SuccessorRoomInfo::from(s)),
+                None => JsValue::NULL,
+            };
+        }
+
         let v = self
             .with_client(|c| c.room_successor(room_id))
             .ok()
@@ -3506,7 +3529,20 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn room_predecessor(&self, room_id: String) -> JsValue {
+    pub async fn room_predecessor(&self, room_id: String) -> JsValue {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+                return JsValue::NULL;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return JsValue::NULL;
+            };
+            return match room.predecessor_room() {
+                Some(p) => to_json(&crate::PredecessorRoomInfo::from(p)),
+                None => JsValue::NULL,
+            };
+        }
+
         let v = self
             .with_client(|c| c.room_predecessor(room_id))
             .ok()
@@ -3518,28 +3554,170 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn start_live_location(&self, room_id: String, duration_ms: f64) -> bool {
-        self.with_client(|c| {
-            c.start_live_location(room_id, duration_ms as u64, None)
+    pub async fn start_live_location(&self, room_id: String, duration_ms: f64) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
+                return false;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return false;
+            };
+
+            match room
+                .start_live_location_share(duration_ms as u64, None)
+                .await
+            {
+                Ok(response) => {
+                    state.live_location_beacons.borrow_mut().insert(
+                        room_id,
+                        crate::LiveLocationBeaconState {
+                            event_id: response.event_id.to_string(),
+                            duration_ms: duration_ms as u64,
+                            description: None,
+                        },
+                    );
+                    true
+                }
+                Err(_) => false,
+            }
+        } else {
+            self.with_client(|c| {
+                c.start_live_location(room_id, duration_ms as u64, None)
+                    .is_ok()
+            })
+            .unwrap_or(false)
+        }
+    }
+
+    #[wasm_bindgen]
+    pub async fn stop_live_location(&self, room_id: String) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            use matrix_sdk::ruma::events::beacon_info::BeaconInfoEventContent;
+
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
+                return false;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return false;
+            };
+
+            let cached = state.live_location_beacons.borrow().get(&room_id).cloned();
+
+            let result = if let Some(cached) = cached {
+                room.send_state_event_for_key(
+                    room.own_user_id(),
+                    BeaconInfoEventContent::new(
+                        cached.description,
+                        std::time::Duration::from_millis(cached.duration_ms),
+                        false,
+                        None,
+                    ),
+                )
+                .await
                 .is_ok()
-        })
-        .unwrap_or(false)
+            } else {
+                room.stop_live_location_share().await.is_ok()
+            };
+
+            if result {
+                state.live_location_beacons.borrow_mut().remove(&room_id);
+            }
+
+            result
+        } else {
+            self.with_client(|c| c.stop_live_location(room_id).is_ok())
+                .unwrap_or(false)
+        }
     }
 
     #[wasm_bindgen]
-    pub fn stop_live_location(&self, room_id: String) -> bool {
-        self.with_client(|c| c.stop_live_location(room_id).is_ok())
-            .unwrap_or(false)
-    }
+    pub async fn send_live_location(&self, room_id: String, geo_uri: String) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            use matrix_sdk::ruma::{EventId, events::beacon::BeaconEventContent};
 
-    #[wasm_bindgen]
-    pub fn send_live_location(&self, room_id: String, geo_uri: String) -> bool {
-        self.with_client(|c| c.send_live_location(room_id, geo_uri).is_ok())
-            .unwrap_or(false)
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
+                return false;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return false;
+            };
+
+            let beacon_state = state.live_location_beacons.borrow().get(&room_id).cloned();
+
+            if let Some(beacon_state) = beacon_state {
+                let Ok(beacon_event_id) = EventId::parse(&beacon_state.event_id) else {
+                    return false;
+                };
+                let content = BeaconEventContent::new(beacon_event_id, geo_uri, None);
+                room.send(content).await.is_ok()
+            } else {
+                room.send_location_beacon(geo_uri).await.is_ok()
+            }
+        } else {
+            self.with_client(|c| c.send_live_location(room_id, geo_uri).is_ok())
+                .unwrap_or(false)
+        }
     }
 
     #[wasm_bindgen]
     pub fn observe_live_location(&self, room_id: String, on_update: Function) -> f64 {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+                return 0.0;
+            };
+            let obs: Arc<dyn LiveLocationObserver> = Arc::new(JsLiveLocationObserver(on_update));
+            let id = state.next_sub_id();
+            let (abort_handle, abort_reg) = AbortHandle::new_pair();
+            state
+                .live_location_subs
+                .borrow_mut()
+                .insert(id, abort_handle);
+
+            wasm_bindgen_futures::spawn_local(async move {
+                let state_cleanup = state.clone();
+                let _ = Abortable::new(
+                    async move {
+                        let Some(room) = state.client.get_room(&rid) else {
+                            return;
+                        };
+
+                        let observable = room.observe_live_location_shares();
+                        let stream = observable.subscribe();
+
+                        use futures_util::{StreamExt, pin_mut};
+                        pin_mut!(stream);
+
+                        let mut latest_shares: HashMap<String, crate::LiveLocationShareInfo> =
+                            HashMap::new();
+
+                        while let Some(event) = stream.next().await {
+                            let info = crate::LiveLocationShareInfo {
+                                user_id: event.user_id.to_string(),
+                                geo_uri: event.last_location.location.uri.to_string(),
+                                ts_ms: event.last_location.ts.0.into(),
+                                is_live: event
+                                    .beacon_info
+                                    .as_ref()
+                                    .map(|info| info.is_live())
+                                    .unwrap_or(true),
+                            };
+
+                            latest_shares.insert(info.user_id.clone(), info);
+                            let snapshot = latest_shares.values().cloned().collect();
+
+                            let _ = catch_unwind(AssertUnwindSafe(|| obs.on_update(snapshot)));
+                        }
+                    },
+                    abort_reg,
+                )
+                .await;
+
+                state_cleanup.live_location_subs.borrow_mut().remove(&id);
+            });
+
+            return id as f64;
+        }
+
         let obs = Box::new(JsLiveLocationObserver(on_update));
         self.with_client(|c| c.observe_live_location(room_id, obs) as f64)
             .unwrap_or(0.0)
@@ -3547,12 +3725,57 @@ impl WasmClient {
 
     #[wasm_bindgen]
     pub fn unobserve_live_location(&self, sub_id: f64) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            return Self::abort_sub(&state.live_location_subs, sub_id as u64);
+        }
+
         self.with_client(|c| c.unobserve_live_location(sub_id as u64))
             .unwrap_or(false)
     }
 
     #[wasm_bindgen]
     pub fn start_call_inbox(&self, on_invite: Function) -> f64 {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let obs: Arc<dyn CallObserver> = Arc::new(JsCallObserver(on_invite));
+            let id = state.next_sub_id();
+            let (abort_handle, abort_reg) = AbortHandle::new_pair();
+            state.call_subs.borrow_mut().insert(id, abort_handle);
+
+            wasm_bindgen_futures::spawn_local(async move {
+                let state_cleanup = state.clone();
+                let _ = Abortable::new(
+                    async move {
+                        let handler = state
+                            .client
+                            .observe_events::<OriginalSyncCallInviteEvent, Room>();
+                        let mut sub = handler.subscribe();
+
+                        while let Some((ev, room)) = sub.next().await {
+                            let call_id = ev.content.call_id.to_string();
+                            let is_video = ev.content.offer.sdp.contains("m=video");
+                            let ts: u64 = ev.origin_server_ts.0.into();
+
+                            let invite = crate::CallInvite {
+                                room_id: room.room_id().to_string(),
+                                sender: ev.sender.to_string(),
+                                call_id,
+                                is_video,
+                                ts_ms: ts,
+                            };
+
+                            let _ = catch_unwind(AssertUnwindSafe(|| obs.on_invite(invite)));
+                        }
+                    },
+                    abort_reg,
+                )
+                .await;
+
+                state_cleanup.call_subs.borrow_mut().remove(&id);
+            });
+
+            return id as f64;
+        }
+
         let obs = Box::new(JsCallObserver(on_invite));
         self.with_client(|c| c.start_call_inbox(obs) as f64)
             .unwrap_or(0.0)
@@ -3560,6 +3783,10 @@ impl WasmClient {
 
     #[wasm_bindgen]
     pub fn stop_call_inbox(&self, token: f64) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            return Self::abort_sub(&state.call_subs, token as u64);
+        }
+
         self.with_client(|c| c.stop_call_inbox(token as u64))
             .unwrap_or(false)
     }
@@ -3887,12 +4114,43 @@ impl WasmClient {
         to_json(&value)
     }
 
-    pub fn paginate_backwards(&self, room_id: String, count: u32) -> bool {
+    #[wasm_bindgen]
+    pub async fn paginate_backwards(&self, room_id: String, count: u32) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+                return false;
+            };
+
+            let me = state
+                .client
+                .user_id()
+                .map(|u| u.to_string())
+                .unwrap_or_default();
+
+            let Some(tl) = state.timeline_mgr.timeline_for(&rid).await else {
+                return false;
+            };
+
+            return crate::paginate_backwards_visible(&tl, &rid, &me, count as usize).await;
+        }
+
         self.with_client(|c| c.paginate_backwards(room_id, count as u16))
             .unwrap_or(false)
     }
 
-    pub fn paginate_forwards(&self, room_id: String, count: u32) -> bool {
+    pub async fn paginate_forwards(&self, room_id: String, count: u32) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+                return false;
+            };
+
+            let Some(tl) = state.timeline_mgr.timeline_for(&rid).await else {
+                return false;
+            };
+
+            return tl.paginate_forwards(count as u16).await.unwrap_or(false);
+        }
+
         self.with_client(|c| c.paginate_forwards(room_id, count as u16))
             .unwrap_or(false)
     }

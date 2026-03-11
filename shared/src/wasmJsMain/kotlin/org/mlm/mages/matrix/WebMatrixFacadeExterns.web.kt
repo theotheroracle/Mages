@@ -89,10 +89,10 @@ external class WebMatrixFacade {
     fun sendText(roomId: String, body: String, formattedBody: String? = definedExternally): Promise<WebSendResultValue?>
 
     @JsName("paginateBackwards")
-    fun paginateBackwards(roomId: String, count: Int): Boolean
+    fun paginateBackwards(roomId: String, count: Int): Promise<JsBoolean>
 
     @JsName("paginateForwards")
-    fun paginateForwards(roomId: String, count: Int): Boolean
+    fun paginateForwards(roomId: String, count: Int): Promise<JsBoolean>
 
     @JsName("markRead")
     fun markRead(roomId: String): Boolean
@@ -248,12 +248,6 @@ external class WebMatrixFacade {
     @JsName("mxcThumbnailToCache")
     fun mxcThumbnailToCache(mxcUri: String, width: Int, height: Int, crop: Boolean): String?
 
-    @JsName("roomSuccessor")
-    fun roomSuccessor(roomId: String): WebRoomUpgradeInfoValue?
-
-    @JsName("roomPredecessor")
-    fun roomPredecessor(roomId: String): WebRoomPredecessorInfoValue?
-
     @JsName("roomTags")
     fun roomTags(roomId: String): JsAny?
 
@@ -268,12 +262,6 @@ external class WebMatrixFacade {
 
     @JsName("fetchNotificationsSince")
     fun fetchNotificationsSince(sinceMs: Long, maxRooms: Int, maxEvents: Int): Promise<JsAny?>
-
-    @JsName("roomPreview")
-    fun roomPreview(idOrAlias: String): Promise<JsAny?>
-
-    @JsName("knock")
-    fun knock(idOrAlias: String): Promise<JsBoolean>
 
     @JsName("roomUnreadStats")
     fun roomUnreadStats(roomId: String): JsAny?
@@ -441,6 +429,39 @@ external class WebMatrixFacade {
 
     @JsName("sendPollEnd")
     fun sendPollEnd(roomId: String, pollEventId: String): Boolean
+
+    @JsName("startCallInbox")
+    fun startCallInbox(onInvite: (JsAny?) -> Unit): Double
+
+    @JsName("stopCallInbox")
+    fun stopCallInbox(id: Double): Boolean
+
+    @JsName("startLiveLocation")
+    fun startLiveLocation(roomId: String, durationMs: Double): Promise<JsBoolean>
+
+    @JsName("stopLiveLocation")
+    fun stopLiveLocation(roomId: String): Promise<JsBoolean>
+
+    @JsName("sendLiveLocation")
+    fun sendLiveLocation(roomId: String, geoUri: String): Promise<JsBoolean>
+
+    @JsName("observeLiveLocation")
+    fun observeLiveLocation(roomId: String, onUpdate: (JsAny?) -> Unit): Double
+
+    @JsName("unobserveLiveLocation")
+    fun unobserveLiveLocation(id: Double): Boolean
+
+    @JsName("roomPreview")
+    fun roomPreview(idOrAlias: String): Promise<JsAny?>
+
+    @JsName("knock")
+    fun knock(idOrAlias: String): Promise<JsBoolean>
+
+    @JsName("roomSuccessor")
+    fun roomSuccessor(roomId: String): Promise<JsAny?>
+
+    @JsName("roomPredecessor")
+    fun roomPredecessor(roomId: String): Promise<JsAny?>
 
     fun logout(): Promise<JsAny?>
 }

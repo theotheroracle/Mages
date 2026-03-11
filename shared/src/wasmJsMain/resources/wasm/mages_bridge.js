@@ -138,12 +138,12 @@ class WasmClientBridge {
     return normalizeWasmValue(await this.client.recent_events(roomId, limit));
   }
 
-  paginate_backwards(roomId, count) {
-    return this.client.paginate_backwards(roomId, count);
+  async paginate_backwards(roomId, count) {
+    return await this.client.paginate_backwards(roomId, count);
   }
 
-  paginate_forwards(roomId, count) {
-    return this.client.paginate_forwards(roomId, count);
+  async paginate_forwards(roomId, count) {
+    return await this.client.paginate_forwards(roomId, count);
   }
 
   mark_read(roomId) {
@@ -578,12 +578,52 @@ class WasmClientBridge {
     );
   }
 
+  start_call_inbox(onInvite) {
+    return this.client.start_call_inbox((payload) => {
+      onInvite(normalizeWasmValue(payload ?? null));
+    });
+  }
+
+  stop_call_inbox(id) {
+    return this.client.stop_call_inbox(id);
+  }
+
+  async start_live_location(roomId, durationMs) {
+    return await this.client.start_live_location(roomId, durationMs);
+  }
+
+  async stop_live_location(roomId) {
+    return await this.client.stop_live_location(roomId);
+  }
+
+  async send_live_location(roomId, geoUri) {
+    return await this.client.send_live_location(roomId, geoUri);
+  }
+
+  observe_live_location(roomId, onUpdate) {
+    return this.client.observe_live_location(roomId, (shares) => {
+      onUpdate(normalizeWasmValue(shares ?? []));
+    });
+  }
+
+  unobserve_live_location(id) {
+    return this.client.unobserve_live_location(id);
+  }
+
   async room_preview(idOrAlias) {
     return normalizeWasmValue(await this.client.room_preview(idOrAlias));
   }
 
   async knock(idOrAlias) {
     return await this.client.knock(idOrAlias);
+  }
+
+  async room_successor(roomId) {
+    return normalizeWasmValue(await this.client.room_successor(roomId));
+  }
+
+  async room_predecessor(roomId) {
+    return normalizeWasmValue(await this.client.room_predecessor(roomId));
   }
 
   get_pinned_events(roomId) {
@@ -696,14 +736,6 @@ class WasmClientBridge {
 
   mxc_thumbnail_to_cache(mxcUri, width, height, crop) {
     return this.client.mxc_thumbnail_to_cache(mxcUri, width, height, crop) ?? null;
-  }
-
-  room_successor(roomId) {
-    return normalizeWasmValue(this.client.room_successor(roomId));
-  }
-
-  room_predecessor(roomId) {
-    return normalizeWasmValue(this.client.room_predecessor(roomId));
   }
 
   observe_timeline(roomId, onDiff, onError) {
@@ -845,12 +877,12 @@ export class WebMatrixFacade {
     return okResult ? { ok: true } : err("Failed to send message");
   }
 
-  paginateBackwards(roomId, count) {
-    return this.client.paginate_backwards(roomId, count);
+  async paginateBackwards(roomId, count) {
+    return await this.client.paginate_backwards(roomId, count);
   }
 
-  paginateForwards(roomId, count) {
-    return this.client.paginate_forwards(roomId, count);
+  async paginateForwards(roomId, count) {
+    return await this.client.paginate_forwards(roomId, count);
   }
 
   markRead(roomId) {
@@ -1222,6 +1254,50 @@ export class WebMatrixFacade {
     return this.client.send_poll_end(roomId, pollEventId);
   }
 
+  startCallInbox(onInvite) {
+    return this.client.start_call_inbox(onInvite);
+  }
+
+  stopCallInbox(id) {
+    return this.client.stop_call_inbox(id);
+  }
+
+  async startLiveLocation(roomId, durationMs) {
+    return await this.client.start_live_location(roomId, durationMs);
+  }
+
+  async stopLiveLocation(roomId) {
+    return await this.client.stop_live_location(roomId);
+  }
+
+  async sendLiveLocation(roomId, geoUri) {
+    return await this.client.send_live_location(roomId, geoUri);
+  }
+
+  observeLiveLocation(roomId, onUpdate) {
+    return this.client.observe_live_location(roomId, onUpdate);
+  }
+
+  unobserveLiveLocation(id) {
+    return this.client.unobserve_live_location(id);
+  }
+
+  async roomPreview(idOrAlias) {
+    return await this.client.room_preview(idOrAlias);
+  }
+
+  async knock(idOrAlias) {
+    return await this.client.knock(idOrAlias);
+  }
+
+  async roomSuccessor(roomId) {
+    return await this.client.room_successor(roomId);
+  }
+
+  async roomPredecessor(roomId) {
+    return await this.client.room_predecessor(roomId);
+  }
+
   observeRoomList(onReset, onUpdate) {
     const token = this.client.observe_room_list(onReset, onUpdate);
     this.roomListToken = token;
@@ -1303,14 +1379,6 @@ export class WebMatrixFacade {
 
   mxcThumbnailToCache(mxcUri, width, height, crop) {
     return this.client.mxc_thumbnail_to_cache(mxcUri, width, height, crop);
-  }
-
-  roomSuccessor(roomId) {
-    return this.client.room_successor(roomId);
-  }
-
-  roomPredecessor(roomId) {
-    return this.client.room_predecessor(roomId);
   }
 
   startSync(onState) {
