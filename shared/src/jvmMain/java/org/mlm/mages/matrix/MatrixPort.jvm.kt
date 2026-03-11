@@ -1812,7 +1812,7 @@ private fun mages.PollData.toModel(): PollData {
         question = question,
         kind = if (kind == mages.PollKind.DISCLOSED) PollKind.Disclosed else PollKind.Undisclosed,
         maxSelections = maxSelections.toLong(),
-        options = mappedOptions,
+        options = mappedOptions, //TODO: Use the new sent counts for all 3
         votes = voteMap,
         totalVotes = totalVotes.toLong(),
         mySelections = mySelections,

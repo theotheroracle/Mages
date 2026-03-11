@@ -757,6 +757,8 @@ pub struct PollData {
     pub kind: PollKind,
     pub max_selections: u32,
     pub options: Vec<PollOption>,
+    pub votes: HashMap<String, u32>,
+    pub my_selections: Vec<String>,
     pub total_votes: u32,
     pub is_ended: bool,
 }
@@ -8259,6 +8261,8 @@ fn map_poll_state(state: &matrix_sdk_ui::timeline::PollState, me: &str) -> PollD
         kind,
         max_selections: results.max_selections as u32,
         options,
+        votes: vote_counts,
+        my_selections: my_votes,
         total_votes,
         is_ended,
     }
