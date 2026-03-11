@@ -76,7 +76,7 @@ external class WebMatrixFacade {
     @JsName("observeTimeline")
     fun observeTimeline(
         roomId: String,
-        onDiff: (String?) -> Unit,
+        onDiff: (JsAny?) -> Unit,
         onError: (String?) -> Unit,
     ): WebTimelineSubscription
 

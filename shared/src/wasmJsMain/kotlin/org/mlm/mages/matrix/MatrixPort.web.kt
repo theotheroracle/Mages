@@ -1,10 +1,11 @@
+@file:OptIn(ExperimentalWasmJsInterop::class)
+
 package org.mlm.mages.matrix
 
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.await
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -25,8 +26,8 @@ class WebStubMatrixPort : MatrixPort {
         return facade ?: error("Matrix client not initialized. Wait for init call.")
     }
 
-    private fun decodeTimelineDiff(diffJson: String): TimelineDiff<MessageEvent>? {
-        val obj = wasmJson.parseToJsonElement(diffJson) as? JsonObject ?: return null
+    private fun decodeTimelineDiff(diffValue: JsAny?): TimelineDiff<MessageEvent>? {
+        val obj = diffValue.toJsonElement() as? JsonObject ?: return null
         if (obj.isEmpty()) return null
 
         val entry = obj.entries.first()
@@ -139,8 +140,8 @@ class WebStubMatrixPort : MatrixPort {
     override fun timelineDiffs(roomId: String): Flow<TimelineDiff<MessageEvent>> = callbackFlow {
         val subscription = requireFacade().observeTimeline(
             roomId = roomId,
-            onDiff = { diffJson ->
-                val diff = diffJson?.let(::decodeTimelineDiff) ?: return@observeTimeline
+            onDiff = { diffValue ->
+                val diff = decodeTimelineDiff(diffValue) ?: return@observeTimeline
                 trySend(diff)
             },
             onError = { error ->

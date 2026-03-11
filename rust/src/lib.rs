@@ -65,9 +65,9 @@ use tracing::{error, info, warn};
 use uniffi::{Enum, Object, Record, export, setup_scaffolding};
 
 // wasm-bindgen bridge for Kotlin/Wasm
+mod platform;
 #[cfg(target_family = "wasm")]
 mod wasm_bridge;
-mod platform;
 
 use matrix_sdk::{
     Client as SdkClient, OwnedServerName, Room, RoomMemberships, SessionTokens,
@@ -984,6 +984,21 @@ macro_rules! spawn_task {
     };
 }
 
+/// Fire-and-forget spawn. Safe to use in both statement and expression positions.
+#[cfg(not(target_family = "wasm"))]
+macro_rules! spawn_detached {
+    ($fut:expr) => {{
+        let _ = tokio::spawn($fut);
+    }};
+}
+
+#[cfg(target_family = "wasm")]
+macro_rules! spawn_detached {
+    ($fut:expr) => {{
+        wasm_bindgen_futures::spawn_local($fut);
+    }};
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1630,7 +1645,7 @@ impl Client {
                 if let Some(ev) = it.as_event() {
                     if let Some(eid) = missing_reply_event_id(ev) {
                         let tlc = tl.clone();
-                        spawn_task!(async move {
+                        spawn_detached!(async move {
                             let _ = tlc.fetch_details_for_event(eid.as_ref()).await;
                         });
                     }
@@ -3031,7 +3046,7 @@ impl Client {
                     let obs_for_stream = obs.clone();
                     let verifs_for_stream = verifs.clone();
 
-                    spawn_task!(async move {
+                    spawn_detached!(async move {
                         attach_sas_stream(
                             verifs_for_stream,
                             flow_for_stream,
@@ -3160,7 +3175,7 @@ impl Client {
         let txn_id = client_txn.clone();
         let send_handles = self.send_handles_by_txn.clone();
 
-        spawn_task!(async move {
+        spawn_detached!(async move {
             use matrix_sdk::ruma::events::room::message::RoomMessageEventContent as Msg;
 
             let _ = tx.send(SendUpdate {
@@ -6949,7 +6964,7 @@ impl Client {
             .get(&session_id)
             .cloned()
         {
-            spawn_task!(async move {
+            spawn_detached!(async move {
                 let _ = handle.send(message).await;
             });
             true
@@ -7249,7 +7264,7 @@ impl TimelineManager {
             };
             if should_fetch {
                 let tlc = tl.clone();
-                spawn_task!(async move {
+                spawn_detached!(async move {
                     let _ = tlc.fetch_members().await;
                 });
             }
@@ -7273,7 +7288,7 @@ impl TimelineManager {
             if !s.contains(room_id) {
                 s.insert(room_id.clone());
                 let tlc = tl.clone();
-                spawn_task!(async move {
+                spawn_detached!(async move {
                     let _ = tlc.fetch_members().await;
                 });
             }
@@ -8252,7 +8267,7 @@ fn map_poll_state(state: &matrix_sdk_ui::timeline::PollState, me: &str) -> PollD
 fn fetch_reply_if_needed(ei: &EventTimelineItem, tl: &Arc<Timeline>) {
     if let Some(eid) = missing_reply_event_id(ei) {
         let tlc = tl.clone();
-        spawn_task!(async move {
+        spawn_detached!(async move {
             let _ = tlc.fetch_details_for_event(eid.as_ref()).await;
         });
     }
