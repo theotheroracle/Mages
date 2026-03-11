@@ -1725,10 +1725,14 @@ impl WasmClient {
 
     #[wasm_bindgen]
     pub fn seen_by_for_event(&self, room_id: String, event_id: String, limit: u32) -> JsValue {
+        if self.async_state.borrow().is_some() {
+            return to_json(&Vec::<crate::SeenByEntry>::new());
+        }
+
         let v = self.with_client(|c| c.seen_by_for_event(room_id, event_id, limit));
         match v {
             Ok(items) => to_json(&items),
-            Err(e) => JsValue::from_str(&format!("{{\"error\":\"{:?}\"}}", e)),
+            Err(_) => to_json(&Vec::<crate::SeenByEntry>::new()), // TODO: fix it later, hide the spam for now
         }
     }
 

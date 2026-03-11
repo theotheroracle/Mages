@@ -18,9 +18,9 @@ data class DeviceSummary(
 @Serializable
 data class SeenByEntry (
     var userId: String,
-    var displayName: String?,
-    var avatarUrl: String?,
-    var tsMs: ULong?
+    var displayName: String? = null,
+    var avatarUrl: String? = null,
+    var tsMs: ULong? = null
 )
 
 @Serializable
@@ -127,7 +127,7 @@ enum class RoomDirectoryVisibility {
 @Serializable
 data class RoomUpgradeInfo(
     val roomId: String,
-    val reason: String?
+    val reason: String? = null
 )
 
 @Serializable
@@ -189,9 +189,9 @@ data class RenderedNotification(
 @Serializable
 data class UnreadStats(val messages: Long, val notifications: Long, val mentions: Long)
 @Serializable
-data class DirectoryUser(val userId: String, val displayName: String?, val avatarUrl: String?)
+data class DirectoryUser(val userId: String, val displayName: String? = null, val avatarUrl: String? = null)
 @Serializable
-data class PublicRoom(val roomId: String, val name: String?, val topic: String?, val alias: String?, val avatarUrl: String?, val memberCount: Long, val worldReadable: Boolean, val guestCanJoin: Boolean)
+data class PublicRoom(val roomId: String, val name: String? = null, val topic: String? = null, val alias: String? = null, val avatarUrl: String? = null, val memberCount: Long = 0, val worldReadable: Boolean = false, val guestCanJoin: Boolean = false)
 @Serializable
 data class PublicRoomsPage(val rooms: List<PublicRoom>, val nextBatch: String?, val prevBatch: String?)
 @Serializable
@@ -210,14 +210,14 @@ data class RoomPreview(
 data class RoomProfile(
     val roomId: String,
     val name: String,
-    val topic: String?,
-    val memberCount: Long,
-    val isEncrypted: Boolean,
-    val isDm: Boolean,
-    val avatarUrl: String?,
-    val canonicalAlias: String?,
-    val altAliases: List<String>,
-    val roomVersion: String?
+    val topic: String? = null,
+    val memberCount: Long = 0,
+    val isEncrypted: Boolean = false,
+    val isDm: Boolean = false,
+    val avatarUrl: String? = null,
+    val canonicalAlias: String? = null,
+    val altAliases: List<String> = emptyList(),
+    val roomVersion: String? = null
 )
 
 @Serializable
@@ -318,10 +318,10 @@ data class RoomListEntry(
 @Serializable
 data class MemberSummary(
     val userId: String,
-    val displayName: String?,
-    val avatarUrl: String?,
-    val isMe: Boolean,
-    val membership: String
+    val displayName: String? = null,
+    val avatarUrl: String? = null,
+    val isMe: Boolean = false,
+    val membership: String = ""
 )
 
 @Serializable
