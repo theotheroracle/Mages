@@ -1162,7 +1162,7 @@ private fun MessageItem(
                 }
             )
             .then(
-                if (isSelected) Modifier.background(MaterialTheme.colorScheme.primaryContainer)
+                if (isSelected) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
                 else Modifier
             )
             .pointerInput(state.isSelectionMode) {
