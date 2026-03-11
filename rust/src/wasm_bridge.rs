@@ -3,6 +3,8 @@
 //! Exposes a high-level `WasmClient` class to JavaScript with wasm-bindgen
 //! values so Kotlin/Wasm can call into the Matrix SDK via
 //! `@JsModule("./mages_ffi_wasm.js")` declarations.
+use crate::CallSessionInfo;
+use crate::Direction;
 use crate::HomeserverLoginDetails;
 use crate::OriginalSyncCallInviteEvent;
 use crate::RsMode;
@@ -24,6 +26,7 @@ use futures_util::StreamExt;
 use futures_util::future::{AbortHandle, Abortable};
 use js_sys::Function;
 use matrix_sdk::RoomMemberships;
+use matrix_sdk::authentication::oauth::registration::language_tags::LanguageTag;
 use matrix_sdk::encryption::verification::{Verification, VerificationRequest};
 use matrix_sdk::ruma::{
     OwnedDeviceId, OwnedUserId,
@@ -41,7 +44,23 @@ use matrix_sdk::ruma::{
     presence::PresenceState,
     room::JoinRuleSummary,
 };
+use matrix_sdk::ruma::{
+    api::client::relations::get_relating_events_with_rel_type_and_event_type as get_relating,
+    events::{
+        TimelineEventType,
+        beacon::BeaconEventContent,
+        beacon_info::BeaconInfoEventContent,
+        relation::{RelationType, Thread as ThreadRel},
+        room::message::{Relation as MsgRelation, RoomMessageEventContent},
+    },
+    room::RoomType,
+};
 use matrix_sdk::sleep::sleep;
+use matrix_sdk::widget::{
+    Capabilities, CapabilitiesProvider, ClientProperties, Intent as WidgetIntent, WidgetDriver,
+    WidgetDriverHandle, WidgetSettings,
+};
+use matrix_sdk::widget::{VirtualElementCallWidgetConfig, VirtualElementCallWidgetProperties};
 use matrix_sdk::{
     Client as SdkClient, Room, RoomDisplayName, RoomState, SessionMeta, SessionTokens,
     authentication::matrix::MatrixSession,
@@ -358,6 +377,9 @@ struct WasmAsyncState {
     call_subs: RefCell<HashMap<u64, AbortHandle>>,
     live_location_subs: RefCell<HashMap<u64, AbortHandle>>,
     live_location_beacons: RefCell<HashMap<String, crate::LiveLocationBeaconState>>,
+    widget_handles: RefCell<HashMap<u64, WidgetDriverHandle>>,
+    widget_driver_subs: RefCell<HashMap<u64, AbortHandle>>,
+    widget_recv_subs: RefCell<HashMap<u64, AbortHandle>>,
 }
 
 impl WasmAsyncState {
@@ -726,6 +748,9 @@ impl WasmClient {
             call_subs: RefCell::new(HashMap::new()),
             live_location_subs: RefCell::new(HashMap::new()),
             live_location_beacons: RefCell::new(HashMap::new()),
+            widget_handles: RefCell::new(HashMap::new()),
+            widget_driver_subs: RefCell::new(HashMap::new()),
+            widget_recv_subs: RefCell::new(HashMap::new()),
         });
 
         Ok(WasmClient {
@@ -1358,15 +1383,61 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn send_thread_text(
+    pub async fn send_thread_text(
         &self,
         room_id: String,
         root_event_id: String,
         body: String,
         reply_to_event_id: Option<String>,
+        latest_event_id: Option<String>,
+        formatted_body: Option<String>,
     ) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+                return false;
+            };
+            let Ok(root) = matrix_sdk::ruma::OwnedEventId::try_from(root_event_id) else {
+                return false;
+            };
+            let Some(tl) = state.timeline_mgr.timeline_for(&rid).await else {
+                return false;
+            };
+
+            let mut content: RoomMessageEventContent = if let Some(formatted) = formatted_body {
+                RoomMessageEventContent::text_html(body, formatted)
+            } else {
+                RoomMessageEventContent::text_plain(body)
+            };
+
+            let relation = if let Some(reply_to) = reply_to_event_id {
+                if let Ok(eid) = matrix_sdk::ruma::OwnedEventId::try_from(reply_to) {
+                    MsgRelation::Thread(ThreadRel::reply(root, eid))
+                } else {
+                    MsgRelation::Thread(ThreadRel::without_fallback(root))
+                }
+            } else if let Some(latest) = latest_event_id {
+                if let Ok(eid) = matrix_sdk::ruma::OwnedEventId::try_from(latest) {
+                    MsgRelation::Thread(ThreadRel::plain(root, eid))
+                } else {
+                    MsgRelation::Thread(ThreadRel::without_fallback(root))
+                }
+            } else {
+                MsgRelation::Thread(ThreadRel::without_fallback(root))
+            };
+
+            content.relates_to = Some(relation);
+            return tl.send(content.into()).await.is_ok();
+        }
+
         self.with_client(|c| {
-            c.send_thread_text(room_id, root_event_id, body, reply_to_event_id, None, None)
+            c.send_thread_text(
+                room_id,
+                root_event_id,
+                body,
+                reply_to_event_id,
+                latest_event_id,
+                formatted_body,
+            )
         })
         .unwrap_or(false)
     }
@@ -2579,7 +2650,7 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn thread_replies(
+    pub async fn thread_replies(
         &self,
         room_id: String,
         root_event_id: String,
@@ -2587,6 +2658,74 @@ impl WasmClient {
         limit: u32,
         forward: bool,
     ) -> JsValue {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let rid = match matrix_sdk::ruma::OwnedRoomId::try_from(room_id.clone()) {
+                Ok(v) => v,
+                Err(_) => return JsValue::NULL,
+            };
+            let root = match matrix_sdk::ruma::OwnedEventId::try_from(root_event_id.clone()) {
+                Ok(v) => v,
+                Err(_) => return JsValue::NULL,
+            };
+
+            let mut req = get_relating::v1::Request::new(
+                rid.clone(),
+                root.clone(),
+                RelationType::Thread,
+                TimelineEventType::RoomMessage,
+            );
+            if let Some(f) = from.as_deref() {
+                req.from = Some(f.to_owned());
+            }
+            if limit > 0 {
+                req.limit = Some(limit.into());
+            }
+            req.dir = if forward {
+                Direction::Forward
+            } else {
+                Direction::Backward
+            };
+
+            let Ok(resp) = state.client.send(req).await else {
+                return JsValue::NULL;
+            };
+
+            let mut out: Vec<MessageEvent> = Vec::new();
+
+            if let Some(root_ev) =
+                crate::map_event_id_via_timeline(&state.timeline_mgr, &state.client, &rid, &root)
+                    .await
+            {
+                out.push(root_ev);
+            }
+
+            for raw in resp.chunk.iter() {
+                if let Ok(ml) = raw.deserialize() {
+                    let eid = ml.event_id().to_owned();
+                    if let Some(mev) = crate::map_event_id_via_timeline(
+                        &state.timeline_mgr,
+                        &state.client,
+                        &rid,
+                        &eid,
+                    )
+                    .await
+                    {
+                        out.push(mev);
+                    }
+                }
+            }
+
+            out.sort_by_key(|e| e.timestamp_ms);
+
+            return to_json(&crate::ThreadPage {
+                root_event_id,
+                room_id,
+                messages: out,
+                next_batch: resp.next_batch.clone(),
+                prev_batch: resp.prev_batch.clone(),
+            });
+        }
+
         let v = self
             .with_client(|c| {
                 c.thread_replies(room_id, root_event_id, from, limit, forward)
@@ -2594,6 +2733,7 @@ impl WasmClient {
             })
             .ok()
             .flatten();
+
         match v {
             Some(p) => to_json(&p),
             None => JsValue::NULL,
@@ -2601,17 +2741,89 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn thread_summary(
+    pub async fn thread_summary(
         &self,
         room_id: String,
         root_event_id: String,
         per_page: u32,
         max_pages: u32,
     ) -> JsValue {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let rid = match matrix_sdk::ruma::OwnedRoomId::try_from(room_id.clone()) {
+                Ok(v) => v,
+                Err(_) => return JsValue::NULL,
+            };
+            let root = match matrix_sdk::ruma::OwnedEventId::try_from(root_event_id.clone()) {
+                Ok(v) => v,
+                Err(_) => return JsValue::NULL,
+            };
+
+            let mut from: Option<String> = None;
+            let mut pages = 0u32;
+            let mut count: u64 = 0;
+            let mut latest: Option<u64> = None;
+
+            loop {
+                pages += 1;
+                if pages > max_pages.max(1) {
+                    break;
+                }
+
+                let mut req = get_relating::v1::Request::new(
+                    rid.clone(),
+                    root.clone(),
+                    RelationType::Thread,
+                    TimelineEventType::RoomMessage,
+                );
+                req.dir = Direction::Backward;
+                if let Some(f) = &from {
+                    req.from = Some(f.clone());
+                }
+                if per_page > 0 {
+                    req.limit = Some(per_page.into());
+                }
+
+                let Ok(resp) = state.client.send(req).await else {
+                    return JsValue::NULL;
+                };
+
+                for raw in resp.chunk.iter() {
+                    if let Ok(ml) = raw.deserialize() {
+                        let eid = ml.event_id().to_owned();
+                        count += 1;
+                        if let Some(mev) = crate::map_event_id_via_timeline(
+                            &state.timeline_mgr,
+                            &state.client,
+                            &rid,
+                            &eid,
+                        )
+                        .await
+                        {
+                            if latest.map_or(true, |l| mev.timestamp_ms > l) {
+                                latest = Some(mev.timestamp_ms);
+                            }
+                        }
+                    }
+                }
+
+                if resp.next_batch.is_none() {
+                    break;
+                }
+                from = resp.next_batch;
+            }
+
+            return to_json(&crate::ThreadSummary {
+                root_event_id,
+                room_id,
+                count,
+                latest_ts_ms: latest,
+            });
+        }
+
         let v = self.with_client(|c| c.thread_summary(room_id, root_event_id, per_page, max_pages));
         match v {
             Ok(s) => to_json(&s),
-            Err(e) => JsValue::from_str(&format!("{{\"error\":\"{:?}\"}}", e)),
+            Err(_) => JsValue::NULL,
         }
     }
 
@@ -3792,7 +4004,7 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn start_element_call(
+    pub async fn start_element_call(
         &self,
         room_id: String,
         intent: String,
@@ -3804,8 +4016,128 @@ impl WasmClient {
     ) -> JsValue {
         let i = match intent.as_str() {
             "StartCall" => ElementCallIntent::StartCall,
+            "JoinExisting" => ElementCallIntent::JoinExisting,
+            "StartCallVoiceDm" => ElementCallIntent::StartCallVoiceDm,
+            "JoinExistingVoiceDm" => ElementCallIntent::JoinExistingVoiceDm,
             _ => ElementCallIntent::JoinExisting,
         };
+
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let session_id = state.next_sub_id();
+            let obs: Arc<dyn CallWidgetObserver> = Arc::new(JsCallWidgetObserver(on_to_widget));
+
+            let lang = language_tag
+                .as_deref()
+                .and_then(|s| LanguageTag::parse(s).ok());
+
+            let Ok(rid) = OwnedRoomId::try_from(room_id.as_str()) else {
+                return JsValue::NULL;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return JsValue::NULL;
+            };
+
+            let resolved_parent = parent_url.unwrap_or_else(|| {
+                "https://appassets.androidplatform.net/assets/element-call/index.html".to_owned()
+            });
+
+            let props = VirtualElementCallWidgetProperties {
+                element_call_url: element_call_url.unwrap_or_else(|| {
+                    "https://appassets.androidplatform.net/element-call/index.html".to_owned()
+                }),
+                parent_url: Some(resolved_parent.clone()),
+                widget_id: format!("mages-ecall-{}", session_id),
+                ..VirtualElementCallWidgetProperties::default()
+            };
+
+            let is_dm = room.is_direct().await.unwrap_or(false);
+
+            let widget_intent = match (i, is_dm) {
+                (ElementCallIntent::StartCall, true) => WidgetIntent::StartCallDm,
+                (ElementCallIntent::JoinExisting, true) => WidgetIntent::JoinExistingDm,
+                (ElementCallIntent::StartCall, false) => WidgetIntent::StartCall,
+                (ElementCallIntent::JoinExisting, false) => WidgetIntent::JoinExisting,
+                (ElementCallIntent::StartCallVoiceDm, _) => WidgetIntent::StartCallDmVoice,
+                (ElementCallIntent::JoinExistingVoiceDm, _) => WidgetIntent::JoinExistingDmVoice,
+            };
+
+            let config = VirtualElementCallWidgetConfig {
+                controlled_audio_devices: Some(true),
+                preload: Some(false),
+                app_prompt: Some(false),
+                confine_to_room: Some(true),
+                hide_screensharing: Some(false),
+                intent: Some(widget_intent),
+                ..VirtualElementCallWidgetConfig::default()
+            };
+
+            let settings = match WidgetSettings::new_virtual_element_call_widget(props, config) {
+                Ok(v) => v,
+                Err(_) => return JsValue::NULL,
+            };
+
+            let client_props = ClientProperties::new("org.mlm.mages", lang, theme);
+            let url = match settings.generate_webview_url(&room, client_props).await {
+                Ok(v) => v,
+                Err(_) => return JsValue::NULL,
+            };
+
+            let widget_base_url = settings.base_url().map(|u| u.to_string());
+            let (driver, handle) = WidgetDriver::new(settings);
+            let cap_provider = WasmElementCallCapabilitiesProvider {};
+
+            state
+                .widget_handles
+                .borrow_mut()
+                .insert(session_id, handle.clone());
+
+            let (recv_abort, recv_reg) = AbortHandle::new_pair();
+            state
+                .widget_recv_subs
+                .borrow_mut()
+                .insert(session_id, recv_abort);
+
+            let obs_recv = obs.clone();
+            let handle_recv = handle.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let _ = Abortable::new(
+                    async move {
+                        while let Some(msg) = handle_recv.recv().await {
+                            let _ = catch_unwind(AssertUnwindSafe(|| {
+                                obs_recv.on_to_widget(msg);
+                            }));
+                        }
+                    },
+                    recv_reg,
+                )
+                .await;
+            });
+
+            let (driver_abort, driver_reg) = AbortHandle::new_pair();
+            state
+                .widget_driver_subs
+                .borrow_mut()
+                .insert(session_id, driver_abort);
+
+            let room_driver = room.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let _ = Abortable::new(
+                    async move {
+                        let _ = driver.run(room_driver, cap_provider).await;
+                    },
+                    driver_reg,
+                )
+                .await;
+            });
+
+            return to_json(&CallSessionInfo {
+                session_id,
+                widget_url: url.to_string(),
+                widget_base_url,
+                parent_url: Some(resolved_parent),
+            });
+        }
+
         let obs = Box::new(JsCallWidgetObserver(on_to_widget));
         let v = self
             .with_client(|c| {
@@ -3822,6 +4154,7 @@ impl WasmClient {
             })
             .ok()
             .flatten();
+
         match v {
             Some(s) => to_json(&s),
             None => JsValue::NULL,
@@ -3830,12 +4163,43 @@ impl WasmClient {
 
     #[wasm_bindgen]
     pub fn call_widget_from_webview(&self, session_id: f64, message: String) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            if let Some(handle) = state
+                .widget_handles
+                .borrow()
+                .get(&(session_id as u64))
+                .cloned()
+            {
+                wasm_bindgen_futures::spawn_local(async move {
+                    let _ = handle.send(message).await;
+                });
+                return true;
+            }
+            return false;
+        }
+
         self.with_client(|c| c.call_widget_from_webview(session_id as u64, message))
             .unwrap_or(false)
     }
 
     #[wasm_bindgen]
     pub fn stop_element_call(&self, session_id: f64) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let sid = session_id as u64;
+            let mut any = false;
+
+            if let Some(handle) = state.widget_driver_subs.borrow_mut().remove(&sid) {
+                handle.abort();
+                any = true;
+            }
+            if let Some(handle) = state.widget_recv_subs.borrow_mut().remove(&sid) {
+                handle.abort();
+                any = true;
+            }
+            state.widget_handles.borrow_mut().remove(&sid);
+            return any;
+        }
+
         self.with_client(|c| c.stop_element_call(session_id as u64))
             .unwrap_or(false)
     }
@@ -4153,5 +4517,17 @@ impl WasmClient {
 
         self.with_client(|c| c.paginate_forwards(room_id, count as u16))
             .unwrap_or(false)
+    }
+}
+
+#[derive(Clone)]
+struct WasmElementCallCapabilitiesProvider {}
+
+impl CapabilitiesProvider for WasmElementCallCapabilitiesProvider {
+    fn acquire_capabilities(
+        &self,
+        requested: Capabilities,
+    ) -> impl futures_util::Future<Output = Capabilities> + Send {
+        async move { requested }
     }
 }

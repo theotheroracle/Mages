@@ -773,14 +773,26 @@ class WebStubMatrixPort : MatrixPort {
         replyToEventId: String?,
         latestEventId: String?,
         formattedBody: String?
-    ): Boolean = false
+    ): Boolean =
+        requireFacade().sendThreadText(
+            roomId,
+            rootEventId,
+            body,
+            replyToEventId,
+            latestEventId,
+            formattedBody
+        ).await<JsBoolean>().toBoolean()
 
     override suspend fun threadSummary(
         roomId: String,
         rootEventId: String,
         perPage: Int,
         maxPages: Int
-    ): ThreadSummary = ThreadSummary(rootEventId, roomId, 0, null)
+    ): ThreadSummary =
+        decodeValueOrNull(
+            requireFacade().threadSummary(roomId, rootEventId, perPage, maxPages).await(),
+            "threadSummary"
+        ) ?: ThreadSummary(rootEventId, roomId, 0, null)
 
     override suspend fun threadReplies(
         roomId: String,
@@ -788,7 +800,11 @@ class WebStubMatrixPort : MatrixPort {
         from: String?,
         limit: Int,
         forward: Boolean
-    ): ThreadPage = ThreadPage(rootEventId, roomId, emptyList(), null, null)
+    ): ThreadPage =
+        decodeValueOrNull(
+            requireFacade().threadReplies(roomId, rootEventId, from, limit, forward).await(),
+            "threadReplies"
+        ) ?: ThreadPage(rootEventId, roomId, emptyList(), null, null)
 
     override suspend fun isSpace(roomId: String): Boolean =
         mySpaces().any { it.roomId == roomId }
@@ -1017,11 +1033,26 @@ class WebStubMatrixPort : MatrixPort {
         languageTag: String?,
         theme: String?,
         observer: CallWidgetObserver
-    ): CallSession? = null
+    ): CallSession? =
+        decodeValueOrNull(
+            requireFacade().startElementCall(
+                roomId,
+                intent.name,
+                elementCallUrl,
+                parentUrl,
+                languageTag,
+                theme,
+            ) { message ->
+                observer.onToWidget(message ?: "")
+            }.await(),
+            "startElementCall"
+        )
 
-    override fun callWidgetFromWebview(sessionId: ULong, message: String): Boolean = false
+    override fun callWidgetFromWebview(sessionId: ULong, message: String): Boolean =
+        requireFacade().callWidgetFromWebview(sessionId.toDouble(), message)
 
-    override fun stopElementCall(sessionId: ULong): Boolean = false
+    override fun stopElementCall(sessionId: ULong): Boolean =
+        requireFacade().stopElementCall(sessionId.toDouble())
 
     override suspend fun roomPreview(idOrAlias: String): Result<RoomPreview> =
         runCatching {

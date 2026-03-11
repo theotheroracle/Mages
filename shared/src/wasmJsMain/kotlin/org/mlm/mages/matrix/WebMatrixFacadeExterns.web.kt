@@ -430,6 +430,33 @@ external class WebMatrixFacade {
     @JsName("sendPollEnd")
     fun sendPollEnd(roomId: String, pollEventId: String): Boolean
 
+    @JsName("sendThreadText")
+    fun sendThreadText(
+        roomId: String,
+        rootEventId: String,
+        body: String,
+        replyToEventId: String? = definedExternally,
+        latestEventId: String? = definedExternally,
+        formattedBody: String? = definedExternally,
+    ): Promise<JsBoolean>
+
+    @JsName("threadSummary")
+    fun threadSummary(
+        roomId: String,
+        rootEventId: String,
+        perPage: Int,
+        maxPages: Int
+    ): Promise<JsAny?>
+
+    @JsName("threadReplies")
+    fun threadReplies(
+        roomId: String,
+        rootEventId: String,
+        from: String? = definedExternally,
+        limit: Int,
+        forward: Boolean
+    ): Promise<JsAny?>
+
     @JsName("startCallInbox")
     fun startCallInbox(onInvite: (JsAny?) -> Unit): Double
 
@@ -462,6 +489,23 @@ external class WebMatrixFacade {
 
     @JsName("roomPredecessor")
     fun roomPredecessor(roomId: String): Promise<JsAny?>
+
+    @JsName("startElementCall")
+    fun startElementCall(
+        roomId: String,
+        intent: String,
+        elementCallUrl: String? = definedExternally,
+        parentUrl: String? = definedExternally,
+        languageTag: String? = definedExternally,
+        theme: String? = definedExternally,
+        onToWidget: (String?) -> Unit,
+    ): Promise<JsAny?>
+
+    @JsName("callWidgetFromWebview")
+    fun callWidgetFromWebview(sessionId: Double, message: String): Boolean
+
+    @JsName("stopElementCall")
+    fun stopElementCall(sessionId: Double): Boolean
 
     fun logout(): Promise<JsAny?>
 }

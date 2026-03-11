@@ -577,6 +577,34 @@ class WasmClientBridge {
       await this.client.fetch_notifications_since(sinceMs, maxRooms, maxEvents)
     );
   }
+  async send_thread_text(roomId, rootEventId, body, replyToEventId, latestEventId, formattedBody) {
+    return await this.client.send_thread_text(
+      roomId,
+      rootEventId,
+      body,
+      replyToEventId ?? undefined,
+      latestEventId ?? undefined,
+      formattedBody ?? undefined
+    );
+  }
+
+  async thread_summary(roomId, rootEventId, perPage, maxPages) {
+    return normalizeWasmValue(
+      await this.client.thread_summary(roomId, rootEventId, perPage, maxPages)
+    );
+  }
+
+  async thread_replies(roomId, rootEventId, from, limit, forward) {
+    return normalizeWasmValue(
+      await this.client.thread_replies(
+        roomId,
+        rootEventId,
+        from ?? undefined,
+        limit,
+        forward
+      )
+    );
+  }
 
   start_call_inbox(onInvite) {
     return this.client.start_call_inbox((payload) => {
@@ -624,6 +652,28 @@ class WasmClientBridge {
 
   async room_predecessor(roomId) {
     return normalizeWasmValue(await this.client.room_predecessor(roomId));
+  }
+
+  async start_element_call(roomId, intent, elementCallUrl, parentUrl, languageTag, theme, onToWidget) {
+    return normalizeWasmValue(
+      await this.client.start_element_call(
+        roomId,
+        intent,
+        elementCallUrl ?? undefined,
+        parentUrl ?? undefined,
+        languageTag ?? undefined,
+        theme ?? undefined,
+        (message) => onToWidget(message ?? "")
+      )
+    );
+  }
+
+  call_widget_from_webview(sessionId, message) {
+    return this.client.call_widget_from_webview(sessionId, message);
+  }
+
+  stop_element_call(sessionId) {
+    return this.client.stop_element_call(sessionId);
   }
 
   get_pinned_events(roomId) {
@@ -1253,6 +1303,24 @@ export class WebMatrixFacade {
   sendPollEnd(roomId, pollEventId) {
     return this.client.send_poll_end(roomId, pollEventId);
   }
+  async sendThreadText(roomId, rootEventId, body, replyToEventId, latestEventId, formattedBody) {
+    return await this.client.send_thread_text(
+      roomId,
+      rootEventId,
+      body,
+      replyToEventId,
+      latestEventId,
+      formattedBody
+    );
+  }
+
+  async threadSummary(roomId, rootEventId, perPage, maxPages) {
+    return await this.client.thread_summary(roomId, rootEventId, perPage, maxPages);
+  }
+
+  async threadReplies(roomId, rootEventId, from, limit, forward) {
+    return await this.client.thread_replies(roomId, rootEventId, from, limit, forward);
+  }
 
   startCallInbox(onInvite) {
     return this.client.start_call_inbox(onInvite);
@@ -1296,6 +1364,26 @@ export class WebMatrixFacade {
 
   async roomPredecessor(roomId) {
     return await this.client.room_predecessor(roomId);
+  }
+
+  async startElementCall(roomId, intent, elementCallUrl, parentUrl, languageTag, theme, onToWidget) {
+    return await this.client.start_element_call(
+      roomId,
+      intent,
+      elementCallUrl,
+      parentUrl,
+      languageTag,
+      theme,
+      onToWidget
+    );
+  }
+
+  callWidgetFromWebview(sessionId, message) {
+    return this.client.call_widget_from_webview(sessionId, message);
+  }
+
+  stopElementCall(sessionId) {
+    return this.client.stop_element_call(sessionId);
   }
 
   observeRoomList(onReset, onUpdate) {
