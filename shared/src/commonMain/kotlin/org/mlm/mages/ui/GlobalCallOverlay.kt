@@ -82,6 +82,7 @@ fun GlobalCallOverlay(
         // WebView
         CallWebViewHost(
             widgetUrl = s.widgetUrl,
+            minimized = isMin,
             widgetBaseUrl = s.widgetBaseUrl,
             modifier = webViewModifier,
             onMessageFromWidget = { msg -> callManager.onMessageFromWidget(msg) },

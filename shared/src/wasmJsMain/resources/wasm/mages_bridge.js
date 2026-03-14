@@ -1619,8 +1619,14 @@ export function removeElementCallIframe() {
     elementCallIframe = null;
   }
 
+  if (elementCallContainer) {
+    if (elementCallContainer.parentNode) {
+      elementCallContainer.parentNode.removeChild(elementCallContainer);
+    }
+    elementCallContainer = null;
+  }
+
   elementCallOnMessage = null;
-  elementCallContainer = null;
 }
 
 export function setElementCallMinimized(minimized) {

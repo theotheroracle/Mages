@@ -14,6 +14,7 @@ expect fun CallWebViewHost(
     onMessageFromWidget: (String) -> Unit,
     onClosed: () -> Unit,
     onMinimizeRequested: () -> Unit,
+    minimized: Boolean,
     widgetBaseUrl: String?,
     modifier: Modifier = Modifier,
     onAttachController: (CallWebViewController?) -> Unit

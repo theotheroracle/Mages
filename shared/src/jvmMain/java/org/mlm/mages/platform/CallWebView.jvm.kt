@@ -39,6 +39,7 @@ actual fun CallWebViewHost(
     onMessageFromWidget: (String) -> Unit,
     onClosed: () -> Unit,
     onMinimizeRequested: () -> Unit,
+    minimized: Boolean,
     widgetBaseUrl: String?,
     modifier: Modifier,
     onAttachController: (CallWebViewController?) -> Unit

@@ -7,7 +7,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 
-// Element-specific actions that the SDK doesn't handle
 private val ELEMENT_SPECIFIC_ACTIONS = setOf(
     "io.element.device_mute",
     "io.element.join",
@@ -49,9 +48,7 @@ actual fun CallWebViewHost(
     DisposableEffect(widgetUrl) {
         val containerId = "element-call-container"
 
-        // Create callback that filters Element-specific actions
         val wrappedOnMessage: (String) -> Unit = { message ->
-            // Try to extract action from message
             val action = extractActionFromMessage(message)
             
             // Handle Element-specific actions locally
@@ -67,12 +64,10 @@ actual fun CallWebViewHost(
                         onMinimizeRequested()
                     }
                     else -> {
-                        // Forward to SDK
                         onMessageFromWidget(message)
                     }
                 }
             } else {
-                // Forward to SDK
                 onMessageFromWidget(message)
             }
         }
@@ -84,7 +79,7 @@ actual fun CallWebViewHost(
                 wrappedOnMessage
             )
         } catch (e: Exception) {
-            // Handle error silently
+            e.printStackTrace()
         }
 
         onAttachController(controller)
@@ -112,7 +107,6 @@ actual fun CallWebViewHost(
 
 private fun extractActionFromMessage(message: String): String? {
     return try {
-        // Simple regex to extract action from JSON-like string
         val actionRegex = Regex(""""action"\s*:\s*"([^"]+)"""")
         actionRegex.find(message)?.groupValues?.get(1)
     } catch (e: Exception) {
