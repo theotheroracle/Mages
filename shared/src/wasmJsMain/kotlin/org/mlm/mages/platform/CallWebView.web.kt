@@ -44,16 +44,13 @@ actual fun CallWebViewHost(
         }
     }
 
-    // Setup iframe
     DisposableEffect(widgetUrl) {
         val containerId = "element-call-container"
 
         val wrappedOnMessage: (String) -> Unit = { message ->
             val action = extractActionFromMessage(message)
             
-            // Handle Element-specific actions locally
             if (action in ELEMENT_SPECIFIC_ACTIONS) {
-                // Send response back to Element Call FIRST (like JVM/Android do)
                 sendElementActionResponse(message)
                 
                 when (action) {
@@ -87,9 +84,7 @@ actual fun CallWebViewHost(
         onDispose {
             try {
                 removeElementCallIframe()
-            } catch (e: Exception) {
-                // Handle error silently
-            }
+            } catch (_: Exception) { }
             onAttachController(null)
         }
     }

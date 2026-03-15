@@ -25,9 +25,7 @@ import coil3.compose.AsyncImage
 import coil3.compose.LocalPlatformContext
 import coil3.request.ImageRequest
 import coil3.request.crossfade
-import org.mlm.mages.AttachmentKind
 import org.mlm.mages.matrix.PollData
-import org.mlm.mages.matrix.ReactionSummary
 import org.mlm.mages.matrix.SendState
 import org.mlm.mages.ui.components.core.Avatar
 import org.mlm.mages.ui.components.core.MarkdownText
@@ -53,56 +51,39 @@ fun TimelineSenderAvatar(
 
 @Composable
 fun MessageBubble(
-    isMine: Boolean,
-    body: String,
-    formattedBody: String? = null,
-    sender: String?,
-    senderAvatarPath: String? = null,
-    senderId: String? = null,
-    timestamp: Long,
-    groupedWithPrev: Boolean,
-    groupedWithNext: Boolean,
-    isDm: Boolean,
-    showMessageAvatars: Boolean = true,
+    model: MessageBubbleModel,
     modifier: Modifier = Modifier,
-    reactionSummaries: List<ReactionSummary> = emptyList(),
-    eventId: String? = null,
-    replyPreview: String? = null,
-    replySender: String? = null,
-    sendState: SendState? = null,
-    thumbPath: String? = null,
-    attachmentKind: AttachmentKind? = null,
-    attachmentWidth: Int? = null,
-    attachmentHeight: Int? = null,
-    durationMs: Long? = null,
-    lastReadByOthersTs: Long? = null,
     onLongPress: (() -> Unit)? = null,
     onReact: ((String) -> Unit)? = null,
     onOpenAttachment: (() -> Unit)? = null,
-    isEdited: Boolean = false,
-    poll: PollData? = null,
     onVote: ((String) -> Unit)? = null,
     onEndPoll: (() -> Unit)? = null,
     onReplyPreviewClick: (() -> Unit)? = null,
-    threadCount: Int? = null,
     onOpenThread: (() -> Unit)? = null,
-    onSenderClick: (() -> Unit)? = null
+    onSenderClick: (() -> Unit)? = null,
+    headerContent: (@Composable ColumnScope.() -> Unit)? = null,
+    footerContent: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
-    val showSenderInfo = !isMine && !isDm && !groupedWithPrev && !sender.isNullOrBlank()
-    val showSenderAvatar = showSenderInfo && showMessageAvatars && !senderId.isNullOrBlank()
+    val isMine = model.isMine
+    val isDm = model.isDm
+    val showMessageAvatars = model.showMessageAvatars
+    val grouping = model.grouping
+
+    val showSenderInfo = !isMine && !isDm && !grouping.groupedWithPrev && !model.sender?.displayName.isNullOrBlank()
+    val showSenderAvatar = showSenderInfo && showMessageAvatars && !model.sender?.id.isNullOrBlank()
     val incomingBubbleStartPadding = if (!isMine && !isDm && showMessageAvatars) {
         Spacing.lg
     } else {
         0.dp
     }
-    val renderedBody = formattedBody.toMarkdownMentionsOrNull() ?: body
+    val renderedBody = model.formattedBody.toMarkdownMentionsOrNull() ?: model.body
 
     Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(
                 horizontal = Spacing.md,
-                vertical = if (groupedWithPrev) 1.dp else 3.dp
+                vertical = if (grouping.groupedWithPrev) 1.dp else 3.dp
             ),
         horizontalAlignment = if (isMine) Alignment.End else Alignment.Start
     ) {
@@ -115,13 +96,13 @@ fun MessageBubble(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     TimelineSenderAvatar(
-                        senderDisplayName = sender,
-                        senderAvatarUrl = senderAvatarPath,
-                        senderId = senderId
+                        senderDisplayName = model.sender?.displayName,
+                        senderAvatarUrl = model.sender?.avatarPath,
+                        senderId = model.sender?.id ?: ""
                     )
                     Spacer(Modifier.width(Spacing.sm))
                     Text(
-                        text = sender,
+                        text = model.sender?.displayName ?: "",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Medium
@@ -129,7 +110,7 @@ fun MessageBubble(
                 }
             } else {
                 Text(
-                    text = sender,
+                    text = model.sender?.displayName ?: "",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Medium,
@@ -140,6 +121,8 @@ fun MessageBubble(
             }
         }
 
+        headerContent?.invoke(this)
+
         BubbleWidthWrapper(
             modifier = Modifier.padding(start = incomingBubbleStartPadding),
             fractionOfParent = 0.75f
@@ -147,35 +130,39 @@ fun MessageBubble(
             Surface(
                 color = if (isMine) MaterialTheme.colorScheme.primaryContainer
                 else MaterialTheme.colorScheme.secondaryContainer,
-                shape = bubbleShape(isMine, groupedWithPrev, groupedWithNext),
+                shape = bubbleShape(isMine, grouping.groupedWithPrev, grouping.groupedWithNext),
                 tonalElevation = if (isMine) 3.dp else 1.dp,
                 modifier = Modifier
                     .combinedClickable(onClick = {}, onLongClick = onLongPress)
             ) {
                 Column(Modifier.padding(Spacing.md)) {
-                    if (!replyPreview.isNullOrBlank()) {
-                        ReplyPreview(isMine, replySender, replyPreview, onReplyPreviewClick)
-                        Spacer(Modifier.height(Spacing.sm))
+                    model.reply?.let { reply ->
+                        if (!reply.body.isNullOrBlank()) {
+                            ReplyPreview(isMine, reply.sender, reply.body, onReplyPreviewClick)
+                            Spacer(Modifier.height(Spacing.sm))
+                        }
                     }
 
-                    AttachmentThumbnail(
-                        thumbPath = thumbPath,
-                        attachmentKind = attachmentKind,
-                        durationMs = durationMs,
-                        isMine = isMine,
-                        onOpen = onOpenAttachment,
-                        attachmentWidth = attachmentWidth,
-                        attachmentHeight = attachmentHeight
-                    )
+                    model.attachment?.let { attachment ->
+                        AttachmentThumbnail(
+                            thumbPath = attachment.thumbPath,
+                            attachmentKind = attachment.kind,
+                            durationMs = attachment.durationMs,
+                            isMine = isMine,
+                            onOpen = onOpenAttachment,
+                            attachmentWidth = attachment.width,
+                            attachmentHeight = attachment.height
+                        )
+                    }
 
-                    if (poll != null) {
+                    if (model.poll != null) {
                         PollBubble(
-                            poll = poll,
+                            poll = model.poll,
                             isMine = isMine,
                             onVote = { optId -> onVote?.invoke(optId) },
                             onEndPoll = { onEndPoll?.invoke() }
                         )
-                    } else if (body.isNotBlank()) {
+                    } else if (model.body.isNotBlank()) {
                         MarkdownText(
                             text = renderedBody,
                             color = if (isMine) MaterialTheme.colorScheme.onPrimaryContainer
@@ -183,7 +170,7 @@ fun MessageBubble(
                         )
                     }
 
-                    if (isEdited) {
+                    if (model.isEdited) {
                         Text(
                             text = "(edited)",
                             style = MaterialTheme.typography.labelSmall,
@@ -194,36 +181,40 @@ fun MessageBubble(
                     }
 
                     Text(
-                        text = formatTime(timestamp),
+                        text = formatTime(model.timestamp),
                         style = MaterialTheme.typography.labelSmall,
                         color = (if (isMine) MaterialTheme.colorScheme.onPrimaryContainer
                         else MaterialTheme.colorScheme.onSurfaceVariant).copy(alpha = 0.7f),
                         modifier = Modifier.padding(top = Spacing.xs)
                     )
 
-                    if (isMine && sendState == SendState.Failed) {
+                    if (isMine && model.sendState == SendState.Failed) {
                         FailedIndicator()
                     }
                 }
             }
         }
 
-        if (reactionSummaries.isNotEmpty()) {
+        footerContent?.invoke(this)
+
+        if (model.reactions.isNotEmpty()) {
             ReactionChipsRow(
-                chips = reactionSummaries,
+                chips = model.reactions,
                 onClick = onReact,
                 modifier = Modifier.padding(top = 2.dp)
             )
         }
 
-        if (threadCount != null && threadCount > 0 && onOpenThread != null) {
-            if (reactionSummaries.isNotEmpty()) {
-                Spacer(Modifier.height(2.dp))
+        model.thread?.let { thread ->
+            if (thread.count > 0 && onOpenThread != null) {
+                if (model.reactions.isNotEmpty()) {
+                    Spacer(Modifier.height(2.dp))
+                }
+                ThreadIndicator(
+                    count = thread.count,
+                    onClick = onOpenThread
+                )
             }
-            ThreadIndicator(
-                count = threadCount,
-                onClick = onOpenThread
-            )
         }
     }
 }
@@ -292,7 +283,7 @@ private fun ReplyPreview(isMine: Boolean, sender: String?, body: String, onClick
 @Composable
 private fun AttachmentThumbnail(
     thumbPath: String?,
-    attachmentKind: AttachmentKind?,
+    attachmentKind: org.mlm.mages.AttachmentKind?,
     durationMs: Long?,
     isMine: Boolean,
     onOpen: (() -> Unit)?,
@@ -306,7 +297,7 @@ private fun AttachmentThumbnail(
     val accentColor = if (isMine) MaterialTheme.colorScheme.primary
     else MaterialTheme.colorScheme.secondary
 
-    if (attachmentKind == AttachmentKind.File) {
+    if (attachmentKind == org.mlm.mages.AttachmentKind.File) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -373,7 +364,7 @@ private fun AttachmentThumbnail(
                     .heightIn(min = 120.dp, max = 300.dp)
             )
 
-            if (attachmentKind == AttachmentKind.Video && durationMs != null) {
+            if (attachmentKind == org.mlm.mages.AttachmentKind.Video && durationMs != null) {
                 DurationBadge(durationMs, Modifier.align(Alignment.BottomEnd).padding(6.dp))
             }
         }
@@ -386,7 +377,7 @@ private fun AttachmentThumbnail(
                 .border(1.dp, contentColor.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
         ) {
             Text(
-                text = if (attachmentKind == AttachmentKind.Video) "Video" else "Image",
+                text = if (attachmentKind == org.mlm.mages.AttachmentKind.Video) "Video" else "Image",
                 modifier = Modifier.padding(12.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = contentColor
@@ -475,4 +466,80 @@ fun BubbleWidthWrapper(
             placeable.place(0, 0)
         }
     }
+}
+
+@Composable
+fun MessageBubble(
+    isMine: Boolean,
+    body: String,
+    formattedBody: String? = null,
+    sender: String? = null,
+    senderAvatarPath: String? = null,
+    senderId: String? = null,
+    timestamp: Long,
+    groupedWithPrev: Boolean,
+    groupedWithNext: Boolean,
+    isDm: Boolean,
+    showMessageAvatars: Boolean = true,
+    modifier: Modifier = Modifier,
+    reactionSummaries: List<org.mlm.mages.matrix.ReactionSummary> = emptyList(),
+    eventId: String? = null,
+    replyPreview: String? = null,
+    replySender: String? = null,
+    sendState: SendState? = null,
+    thumbPath: String? = null,
+    attachmentKind: org.mlm.mages.AttachmentKind? = null,
+    attachmentWidth: Int? = null,
+    attachmentHeight: Int? = null,
+    durationMs: Long? = null,
+    lastReadByOthersTs: Long? = null,
+    onLongPress: (() -> Unit)? = null,
+    onReact: ((String) -> Unit)? = null,
+    onOpenAttachment: (() -> Unit)? = null,
+    isEdited: Boolean = false,
+    poll: PollData? = null,
+    onVote: ((String) -> Unit)? = null,
+    onEndPoll: (() -> Unit)? = null,
+    onReplyPreviewClick: (() -> Unit)? = null,
+    threadCount: Int? = null,
+    onOpenThread: (() -> Unit)? = null,
+    onSenderClick: (() -> Unit)? = null
+) {
+    val model = MessageBubbleModel(
+        eventId = eventId,
+        isMine = isMine,
+        body = body,
+        formattedBody = formattedBody,
+        sender = MessageSenderUi(
+            id = senderId,
+            displayName = sender,
+            avatarPath = senderAvatarPath,
+        ),
+        timestamp = timestamp,
+        isDm = isDm,
+        showMessageAvatars = showMessageAvatars,
+        grouping = MessageGroupingUi(
+            groupedWithPrev = groupedWithPrev,
+            groupedWithNext = groupedWithNext,
+        ),
+        reactions = reactionSummaries,
+        reply = if (replyPreview != null) MessageReplyUi(replySender, replyPreview) else null,
+        sendState = sendState,
+        attachment = if (attachmentKind != null) MessageAttachmentUi(thumbPath, attachmentKind, attachmentWidth, attachmentHeight, durationMs) else null,
+        isEdited = isEdited,
+        poll = poll,
+        thread = threadCount?.let { MessageThreadUi(it) },
+    )
+    MessageBubble(
+        model = model,
+        modifier = modifier,
+        onLongPress = onLongPress,
+        onReact = onReact,
+        onOpenAttachment = onOpenAttachment,
+        onVote = onVote,
+        onEndPoll = onEndPoll,
+        onReplyPreviewClick = onReplyPreviewClick,
+        onOpenThread = onOpenThread,
+        onSenderClick = onSenderClick,
+    )
 }

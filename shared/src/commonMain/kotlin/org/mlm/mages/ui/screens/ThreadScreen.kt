@@ -35,6 +35,8 @@ import org.mlm.mages.ui.components.core.StatusBanner
 import org.mlm.mages.ui.components.core.BannerType
 import org.mlm.mages.ui.components.core.formatDisplayName
 import org.mlm.mages.ui.components.message.MessageBubble
+import org.mlm.mages.ui.components.message.ReactionChipsRow
+import org.mlm.mages.ui.components.message.ReactionChipStyle
 import org.mlm.mages.ui.components.sheets.MessageActionSheet
 import org.mlm.mages.ui.components.snackbar.SnackbarManager
 import org.mlm.mages.ui.components.snackbar.rememberErrorPoster
@@ -469,7 +471,12 @@ private fun ThreadRootMessage(
 
             if (reactionSummaries.isNotEmpty()) {
                 Spacer(Modifier.height(Spacing.sm))
-                ThreadReactionChipsRow(chips = reactionSummaries, onReact = onReact)
+                ReactionChipsRow(
+                    chips = reactionSummaries,
+                    style = ReactionChipStyle.ThreadRoot,
+                    maxVisible = 6,
+                    onClick = onReact,
+                )
             }
 
             Spacer(Modifier.height(Spacing.sm))
@@ -590,43 +597,6 @@ private fun ThreadReplyMessage(
                 attachmentHeight = event.attachment?.height,
                 durationMs = event.attachment?.durationMs
             )
-        }
-    }
-}
-
-@Composable
-private fun ThreadReactionChipsRow(
-    chips: List<ReactionSummary>,
-    onReact: (String) -> Unit
-) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        chips.take(6).forEach { chip ->
-            Surface(
-                onClick = { onReact(chip.key) },
-                color = if (chip.mine)
-                    MaterialTheme.colorScheme.primaryContainer
-                else
-                    MaterialTheme.colorScheme.surfaceContainerLow,
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(chip.key, style = MaterialTheme.typography.bodyMedium)
-                    if (chip.count > 1) {
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            "${chip.count}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
         }
     }
 }
