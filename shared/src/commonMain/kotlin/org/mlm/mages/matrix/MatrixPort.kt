@@ -286,8 +286,8 @@ data class RoomPowerLevelChanges(
 data class LatestRoomEvent(
     val eventId: String,
     val sender: String,
-    val body: String?,
-    val msgtype: String?,
+    val body: String? = null,
+    val msgtype: String? = null,
     val eventType: String,
     val timestamp: Long,
     val isRedacted: Boolean,
@@ -328,9 +328,9 @@ data class MemberSummary(
 data class KnockRequestSummary(
     val eventId: String,
     val userId: String,
-    val displayName: String?,
-    val avatarUrl: String?,
-    val reason: String?,
+    val displayName: String? = null,
+    val avatarUrl: String? = null,
+    val reason: String? = null,
     val tsMs: Long?,
     val isSeen: Boolean,
 )
@@ -343,8 +343,8 @@ data class ThreadPage(
     val rootEventId: String,
     val roomId: String,
     val messages: List<MessageEvent>,
-    val nextBatch: String?,
-    val prevBatch: String?
+    val nextBatch: String? = null,
+    val prevBatch: String? = null
 )
 @Serializable
 data class ThreadSummary(val rootEventId: String, val roomId: String, val count: Long, val latestTsMs: Long?)
@@ -363,10 +363,10 @@ data class SpaceInfo(
 @Serializable
 data class SpaceChildInfo(
     val roomId: String,
-    val name: String?,
-    val topic: String?,
-    val alias: String?,
-    val avatarUrl: String?,
+    val name: String? = null,
+    val topic: String? = null,
+    val alias: String? = null,
+    val avatarUrl: String? = null,
     val isSpace: Boolean,
     val memberCount: Long,
     val worldReadable: Boolean,
@@ -377,7 +377,7 @@ data class SpaceChildInfo(
 @Serializable
 data class SpaceHierarchyPage(
     val children: List<SpaceChildInfo>,
-    val nextBatch: String?
+    val nextBatch: String? = null
 )
 
 @Serializable
@@ -419,8 +419,8 @@ enum class CallIntent {
 data class CallSession(
     val sessionId: ULong,
     val widgetUrl: String,
-    val widgetBaseUrl: String?,
-    val parentUrl: String?,
+    val widgetBaseUrl: String? = null,
+    val parentUrl: String? = null,
 )
 
 interface CallWidgetObserver {
@@ -437,7 +437,7 @@ data class HomeserverLoginDetails(
 interface MatrixPort {
 
     @Serializable
-    data class SyncStatus(val phase: SyncPhase, val message: String?)
+    data class SyncStatus(val phase: SyncPhase, val message: String? = null)
     @Serializable
     enum class SyncPhase { Idle, Running, BackingOff, Error }
     @Serializable

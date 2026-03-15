@@ -238,7 +238,7 @@ class WebStubMatrixPort : MatrixPort {
         attachment: AttachmentInfo,
         body: String?,
         onProgress: ((Long, Long?) -> Unit)?
-    ): Boolean = requireFacade().sendExistingAttachment(roomId, wasmJson.encodeToString(attachment), body)
+    ): Boolean = requireFacade().sendExistingAttachment(roomId, wasmJson.encodeToString(attachment), body).await<JsBoolean>().toBoolean()
 
     override fun isLoggedIn(): Boolean = facade?.isLoggedIn() == true
 
@@ -250,7 +250,7 @@ class WebStubMatrixPort : MatrixPort {
     }
 
     override suspend fun setTyping(roomId: String, typing: Boolean): Boolean =
-        requireFacade().setTyping(roomId, typing)
+        requireFacade().setTyping(roomId, typing).await<JsBoolean>().toBoolean()
 
     override fun whoami(): String? = facade?.whoami()
 
@@ -392,13 +392,17 @@ class WebStubMatrixPort : MatrixPort {
     override suspend fun paginateForward(roomId: String, count: Int): Boolean =
         requireFacade().paginateForwards(roomId, count).await<JsBoolean>().toBoolean()
 
-    override suspend fun markRead(roomId: String): Boolean = requireFacade().markRead(roomId)
+    override suspend fun markRead(roomId: String): Boolean =
+        requireFacade().markRead(roomId).await<JsBoolean>().toBoolean()
 
     override suspend fun markReadAt(roomId: String, eventId: String): Boolean =
-        requireFacade().markReadAt(roomId, eventId)
+        requireFacade().markReadAt(roomId, eventId).await<JsBoolean>().toBoolean()
+
+    override suspend fun markFullyReadAt(roomId: String, eventId: String): Boolean =
+        requireFacade().markFullyReadAt(roomId, eventId).await<JsBoolean>().toBoolean()
 
     override suspend fun react(roomId: String, eventId: String, emoji: String): Boolean =
-        requireFacade().react(roomId, eventId, emoji)
+        requireFacade().react(roomId, eventId, emoji).await<JsBoolean>().toBoolean()
 
     override suspend fun reply(
         roomId: String,
@@ -596,7 +600,7 @@ class WebStubMatrixPort : MatrixPort {
         mime: String,
         filename: String,
         onProgress: ((Long, Long?) -> Unit)?
-    ): Boolean = requireFacade().sendAttachmentBytes(roomId, filename, mime, data.toJsReference())
+    ): Boolean = requireFacade().sendAttachmentBytes(roomId, filename, mime, data.toJsReference()).await<JsBoolean>().toBoolean()
 
     override suspend fun downloadAttachmentToCache(
         info: AttachmentInfo,
@@ -668,9 +672,6 @@ class WebStubMatrixPort : MatrixPort {
 
     override fun observeOwnReceipt(roomId: String, observer: ReceiptsObserver): ULong =
         requireFacade().observeOwnReceipt(roomId) { observer.onChanged() }.toULong()
-
-    override suspend fun markFullyReadAt(roomId: String, eventId: String): Boolean =
-        requireFacade().markFullyReadAt(roomId, eventId)
 
     override suspend fun encryptionCatchupOnce(): Boolean = false
 
@@ -914,24 +915,24 @@ class WebStubMatrixPort : MatrixPort {
         mySpaces().any { it.roomId == roomId }
 
     override suspend fun mySpaces(): List<SpaceInfo> =
-        wasmJson.decodeFromJsonElement(requireFacade().mySpaces().toJsonElement())
+        wasmJson.decodeFromJsonElement(requireFacade().mySpaces().await<WebSpacesValue?>().toJsonElement())
 
     override suspend fun createSpace(
         name: String,
         topic: String?,
         isPublic: Boolean,
         invitees: List<String>
-    ): String? = requireFacade().createSpace(name, topic, isPublic, wasmJson.encodeToString(invitees).toJsReference())
+    ): String? = requireFacade().createSpace(name, topic, isPublic, wasmJson.encodeToString(invitees).toJsReference()).await<JsString?>()?.toString()
 
     override suspend fun spaceAddChild(
         spaceId: String,
         childRoomId: String,
         order: String?,
         suggested: Boolean?
-    ): Boolean = requireFacade().spaceAddChild(spaceId, childRoomId, order, suggested)
+    ): Boolean = requireFacade().spaceAddChild(spaceId, childRoomId, order, suggested).await<JsBoolean>().toBoolean()
 
     override suspend fun spaceRemoveChild(spaceId: String, childRoomId: String): Boolean =
-        requireFacade().spaceRemoveChild(spaceId, childRoomId)
+        requireFacade().spaceRemoveChild(spaceId, childRoomId).await<JsBoolean>().toBoolean()
 
     override suspend fun spaceHierarchy(
         spaceId: String,
@@ -941,12 +942,12 @@ class WebStubMatrixPort : MatrixPort {
         suggestedOnly: Boolean
     ): SpaceHierarchyPage? = runCatching {
         wasmJson.decodeFromJsonElement<SpaceHierarchyPage>(
-            requireFacade().spaceHierarchy(spaceId, from, limit, maxDepth, suggestedOnly).toJsonElement()
+            requireFacade().spaceHierarchy(spaceId, from, limit, maxDepth, suggestedOnly).await<WebSpaceHierarchyValue?>().toJsonElement()
         )
     }.getOrNull()
 
     override suspend fun spaceInviteUser(spaceId: String, userId: String): Boolean =
-        requireFacade().spaceInviteUser(spaceId, userId)
+        requireFacade().spaceInviteUser(spaceId, userId).await<JsBoolean>().toBoolean()
 
     override suspend fun setPresence(presence: Presence, status: String?): Result<Unit> =
         unitResult(

@@ -157,20 +157,24 @@ class WasmClientBridge {
     return await this.client.paginate_forwards(roomId, count);
   }
 
-  mark_read(roomId) {
-    return this.client.mark_read(roomId);
+  async mark_read(roomId) {
+    return await this.client.mark_read(roomId);
   }
 
-  mark_read_at(roomId, eventId) {
-    return this.client.mark_read_at(roomId, eventId);
+  async mark_read_at(roomId, eventId) {
+    return await this.client.mark_read_at(roomId, eventId);
   }
 
-  react(roomId, eventId, emoji) {
-    return this.client.react(roomId, eventId, emoji);
+  async mark_fully_read_at(roomId, eventId) {
+    return await this.client.mark_fully_read_at(roomId, eventId);
   }
 
-  set_typing(roomId, typing) {
-    return this.client.set_typing(roomId, typing);
+  async react(roomId, eventId, emoji) {
+    return await this.client.react(roomId, eventId, emoji);
+  }
+
+  async set_typing(roomId, typing) {
+    return await this.client.set_typing(roomId, typing);
   }
 
   observe_typing(roomId, onUpdate) {
@@ -183,8 +187,8 @@ class WasmClientBridge {
     return this.client.unobserve_typing(id);
   }
 
-  reactions_for_event(roomId, eventId) {
-    return normalizeWasmValue(this.client.reactions_for_event(roomId, eventId));
+  async reactions_for_event(roomId, eventId) {
+    return normalizeWasmValue(await this.client.reactions_for_event(roomId, eventId));
   }
 
   reactions_batch(roomId, eventIdsJson) {
@@ -222,8 +226,8 @@ class WasmClientBridge {
     return normalizeWasmValue(await this.client.list_invited() ?? []);
   }
 
-  accept_invite(roomId) {
-    return this.client.accept_invite(roomId);
+  async accept_invite(roomId) {
+    return await this.client.accept_invite(roomId);
   }
 
   leave_room(roomId) {
@@ -244,12 +248,12 @@ class WasmClientBridge {
     return normalizeWasmValue(await this.client.room_profile(roomId));
   }
 
-  set_room_name(roomId, name) {
-    return this.client.set_room_name(roomId, name);
+  async set_room_name(roomId, name) {
+    return await this.client.set_room_name(roomId, name);
   }
 
-  set_room_topic(roomId, topic) {
-    return this.client.set_room_topic(roomId, topic);
+  async set_room_topic(roomId, topic) {
+    return await this.client.set_room_topic(roomId, topic);
   }
 
   async room_notification_mode(roomId) {
@@ -260,8 +264,8 @@ class WasmClientBridge {
     return await this.client.set_room_notification_mode(roomId, mode);
   }
 
-  room_power_levels(roomId) {
-    return normalizeWasmValue(this.client.room_power_levels(roomId));
+  async room_power_levels(roomId) {
+    return normalizeWasmValue(await this.client.room_power_levels(roomId));
   }
 
   async get_user_power_level(roomId, userId) {
@@ -423,36 +427,36 @@ class WasmClientBridge {
     return this.client.can_user_redact_other(roomId, userId);
   }
 
-  update_power_level_for_user(roomId, userId, powerLevel) {
-    return this.client.update_power_level_for_user(roomId, userId, powerLevel);
+  async update_power_level_for_user(roomId, userId, powerLevel) {
+    return await this.client.update_power_level_for_user(roomId, userId, powerLevel);
   }
 
-  apply_power_level_changes(roomId, changesJson) {
-    return this.client.apply_power_level_changes(roomId, changesJson);
+  async apply_power_level_changes(roomId, changesJson) {
+    return await this.client.apply_power_level_changes(roomId, changesJson);
   }
 
-  ban_user(roomId, userId, reason) {
-    return this.client.ban_user(roomId, userId, reason ?? undefined);
+  async ban_user(roomId, userId, reason) {
+    return await this.client.ban_user(roomId, userId, reason ?? undefined);
   }
 
-  unban_user(roomId, userId, reason) {
-    return this.client.unban_user(roomId, userId, reason ?? undefined);
+  async unban_user(roomId, userId, reason) {
+    return await this.client.unban_user(roomId, userId, reason ?? undefined);
   }
 
-  kick_user(roomId, userId, reason) {
-    return this.client.kick_user(roomId, userId, reason ?? undefined);
+  async kick_user(roomId, userId, reason) {
+    return await this.client.kick_user(roomId, userId, reason ?? undefined);
   }
 
-  invite_user(roomId, userId) {
-    return this.client.invite_user(roomId, userId);
+  async invite_user(roomId, userId) {
+    return await this.client.invite_user(roomId, userId);
   }
 
-  enable_room_encryption(roomId) {
-    return this.client.enable_room_encryption(roomId);
+  async enable_room_encryption(roomId) {
+    return await this.client.enable_room_encryption(roomId);
   }
 
-  report_content(roomId, eventId, score, reason) {
-    return this.client.report_content(roomId, eventId, score ?? undefined, reason ?? undefined);
+  async report_content(roomId, eventId, score, reason) {
+    return await this.client.report_content(roomId, eventId, score ?? undefined, reason ?? undefined);
   }
 
   report_room(roomId, reason) {
@@ -511,20 +515,20 @@ class WasmClientBridge {
     return normalizeBridgeValue(this.client.room_tags(roomId));
   }
 
-  set_room_favourite(roomId, favourite) {
-    return this.client.set_room_favourite(roomId, favourite);
+  async set_room_favourite(roomId, favourite) {
+    return await this.client.set_room_favourite(roomId, favourite);
   }
 
-  set_room_low_priority(roomId, lowPriority) {
-    return this.client.set_room_low_priority(roomId, lowPriority);
+  async set_room_low_priority(roomId, lowPriority) {
+    return await this.client.set_room_low_priority(roomId, lowPriority);
   }
 
   async dm_peer_user_id(roomId) {
     return await this.client.dm_peer_user_id(roomId) ?? null;
   }
 
-  mark_fully_read_at(roomId, eventId) {
-    return this.client.mark_fully_read_at(roomId, eventId);
+  async mark_fully_read_at(roomId, eventId) {
+    return await this.client.mark_fully_read_at(roomId, eventId);
   }
 
   observe_receipts(roomId, onChanged) {
@@ -755,25 +759,25 @@ class WasmClientBridge {
     return this.client.ensure_dm(userId) ?? null;
   }
 
-  my_spaces() {
-    return normalizeWasmValue(this.client.my_spaces() ?? []);
+  async my_spaces() {
+    return normalizeWasmValue(await this.client.my_spaces() ?? []);
   }
 
-  create_space(name, topic, isPublic, invitees) {
-    return this.client.create_space(name, topic ?? undefined, isPublic, invitees) ?? null;
+  async create_space(name, topic, isPublic, invitees) {
+    return await this.client.create_space(name, topic ?? undefined, isPublic, invitees) ?? null;
   }
 
-  space_add_child(spaceId, childRoomId, order, suggested) {
-    return this.client.space_add_child(spaceId, childRoomId, order ?? undefined, suggested ?? undefined);
+  async space_add_child(spaceId, childRoomId, order, suggested) {
+    return await this.client.space_add_child(spaceId, childRoomId, order ?? undefined, suggested ?? undefined);
   }
 
-  space_remove_child(spaceId, childRoomId) {
-    return this.client.space_remove_child(spaceId, childRoomId);
+  async space_remove_child(spaceId, childRoomId) {
+    return await this.client.space_remove_child(spaceId, childRoomId);
   }
 
-  space_hierarchy(spaceId, from, limit, maxDepth, suggestedOnly) {
+  async space_hierarchy(spaceId, from, limit, maxDepth, suggestedOnly) {
     return normalizeWasmValue(
-      this.client.space_hierarchy(
+      await this.client.space_hierarchy(
         spaceId,
         from ?? undefined,
         limit,
@@ -1448,38 +1452,38 @@ export class WebMatrixFacade {
     return this.client.ensure_dm(userId);
   }
 
-  mySpaces() {
-    return this.client.my_spaces();
+  async mySpaces() {
+    return await this.client.my_spaces();
   }
 
-  createSpace(name, topic, isPublic, invitees) {
+  async createSpace(name, topic, isPublic, invitees) {
     const parsedInvitees = Array.isArray(invitees) ? invitees : JSON.parse(invitees);
-    return this.client.create_space(name, topic ?? undefined, isPublic, parsedInvitees);
+    return await this.client.create_space(name, topic ?? undefined, isPublic, parsedInvitees);
   }
 
-  spaceAddChild(spaceId, childRoomId, order, suggested) {
-    return this.client.space_add_child(spaceId, childRoomId, order ?? undefined, suggested ?? undefined);
+  async spaceAddChild(spaceId, childRoomId, order, suggested) {
+    return await this.client.space_add_child(spaceId, childRoomId, order ?? undefined, suggested ?? undefined);
   }
 
-  spaceRemoveChild(spaceId, childRoomId) {
-    return this.client.space_remove_child(spaceId, childRoomId);
+  async spaceRemoveChild(spaceId, childRoomId) {
+    return await this.client.space_remove_child(spaceId, childRoomId);
   }
 
-  spaceHierarchy(spaceId, from, limit, maxDepth, suggestedOnly) {
-    return this.client.space_hierarchy(spaceId, from ?? undefined, limit, maxDepth ?? undefined, suggestedOnly);
+  async spaceHierarchy(spaceId, from, limit, maxDepth, suggestedOnly) {
+    return await this.client.space_hierarchy(spaceId, from ?? undefined, limit, maxDepth ?? undefined, suggestedOnly);
   }
 
-  spaceInviteUser(spaceId, userId) {
-    return this.client.space_invite_user(spaceId, userId);
+  async spaceInviteUser(spaceId, userId) {
+    return await this.client.space_invite_user(spaceId, userId);
   }
 
-  sendAttachmentBytes(roomId, filename, mime, data) {
+  async sendAttachmentBytes(roomId, filename, mime, data) {
     const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-    return this.client.send_attachment_bytes(roomId, filename, mime, bytes);
+    return await this.client.send_attachment_bytes(roomId, filename, mime, bytes);
   }
 
-  sendExistingAttachment(roomId, attachmentJson, body) {
-    return this.client.send_existing_attachment(roomId, attachmentJson, body ?? undefined);
+  async sendExistingAttachment(roomId, attachmentJson, body) {
+    return await this.client.send_existing_attachment(roomId, attachmentJson, body ?? undefined);
   }
 
   downloadAttachmentToCacheFile(infoJson, filenameHint) {

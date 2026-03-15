@@ -16,18 +16,23 @@ use crate::{
     LiveLocationObserver, MessageEvent, Presence, ReceiptsObserver, RecoveryObserver,
     RecoveryState, RecoveryStateObserver, RoomDirectoryVisibility, RoomHistoryVisibility,
     RoomJoinRule, RoomListCmd, RoomListEntry, RoomListObserver, RoomPowerLevelChanges, RoomSummary,
-    SasEmojis, SasPhase, SendObserver, SendState, SendUpdate, SyncObserver, SyncPhase, SyncStatus,
-    TimelineDiffKind, TimelineManager, TimelineObserver, TypingObserver, Url, UrlOrQuery,
-    VerificationInboxObserver, VerificationObserver, emit_timeline_reset_filled,
-    latest_room_event_for, map_vec_diff, missing_reply_event_id, timeline_event_filter,
+    SasEmojis, SasPhase, SendObserver, SendState, SendUpdate, SpaceChildInfo, SpaceHierarchyPage,
+    SpaceInfo, SyncObserver, SyncPhase, SyncStatus, TimelineDiffKind, TimelineManager,
+    TimelineObserver, TypingObserver, Url, UrlOrQuery, VerificationInboxObserver,
+    VerificationObserver, emit_timeline_reset_filled, latest_room_event_for, map_vec_diff,
+    missing_reply_event_id, timeline_event_filter,
 };
 use crate::{RenderedNotification, RoomPreview, RoomPreviewMembership};
 use futures_util::StreamExt;
 use futures_util::future::{AbortHandle, Abortable};
+use js_int::UInt;
 use js_sys::Function;
 use matrix_sdk::RoomMemberships;
+use matrix_sdk::attachment::AttachmentConfig;
 use matrix_sdk::authentication::oauth::registration::language_tags::LanguageTag;
 use matrix_sdk::encryption::verification::{Verification, VerificationRequest};
+use matrix_sdk::room::Receipts;
+use matrix_sdk::ruma::events::reaction::ReactionEventContent;
 use matrix_sdk::ruma::{
     OwnedDeviceId, OwnedUserId,
     events::{
@@ -45,15 +50,27 @@ use matrix_sdk::ruma::{
     room::JoinRuleSummary,
 };
 use matrix_sdk::ruma::{
+    SpaceChildOrder,
     api::client::relations::get_relating_events_with_rel_type_and_event_type as get_relating,
     events::{
         TimelineEventType,
         beacon::BeaconEventContent,
         beacon_info::BeaconInfoEventContent,
-        relation::{RelationType, Thread as ThreadRel},
+        relation::{Annotation, RelationType, Thread as ThreadRel},
         room::message::{Relation as MsgRelation, RoomMessageEventContent},
     },
     room::RoomType,
+};
+use matrix_sdk::ruma::{
+    api::client::receipt::create_receipt::v3::ReceiptType,
+    events::{
+        receipt::ReceiptThread,
+        room::message::{
+            FileInfo, FileMessageEventContent, ImageMessageEventContent, VideoInfo,
+            VideoMessageEventContent,
+        },
+        room::{EncryptedFile, ImageInfo, MediaSource},
+    },
 };
 use matrix_sdk::sleep::sleep;
 use matrix_sdk::widget::{
@@ -1443,22 +1460,94 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn send_existing_attachment(
+    pub async fn send_existing_attachment(
         &self,
         room_id: String,
         attachment_json: String,
         body: Option<String>,
     ) -> bool {
-        let attachment: AttachmentInfo = match serde_json::from_str(&attachment_json) {
+        let att: AttachmentInfo = match serde_json::from_str(&attachment_json) {
             Ok(a) => a,
             Err(_) => return false,
         };
-        self.with_client(|c| c.send_existing_attachment(room_id, attachment, body, None))
+
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
+                return false;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return false;
+            };
+
+            let default_caption = match att.kind {
+                crate::AttachmentKind::Image => "Image",
+                crate::AttachmentKind::Video => "Video",
+                crate::AttachmentKind::File => "File",
+            };
+            let caption = body.unwrap_or_else(|| default_caption.to_string());
+
+            let media_source = if let Some(enc) = att.encrypted.as_ref() {
+                let ef: EncryptedFile = match serde_json::from_str(&enc.json) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        eprintln!("send_existing_attachment: enc parse error: {e}");
+                        return false;
+                    }
+                };
+                MediaSource::Encrypted(Box::new(ef))
+            } else {
+                MediaSource::Plain(att.mxc_uri.clone().into())
+            };
+
+            let msgtype = match att.kind {
+                crate::AttachmentKind::Image => {
+                    let mut info = ImageInfo::new();
+                    info.mimetype = att.mime.clone();
+                    info.size = att.size_bytes.and_then(UInt::new);
+                    info.width = att.width.map(UInt::from);
+                    info.height = att.height.map(UInt::from);
+
+                    let mut img = ImageMessageEventContent::new(caption.clone(), media_source);
+                    img.info = Some(Box::new(info));
+                    matrix_sdk::ruma::events::room::message::MessageType::Image(img)
+                }
+
+                crate::AttachmentKind::Video => {
+                    let mut info = VideoInfo::new();
+                    info.mimetype = att.mime.clone();
+                    info.size = att.size_bytes.and_then(UInt::new);
+                    info.width = att.width.map(UInt::from);
+                    info.height = att.height.map(UInt::from);
+                    info.duration = att
+                        .duration_ms
+                        .map(|ms| std::time::Duration::from_millis(ms));
+
+                    let mut vid = VideoMessageEventContent::new(caption.clone(), media_source);
+                    vid.info = Some(Box::new(info));
+                    matrix_sdk::ruma::events::room::message::MessageType::Video(vid)
+                }
+
+                crate::AttachmentKind::File => {
+                    let mut info = FileInfo::new();
+                    info.mimetype = att.mime.clone();
+                    info.size = att.size_bytes.and_then(UInt::new);
+
+                    let mut file = FileMessageEventContent::new(caption.clone(), media_source);
+                    file.info = Some(Box::new(info));
+                    matrix_sdk::ruma::events::room::message::MessageType::File(file)
+                }
+            };
+
+            let content = RoomMessageEventContent::new(msgtype);
+            return room.send(content).await.is_ok();
+        }
+
+        self.with_client(|c| c.send_existing_attachment(room_id, att, body, None))
             .unwrap_or(false)
     }
 
     #[wasm_bindgen]
-    pub fn send_attachment_bytes(
+    pub async fn send_attachment_bytes(
         &self,
         room_id: String,
         filename: String,
@@ -1466,6 +1555,24 @@ impl WasmClient {
         data: js_sys::Uint8Array,
     ) -> bool {
         let bytes = data.to_vec();
+
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
+                return false;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return false;
+            };
+            let Ok(content_type) = mime.parse::<mime::Mime>() else {
+                return false;
+            };
+
+            return room
+                .send_attachment(filename, &content_type, bytes, AttachmentConfig::new())
+                .await
+                .is_ok();
+        }
+
         self.with_client(|c| c.send_attachment_bytes(room_id, filename, mime, bytes, None))
             .unwrap_or(false)
     }
@@ -1522,12 +1629,6 @@ impl WasmClient {
             Ok(Err(e)) => format!("error: {:?}", e),
             Err(e) => format!("client error: {:?}", e),
         }
-    }
-
-    #[wasm_bindgen]
-    pub fn mark_fully_read_at(&self, room_id: String, event_id: String) -> bool {
-        self.with_client(|c| c.mark_fully_read_at(room_id, event_id))
-            .unwrap_or(false)
     }
 
     #[wasm_bindgen]
@@ -2824,68 +2925,6 @@ impl WasmClient {
         match v {
             Ok(s) => to_json(&s),
             Err(_) => JsValue::NULL,
-        }
-    }
-
-    #[wasm_bindgen]
-    pub fn my_spaces(&self) -> JsValue {
-        let v = self.with_client(|c| c.my_spaces()).unwrap_or_default();
-        to_json(&v)
-    }
-
-    #[wasm_bindgen]
-    pub fn create_space(
-        &self,
-        name: String,
-        topic: Option<String>,
-        is_public: bool,
-        invitees: Vec<String>,
-    ) -> Option<String> {
-        self.with_client(|c| c.create_space(name, topic, is_public, invitees).ok())
-            .ok()
-            .flatten()
-    }
-
-    #[wasm_bindgen]
-    pub fn space_add_child(
-        &self,
-        space_id: String,
-        child_room_id: String,
-        order: Option<String>,
-        suggested: Option<bool>,
-    ) -> bool {
-        self.with_client(|c| {
-            c.space_add_child(space_id, child_room_id, order, suggested)
-                .is_ok()
-        })
-        .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn space_remove_child(&self, space_id: String, child_room_id: String) -> bool {
-        self.with_client(|c| c.space_remove_child(space_id, child_room_id).is_ok())
-            .unwrap_or(false)
-    }
-
-    #[wasm_bindgen]
-    pub fn space_hierarchy(
-        &self,
-        space_id: String,
-        from: Option<String>,
-        limit: u32,
-        max_depth: Option<u32>,
-        suggested_only: bool,
-    ) -> JsValue {
-        let v = self
-            .with_client(|c| {
-                c.space_hierarchy(space_id, from, limit, max_depth, suggested_only)
-                    .ok()
-            })
-            .ok()
-            .flatten();
-        match v {
-            Some(p) => to_json(&p),
-            None => JsValue::NULL,
         }
     }
 
@@ -4454,10 +4493,6 @@ async fn homeserver_login_details_from_client(client: &SdkClient) -> HomeserverL
 }
 
 wasm_delegate_bool! {
-    react(room_id: String, event_id: String, emoji: String);
-    mark_read(room_id: String);
-    mark_read_at(room_id: String, event_id: String);
-    set_typing(room_id: String, typing: bool);
     accept_invite(room_id: String);
     set_room_name(room_id: String, name: String);
     set_room_topic(room_id: String, topic: String);
@@ -4469,7 +4504,6 @@ wasm_delegate_bool! {
     set_room_favourite(room_id: String, fav: bool);
     set_room_low_priority(room_id: String, low: bool);
     is_space(room_id: String);
-    space_invite_user(space_id: String, user_id: String)
 }
 
 wasm_delegate_json! {
@@ -4484,6 +4518,363 @@ wasm_delegate_bool_result! {
 
 #[wasm_bindgen]
 impl WasmClient {
+    #[wasm_bindgen]
+    pub async fn react(&self, room_id: String, event_id: String, emoji: String) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
+                return false;
+            };
+            let Some(tl) = state.timeline_mgr.timeline_for(&rid).await else {
+                return false;
+            };
+            let Ok(eid) = matrix_sdk::ruma::EventId::parse(&event_id) else {
+                return false;
+            };
+            let Some(item) = tl.item_by_event_id(&eid).await else {
+                return false;
+            };
+
+            let item_id = item.identifier();
+            return tl.toggle_reaction(&item_id, &emoji).await.is_ok();
+        }
+
+        self.with_client(|c| c.react(room_id, event_id, emoji))
+            .unwrap_or(false)
+    }
+
+    #[wasm_bindgen]
+    pub async fn mark_read(&self, room_id: String) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
+                return false;
+            };
+            let Some(tl) = state.timeline_mgr.timeline_for(&rid).await else {
+                return false;
+            };
+
+            return tl.mark_as_read(ReceiptType::ReadPrivate).await.is_ok();
+        }
+
+        self.with_client(|c| c.mark_read(room_id)).unwrap_or(false)
+    }
+
+    #[wasm_bindgen]
+    pub async fn mark_read_at(&self, room_id: String, event_id: String) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
+                return false;
+            };
+            let Ok(eid) = matrix_sdk::ruma::EventId::parse(&event_id) else {
+                return false;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return false;
+            };
+
+            return room
+                .send_single_receipt(
+                    ReceiptType::ReadPrivate,
+                    ReceiptThread::Unthreaded,
+                    eid.to_owned(),
+                )
+                .await
+                .is_ok();
+        }
+
+        self.with_client(|c| c.mark_read_at(room_id, event_id))
+            .unwrap_or(false)
+    }
+
+    #[wasm_bindgen]
+    pub async fn mark_fully_read_at(&self, room_id: String, event_id: String) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
+                return false;
+            };
+            let Ok(eid) = matrix_sdk::ruma::OwnedEventId::try_from(event_id) else {
+                return false;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return false;
+            };
+
+            let receipts = matrix_sdk::room::Receipts::new()
+                .private_read_receipt(eid.clone())
+                .fully_read_marker(eid);
+
+            return room.send_multiple_receipts(receipts).await.is_ok();
+        }
+
+        self.with_client(|c| c.mark_fully_read_at(room_id, event_id))
+            .unwrap_or(false)
+    }
+
+    #[wasm_bindgen]
+    pub async fn set_typing(&self, room_id: String, typing: bool) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
+                return false;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return false;
+            };
+
+            return room.typing_notice(typing).await.is_ok();
+        }
+
+        self.with_client(|c| c.set_typing(room_id, typing))
+            .unwrap_or(false)
+    }
+
+    #[wasm_bindgen]
+    pub async fn space_invite_user(&self, space_id: String, user_id: String) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid) = OwnedRoomId::try_from(space_id.clone()) else {
+                return false;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return false;
+            };
+            let Ok(uid) = matrix_sdk::ruma::OwnedUserId::try_from(user_id) else {
+                return false;
+            };
+
+            return room.invite_user_by_id(&uid).await.is_ok();
+        }
+
+        self.with_client(|c| c.space_invite_user(space_id, user_id))
+            .unwrap_or(false)
+    }
+
+    #[wasm_bindgen]
+    pub async fn my_spaces(&self) -> JsValue {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let mut out = Vec::new();
+
+            for room in state.client.joined_space_rooms() {
+                let rid = room.room_id().to_owned();
+                let name = room
+                    .display_name()
+                    .await
+                    .map(|d| d.to_string())
+                    .unwrap_or_else(|_| rid.to_string());
+                let topic = room.topic();
+                let member_count = room.joined_members_count();
+                let is_encrypted = matches!(
+                    room.encryption_state(),
+                    matrix_sdk::EncryptionState::Encrypted
+                );
+                let is_public = room.is_public().unwrap_or(false);
+
+                out.push(crate::SpaceInfo {
+                    room_id: rid.to_string(),
+                    name,
+                    topic,
+                    member_count,
+                    is_encrypted,
+                    is_public,
+                    avatar_url: room.avatar_url().map(|mxc| mxc.to_string()),
+                });
+            }
+
+            return to_json(&out);
+        }
+
+        let v = self.with_client(|c| c.my_spaces()).unwrap_or_default();
+        to_json(&v)
+    }
+
+    #[wasm_bindgen]
+    pub async fn create_space(
+        &self,
+        name: String,
+        topic: Option<String>,
+        is_public: bool,
+        invitees: Vec<String>,
+    ) -> Option<String> {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let mut req = matrix_sdk::ruma::api::client::room::create_room::v3::Request::new();
+
+            let mut cc =
+                matrix_sdk::ruma::api::client::room::create_room::v3::CreationContent::new();
+            cc.room_type = Some(RoomType::Space);
+            req.creation_content = Some(matrix_sdk::ruma::serde::Raw::new(&cc).ok()?);
+
+            req.name = Some(name);
+            req.topic = topic;
+            req.visibility = if is_public {
+                matrix_sdk::ruma::api::client::room::Visibility::Public
+            } else {
+                matrix_sdk::ruma::api::client::room::Visibility::Private
+            };
+            req.preset = Some(if is_public {
+                matrix_sdk::ruma::api::client::room::create_room::v3::RoomPreset::PublicChat
+            } else {
+                matrix_sdk::ruma::api::client::room::create_room::v3::RoomPreset::PrivateChat
+            });
+
+            if !invitees.is_empty() {
+                let parsed = invitees
+                    .into_iter()
+                    .map(|u| u.parse())
+                    .collect::<Result<Vec<_>, _>>()
+                    .ok()?;
+                req.invite = parsed;
+            }
+
+            let resp = state.client.send(req).await.ok()?;
+            return Some(resp.room_id.to_string());
+        }
+
+        self.with_client(|c| c.create_space(name, topic, is_public, invitees).ok())
+            .ok()
+            .flatten()
+    }
+
+    #[wasm_bindgen]
+    pub async fn space_add_child(
+        &self,
+        space_id: String,
+        child_room_id: String,
+        order: Option<String>,
+        suggested: Option<bool>,
+    ) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid_space) = matrix_sdk::ruma::OwnedRoomId::try_from(space_id.as_str()) else {
+                return false;
+            };
+            let Ok(rid_child) = matrix_sdk::ruma::OwnedRoomId::try_from(child_room_id.as_str())
+            else {
+                return false;
+            };
+            let Some(room) = state.client.get_room(&rid_space) else {
+                return false;
+            };
+
+            let via: Vec<_> = rid_child
+                .server_name()
+                .map(|s| s.to_owned())
+                .into_iter()
+                .collect();
+
+            let mut content =
+                matrix_sdk::ruma::events::space::child::SpaceChildEventContent::new(via);
+
+            if let Some(o) = order {
+                let Ok(ord) = <&SpaceChildOrder>::try_from(o.as_str()) else {
+                    return false;
+                };
+                content.order = Some(ord.to_owned());
+            }
+
+            content.suggested = suggested.unwrap_or(false);
+
+            return room
+                .send_state_event_for_key(&rid_child, content)
+                .await
+                .is_ok();
+        }
+
+        self.with_client(|c| {
+            c.space_add_child(space_id, child_room_id, order, suggested)
+                .is_ok()
+        })
+        .unwrap_or(false)
+    }
+
+    #[wasm_bindgen]
+    pub async fn space_remove_child(&self, space_id: String, child_room_id: String) -> bool {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid_space) = matrix_sdk::ruma::OwnedRoomId::try_from(space_id.as_str()) else {
+                return false;
+            };
+            let Some(room) = state.client.get_room(&rid_space) else {
+                return false;
+            };
+
+            return room
+                .send_state_event_raw(
+                    "m.space.child",
+                    child_room_id.as_str(),
+                    serde_json::json!({}),
+                )
+                .await
+                .is_ok();
+        }
+
+        self.with_client(|c| c.space_remove_child(space_id, child_room_id).is_ok())
+            .unwrap_or(false)
+    }
+
+    #[wasm_bindgen]
+    pub async fn space_hierarchy(
+        &self,
+        space_id: String,
+        from: Option<String>,
+        limit: u32,
+        max_depth: Option<u32>,
+        suggested_only: bool,
+    ) -> JsValue {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            let Ok(rid_space) = matrix_sdk::ruma::OwnedRoomId::try_from(space_id.as_str()) else {
+                return JsValue::NULL;
+            };
+
+            let mut req =
+                matrix_sdk::ruma::api::client::space::get_hierarchy::v1::Request::new(rid_space);
+            req.from = from;
+            if limit > 0 {
+                req.limit = Some(limit.into());
+            }
+            req.max_depth = max_depth.map(Into::into);
+            req.suggested_only = suggested_only;
+
+            let Ok(resp) = state.client.send(req).await else {
+                return JsValue::NULL;
+            };
+
+            let children = resp
+                .rooms
+                .into_iter()
+                .map(|chunk| {
+                    let s = chunk.summary;
+                    let is_space = matches!(s.room_type, Some(RoomType::Space));
+
+                    crate::SpaceChildInfo {
+                        room_id: s.room_id.to_string(),
+                        name: s.name,
+                        topic: s.topic,
+                        alias: s.canonical_alias.map(|a| a.to_string()),
+                        avatar_url: s.avatar_url.map(|m| m.to_string()),
+                        is_space,
+                        member_count: s.num_joined_members.into(),
+                        world_readable: s.world_readable,
+                        guest_can_join: s.guest_can_join,
+                        suggested: false,
+                    }
+                })
+                .collect();
+
+            return to_json(&crate::SpaceHierarchyPage {
+                children,
+                next_batch: resp.next_batch,
+            });
+        }
+
+        let v = self
+            .with_client(|c| {
+                c.space_hierarchy(space_id, from, limit, max_depth, suggested_only)
+                    .ok()
+            })
+            .ok()
+            .flatten();
+
+        match v {
+            Some(p) => to_json(&p),
+            None => JsValue::NULL,
+        }
+    }
+
     pub async fn list_members(&self, room_id: String) -> JsValue {
         if let Some(state) = self.async_state.borrow().as_ref().cloned() {
             let Ok(rid) = OwnedRoomId::try_from(room_id) else {

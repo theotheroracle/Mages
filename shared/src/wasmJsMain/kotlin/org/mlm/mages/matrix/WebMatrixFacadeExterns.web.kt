@@ -101,18 +101,21 @@ external class WebMatrixFacade {
     fun paginateForwards(roomId: String, count: Int): Promise<JsBoolean>
 
     @JsName("markRead")
-    fun markRead(roomId: String): Boolean
+    fun markRead(roomId: String): Promise<JsBoolean>
 
     @JsName("markReadAt")
-    fun markReadAt(roomId: String, eventId: String): Boolean
+    fun markReadAt(roomId: String, eventId: String): Promise<JsBoolean>
 
-    fun react(roomId: String, eventId: String, emoji: String): Boolean
+    @JsName("markFullyReadAt")
+    fun markFullyReadAt(roomId: String, eventId: String): Promise<JsBoolean>
+
+    fun react(roomId: String, eventId: String, emoji: String): Promise<JsBoolean>
     fun reply(roomId: String, inReplyTo: String, body: String, formattedBody: String? = definedExternally): Promise<JsBoolean>
     fun edit(roomId: String, targetEventId: String, newBody: String, formattedBody: String? = definedExternally): Promise<JsBoolean>
     fun redact(roomId: String, eventId: String, reason: String? = definedExternally): Promise<JsBoolean>
 
     @JsName("setTyping")
-    fun setTyping(roomId: String, typing: Boolean): Boolean
+    fun setTyping(roomId: String, typing: Boolean): Promise<JsBoolean>
 
     @JsName("observeTyping")
     fun observeTyping(roomId: String, onUpdate: (JsAny?) -> Unit): Double
@@ -222,28 +225,28 @@ external class WebMatrixFacade {
     fun enableRoomEncryption(roomId: String): Boolean
 
     @JsName("mySpaces")
-    fun mySpaces(): WebSpacesValue?
+    fun mySpaces(): Promise<WebSpacesValue?>
 
     @JsName("createSpace")
-    fun createSpace(name: String, topic: String? = definedExternally, isPublic: Boolean, invitees: JsAny): String?
+    fun createSpace(name: String, topic: String? = definedExternally, isPublic: Boolean, invitees: JsAny): Promise<JsAny?>
 
     @JsName("spaceAddChild")
-    fun spaceAddChild(spaceId: String, childRoomId: String, order: String? = definedExternally, suggested: Boolean? = definedExternally): Boolean
+    fun spaceAddChild(spaceId: String, childRoomId: String, order: String? = definedExternally, suggested: Boolean? = definedExternally): Promise<JsBoolean>
 
     @JsName("spaceRemoveChild")
-    fun spaceRemoveChild(spaceId: String, childRoomId: String): Boolean
+    fun spaceRemoveChild(spaceId: String, childRoomId: String): Promise<JsBoolean>
 
     @JsName("spaceHierarchy")
-    fun spaceHierarchy(spaceId: String, from: String? = definedExternally, limit: Int, maxDepth: Int? = definedExternally, suggestedOnly: Boolean): WebSpaceHierarchyValue?
+    fun spaceHierarchy(spaceId: String, from: String? = definedExternally, limit: Int, maxDepth: Int? = definedExternally, suggestedOnly: Boolean): Promise<WebSpaceHierarchyValue?>
 
     @JsName("spaceInviteUser")
-    fun spaceInviteUser(spaceId: String, userId: String): Boolean
+    fun spaceInviteUser(spaceId: String, userId: String): Promise<JsBoolean>
 
     @JsName("sendAttachmentBytes")
-    fun sendAttachmentBytes(roomId: String, filename: String, mime: String, data: JsAny): Boolean
+    fun sendAttachmentBytes(roomId: String, filename: String, mime: String, data: JsAny): Promise<JsBoolean>
 
     @JsName("sendExistingAttachment")
-    fun sendExistingAttachment(roomId: String, attachmentJson: String, body: String? = definedExternally): Boolean
+    fun sendExistingAttachment(roomId: String, attachmentJson: String, body: String? = definedExternally): Promise<JsBoolean>
 
     @JsName("downloadAttachmentToCacheFile")
     fun downloadAttachmentToCacheFile(infoJson: String, filenameHint: String? = definedExternally): String?
@@ -280,9 +283,6 @@ external class WebMatrixFacade {
 
     @JsName("getPresence")
     fun getPresence(userId: String): Promise<JsAny?>
-
-    @JsName("markFullyReadAt")
-    fun markFullyReadAt(roomId: String, eventId: String): Boolean
 
     @JsName("observeReceipts")
     fun observeReceipts(roomId: String, onChanged: () -> Unit): Double
