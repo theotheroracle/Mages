@@ -24,6 +24,7 @@ import okio.buffer
 import okio.sink
 import org.koin.mp.KoinPlatform
 import org.mlm.mages.ui.components.AttachmentData
+import org.mlm.mages.ui.components.AttachmentSourceKind
 import java.io.File
 
 actual fun getDeviceDisplayName(): String {
@@ -35,6 +36,8 @@ actual fun getDeviceDisplayName(): String {
         "Mages (Android - $manufacturer $model)"
     }
 }
+
+actual fun platformSystemBarColorScheme(): ColorScheme? = null
 
 actual fun deleteDirectory(path: String): Boolean {
     return File(path).deleteRecursively()
@@ -102,6 +105,7 @@ actual suspend fun PlatformFile.toAttachmentData(): AttachmentData =
             path = outFile.absolutePath,
             mimeType = this@toAttachmentData.mimeType().toString(),
             fileName = name,
-            sizeBytes = outFile.length()
+            sizeBytes = outFile.length(),
+            sourceKind = AttachmentSourceKind.LocalPath
         )
     }

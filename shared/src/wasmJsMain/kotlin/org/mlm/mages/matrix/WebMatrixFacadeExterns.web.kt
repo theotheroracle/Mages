@@ -39,6 +39,12 @@ external class WebMatrixFacade {
     fun loginOauthLoopbackAvailable(): Boolean
     @JsName("loginSsoLoopbackAvailable")
     fun loginSsoLoopbackAvailable(): Boolean
+    @JsName("loginSsoBrowser")
+    fun loginSsoBrowser(redirectUri: String, deviceName: String? = definedExternally): Promise<JsAny?>
+    @JsName("loginOauthBrowser")
+    fun loginOauthBrowser(redirectUri: String, deviceName: String? = definedExternally): Promise<JsAny?>
+    @JsName("finishLoginFromRedirect")
+    fun finishLoginFromRedirect(callback: String, expectedState: String, expectedIssuer: String? = definedExternally): Promise<JsBoolean>
     @JsName("homeserverLoginDetails")
     fun homeserverLoginDetails(): WebHomeserverLoginDetailsValue?
     fun whoami(): String?
@@ -101,8 +107,8 @@ external class WebMatrixFacade {
     fun markReadAt(roomId: String, eventId: String): Boolean
 
     fun react(roomId: String, eventId: String, emoji: String): Boolean
-    fun reply(roomId: String, inReplyTo: String, body: String): Promise<JsBoolean>
-    fun edit(roomId: String, targetEventId: String, newBody: String): Promise<JsBoolean>
+    fun reply(roomId: String, inReplyTo: String, body: String, formattedBody: String? = definedExternally): Promise<JsBoolean>
+    fun edit(roomId: String, targetEventId: String, newBody: String, formattedBody: String? = definedExternally): Promise<JsBoolean>
     fun redact(roomId: String, eventId: String, reason: String? = definedExternally): Promise<JsBoolean>
 
     @JsName("setTyping")
@@ -369,6 +375,9 @@ external class WebMatrixFacade {
 
     @JsName("searchUsers")
     fun searchUsers(term: String, limit: Int): JsAny?
+
+    @JsName("searchRoom")
+    fun searchRoom(roomId: String, query: String, limit: Int, offset: Int? = definedExternally): JsAny?
 
     @JsName("getUserProfile")
     fun getUserProfile(userId: String): JsAny?

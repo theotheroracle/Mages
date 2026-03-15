@@ -539,6 +539,10 @@ class WasmClientBridge {
     return normalizeWasmValue(this.client.search_users(term, limit) ?? []);
   }
 
+  search_room(roomId, query, limit, offset) {
+    return normalizeWasmValue(this.client.search_room(roomId, query, limit, offset ?? undefined));
+  }
+
   get_user_profile(userId) {
     return normalizeWasmValue(this.client.get_user_profile(userId));
   }
@@ -555,12 +559,12 @@ class WasmClientBridge {
     return normalizeWasmValue(this.client.ignored_users() ?? []);
   }
 
-  async reply(roomId, inReplyTo, body) {
-    return await this.client.reply(roomId, inReplyTo, body);
+  async reply(roomId, inReplyTo, body, formattedBody) {
+    return await this.client.reply(roomId, inReplyTo, body, formattedBody ?? undefined);
   }
 
-  async edit(roomId, targetEventId, newBody) {
-    return await this.client.edit(roomId, targetEventId, newBody);
+  async edit(roomId, targetEventId, newBody, formattedBody) {
+    return await this.client.edit(roomId, targetEventId, newBody, formattedBody ?? undefined);
   }
 
   async redact(roomId, eventId, reason) {
@@ -933,8 +937,7 @@ export class WebMatrixFacade {
   }
 
   async sendText(roomId, body, formattedBody) {
-    void formattedBody;
-    const okResult = await this.client.send_message(roomId, body);
+    const okResult = await this.client.send_message(roomId, body, formattedBody ?? undefined);
     return okResult ? { ok: true } : err("Failed to send message");
   }
 
@@ -1027,8 +1030,7 @@ export class WebMatrixFacade {
   }
 
   joinByIdOrAlias(idOrAlias) {
-    this.client.join_by_id_or_alias(idOrAlias);
-    return true;
+    return this.client.join_by_id_or_alias(idOrAlias);
   }
 
   async listInvited() {
@@ -1253,6 +1255,10 @@ export class WebMatrixFacade {
 
   searchUsers(term, limit) {
     return this.client.search_users(term, limit);
+  }
+
+  searchRoom(roomId, query, limit, offset) {
+    return this.client.search_room(roomId, query, limit, offset ?? undefined);
   }
 
   getUserProfile(userId) {

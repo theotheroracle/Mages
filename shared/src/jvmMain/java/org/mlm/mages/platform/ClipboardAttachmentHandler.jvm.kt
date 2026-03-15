@@ -5,6 +5,7 @@ import androidx.compose.runtime.remember
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.mlm.mages.ui.components.AttachmentData
+import org.mlm.mages.ui.components.AttachmentSourceKind
 import org.mlm.mages.ui.util.guessMimeType
 import java.awt.Toolkit
 import java.awt.datatransfer.DataFlavor
@@ -54,7 +55,8 @@ private class JvmClipboardAttachmentHandler : ClipboardAttachmentHandler {
         path = absolutePath,
         mimeType = guessMimeType(name),
         fileName = name,
-        sizeBytes = length()
+        sizeBytes = length(),
+        sourceKind = AttachmentSourceKind.LocalPath
     )
 
     private fun java.awt.Image.saveToTemp(): AttachmentData? {
@@ -82,7 +84,8 @@ private class JvmClipboardAttachmentHandler : ClipboardAttachmentHandler {
             path = f.absolutePath,
             mimeType = "image/png",
             fileName = "clipboard_image.png",
-            sizeBytes = f.length()
+            sizeBytes = f.length(),
+            sourceKind = AttachmentSourceKind.LocalPath
         )
     }
 }

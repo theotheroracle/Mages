@@ -9,6 +9,8 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.draganddrop.DragAndDropEvent
 import androidx.compose.ui.draganddrop.DragAndDropTarget
 import androidx.compose.ui.draganddrop.awtTransferable
+import org.mlm.mages.ui.components.AttachmentData
+import org.mlm.mages.ui.components.AttachmentSourceKind
 import java.awt.datatransfer.DataFlavor
 import java.io.File
 import java.net.URI
@@ -18,7 +20,7 @@ actual fun Modifier.fileDrop(
     enabled: Boolean,
     onDragEnter: () -> Unit,
     onDragExit: () -> Unit,
-    onDrop: (List<String>) -> Unit
+    onDrop: (List<AttachmentData>) -> Unit
 ): Modifier = composed {
     if (!enabled) return@composed this
 
@@ -44,13 +46,17 @@ actual fun Modifier.fileDrop(
 
             override fun onDrop(event: DragAndDropEvent): Boolean {
                 val t = event.awtTransferable
+                val attachments = mutableListOf<AttachmentData>()
 
                 // Best case: OS provides actual File list
                 if (t.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
                     val raw = t.getTransferData(DataFlavor.javaFileListFlavor) as? List<*> ?: return false
-                    val paths = raw.filterIsInstance<File>().map { it.absolutePath }
-                    if (paths.isNotEmpty()) {
-                        onDrop(paths)
+                    val files = raw.filterIsInstance<File>()
+                    if (files.isNotEmpty()) {
+                        files.forEach { file ->
+                            attachments.add(file.toAttachmentData())
+                        }
+                        onDrop(attachments)
                         return true
                     }
                 }
@@ -71,8 +77,16 @@ actual fun Modifier.fileDrop(
                         .toList()
 
                     if (paths.isNotEmpty()) {
-                        onDrop(paths)
-                        return true
+                        paths.forEach { path ->
+                            val file = File(path)
+                            if (file.exists()) {
+                                attachments.add(file.toAttachmentData())
+                            }
+                        }
+                        if (attachments.isNotEmpty()) {
+                            onDrop(attachments)
+                            return true
+                        }
                     }
                 }
 
@@ -84,5 +98,15 @@ actual fun Modifier.fileDrop(
     this.dragAndDropTarget(
         shouldStartDragAndDrop = { startEvent -> eventHasFiles(startEvent) },
         target = target
+    )
+}
+
+private fun File.toAttachmentData(): AttachmentData {
+    return AttachmentData(
+        path = absolutePath,
+        mimeType = "application/octet-stream",
+        fileName = name,
+        sizeBytes = length(),
+        sourceKind = AttachmentSourceKind.LocalPath
     )
 }

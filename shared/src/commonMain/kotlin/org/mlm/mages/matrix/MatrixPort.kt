@@ -115,7 +115,7 @@ enum class Presence {
 @Serializable
 data class PresenceInfo(
     val presence: Presence,
-    val statusMsg: String?
+    val statusMsg: String? = null
 )
 
 @Serializable
@@ -652,6 +652,8 @@ interface MatrixPort {
     suspend fun loginSsoLoopback(openUrl: (String) -> Boolean, deviceName: String? = null): Boolean
 
     suspend fun loginOauthLoopback(openUrl: (String) -> Boolean, deviceName: String? = null): Boolean
+
+    suspend fun maybeFinishOauthRedirect(): Boolean = false
 
     suspend fun homeserverLoginDetails(): HomeserverLoginDetails
 

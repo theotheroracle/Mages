@@ -1,14 +1,50 @@
 package org.mlm.mages.platform
 
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
+import kotlinx.browser.document
 import org.mlm.mages.ui.components.AttachmentData
+import org.w3c.dom.events.Event
+import org.w3c.files.File
 
 @Composable
 actual fun rememberClipboardAttachmentHandler(): ClipboardAttachmentHandler {
-    return object : ClipboardAttachmentHandler {
-        override fun hasAttachment(): Boolean = false
+    val handler = remember { WebClipboardAttachmentHandler() }
 
-        override suspend fun getAttachments(): List<AttachmentData> = emptyList()
+    DisposableEffect(handler) {
+        handler.attach()
+        onDispose { handler.detach() }
+    }
+
+    return handler
+}
+
+private class WebClipboardAttachmentHandler : ClipboardAttachmentHandler {
+    private var lastFiles: List<File> = emptyList()
+
+    private val pasteHandler: (Event) -> Unit = { event ->
+        lastFiles = extractFilesFromDataTransfer(clipboardDataOf(event))
+    }
+
+    fun attach() {
+        document.addEventListener("paste", pasteHandler)
+    }
+
+    fun detach() {
+        document.removeEventListener("paste", pasteHandler)
+    }
+
+    override fun hasAttachment(): Boolean = lastFiles.isNotEmpty()
+
+    override suspend fun getAttachments(): List<AttachmentData> {
+        val out = mutableListOf<AttachmentData>()
+        for (file in lastFiles) {
+            try {
+                out += browserFileToAttachmentData(file)
+            } catch (_: Throwable) {
+            }
+        }
+        return out
     }
 }

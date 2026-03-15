@@ -2,44 +2,73 @@ package org.mlm.mages.platform
 
 import androidx.compose.material3.ColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import io.github.vinceglb.filekit.PlatformFile
 import io.github.vinceglb.filekit.mimeType
 import io.github.vinceglb.filekit.name
 import io.github.vinceglb.filekit.readBytes
+import kotlinx.browser.document
 import kotlinx.browser.window
 import org.mlm.mages.ui.components.AttachmentData
+import org.mlm.mages.ui.components.AttachmentSourceKind
+import org.w3c.dom.HTMLInputElement
+import org.w3c.files.File
 
 private val webBlobCache = mutableMapOf<String, ByteArray>()
 private var blobCounter = 0
 
-private fun generateBlobId(): String {
-    blobCounter++
-    return "webblob_$blobCounter"
-}
+private fun generateBlobId(): String = "web_blob_${blobCounter++}"
 
-actual fun getDeviceDisplayName(): String {
-    return "Mages (Web)"
-}
+actual fun getDeviceDisplayName(): String = "Mages (Web)"
 
-actual fun deleteDirectory(path: String): Boolean {
-    return false
-}
+actual fun platformSystemBarColorScheme(): ColorScheme? = null
 
 @Composable
-actual fun getDynamicColorScheme(darkTheme: Boolean, useDynamicColors: Boolean): ColorScheme? {
-    return null
+actual fun getDynamicColorScheme(
+    darkTheme: Boolean,
+    useDynamicColors: Boolean
+): ColorScheme? {return null}
+
+actual fun deleteDirectory(path: String): Boolean = false
+
+actual fun platformEmbeddedElementCallParentUrlOrNull(): String? {
+    return runCatching {
+        val parent = window.parent
+        if (parent != window) {
+            document.referrer.takeIf { it.isNotBlank() }
+        } else {
+            null
+        }
+    }.getOrNull()
 }
 
 actual fun platformEmbeddedElementCallUrlOrNull(): String? {
     return "${window.location.origin}/element-call/index.html"
 }
 
-actual fun platformEmbeddedElementCallParentUrlOrNull(): String? {
-    return window.location.href
-}
-
 actual class CameraPickerLauncher {
+    private var onResult: ((PlatformFile?) -> Unit)? = null
+
     actual fun launch() {
+        val input = document.createElement("input") as HTMLInputElement
+        input.type = "file"
+        input.accept = "image/*"
+        input.setAttribute("capture", "environment")
+        input.setAttribute("style", "display:none")
+
+        document.body?.appendChild(input)
+
+        input.addEventListener("change") {
+            val browserFile = inputSelectedFile(input)
+            onResult?.invoke(browserFile?.let { PlatformFile(it) })
+            document.body?.removeChild(input)
+        }
+
+        input.click()
+    }
+
+    fun setOnResult(callback: (PlatformFile?) -> Unit) {
+        onResult = callback
     }
 }
 
@@ -47,19 +76,26 @@ actual class CameraPickerLauncher {
 actual fun rememberCameraPickerLauncher(
     onResult: (PlatformFile?) -> Unit
 ): CameraPickerLauncher? {
-    return null
+    val launcher = remember { CameraPickerLauncher() }
+    launcher.setOnResult(onResult)
+    return launcher
+}
+
+internal suspend fun browserFileToAttachmentData(file: File): AttachmentData {
+    return PlatformFile(file).toAttachmentData()
 }
 
 actual suspend fun PlatformFile.toAttachmentData(): AttachmentData {
-    val bytes = this.readBytes()
+    val bytes = readBytes()
     val blobId = generateBlobId()
     webBlobCache[blobId] = bytes
 
     return AttachmentData(
         path = blobId,
-        mimeType = this.mimeType().toString(),
-        fileName = this.name,
-        sizeBytes = bytes.size.toLong()
+        mimeType = mimeType()?.toString() ?: "application/octet-stream",
+        fileName = name,
+        sizeBytes = bytes.size.toLong(),
+        sourceKind = AttachmentSourceKind.WebBlobToken,
     )
 }
 

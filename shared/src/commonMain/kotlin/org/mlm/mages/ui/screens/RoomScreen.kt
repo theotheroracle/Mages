@@ -505,20 +505,11 @@ fun RoomScreen(
                     onDragEnter = { isDragging = true },
                     onDragExit = {
                         isDragging = false },
-                    onDrop = { paths ->
+                    onDrop = { attachments ->
                         isDragging = false
-                        paths.firstOrNull()?.let { path ->
+                        attachments.firstOrNull()?.let { attachment ->
                             try {
-                                if (path.isNotBlank()) {
-                                    viewModel.attachFile(
-                                        AttachmentData(
-                                            path = path,
-                                            fileName = fileName(path),
-                                            mimeType = guessMimeType(fileName(path)),
-                                            sizeBytes = 0L
-                                        )
-                                    )
-                                }
+                                viewModel.attachFile(attachment)
                             } catch (e: Exception) {
                                 e.printStackTrace()
                             }

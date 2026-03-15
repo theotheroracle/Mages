@@ -17,9 +17,9 @@ use crate::{
     RecoveryState, RecoveryStateObserver, RoomDirectoryVisibility, RoomHistoryVisibility,
     RoomJoinRule, RoomListCmd, RoomListEntry, RoomListObserver, RoomPowerLevelChanges, RoomSummary,
     SasEmojis, SasPhase, SendObserver, SendState, SendUpdate, SyncObserver, SyncPhase, SyncStatus,
-    TimelineDiffKind, TimelineManager, TimelineObserver, TypingObserver, VerificationInboxObserver,
-    VerificationObserver, emit_timeline_reset_filled, latest_room_event_for, map_vec_diff,
-    missing_reply_event_id, timeline_event_filter,
+    TimelineDiffKind, TimelineManager, TimelineObserver, TypingObserver, Url, UrlOrQuery,
+    VerificationInboxObserver, VerificationObserver, emit_timeline_reset_filled,
+    latest_room_event_for, map_vec_diff, missing_reply_event_id, timeline_event_filter,
 };
 use crate::{RenderedNotification, RoomPreview, RoomPreviewMembership};
 use futures_util::StreamExt;
@@ -4329,6 +4329,85 @@ impl WasmClient {
         self.with_client(|c| c.homeserver_login_details())
             .map(|d| d.supports_oauth)
             .unwrap_or(false)
+    }
+
+    #[wasm_bindgen]
+    pub async fn login_sso_browser(
+        &self,
+        _redirect_uri: String,
+        _device_name: Option<String>,
+    ) -> JsValue {
+        to_json(&serde_json::json!({
+            "ok": false,
+            "error": "SSO is not supported on web"
+        }))
+    }
+
+    #[wasm_bindgen]
+    pub async fn login_oauth_browser(
+        &self,
+        redirect_uri: String,
+        _device_name: Option<String>,
+    ) -> JsValue {
+        let redirect = match Url::parse(&redirect_uri) {
+            Ok(v) => v,
+            Err(_) => {
+                return to_json(&serde_json::json!({
+                    "ok": false,
+                    "error": "Invalid redirect URI"
+                }));
+            }
+        };
+
+        let Some(state) = self.async_state.borrow().as_ref().cloned() else {
+            return to_json(&serde_json::json!({
+                "ok": false,
+                "error": "Client not initialized"
+            }));
+        };
+
+        // Only works if OAuth client registration was already restored/registered, or if reg. data is provided..
+        let result = state
+            .client
+            .oauth()
+            .login(redirect, None, None, None)
+            .build()
+            .await;
+
+        match result {
+            Ok(auth_data) => to_json(&serde_json::json!({
+                "ok": true,
+                "url": auth_data.url
+            })),
+            Err(e) => to_json(&serde_json::json!({
+                "ok": false,
+                "error": e.to_string()
+            })),
+        }
+    }
+
+    #[wasm_bindgen]
+    pub async fn finish_login_from_redirect(
+        &self,
+        callback_url_or_query: String,
+        _expected_state: String,
+        _expected_issuer: Option<String>,
+    ) -> bool {
+        let Some(state) = self.async_state.borrow().as_ref().cloned() else {
+            return false;
+        };
+
+        let url_or_query = match Url::parse(&callback_url_or_query) {
+            Ok(url) => UrlOrQuery::Url(url),
+            Err(_) => UrlOrQuery::Query(callback_url_or_query),
+        };
+
+        state
+            .client
+            .oauth()
+            .finish_login(url_or_query)
+            .await
+            .is_ok()
     }
 
     #[wasm_bindgen]

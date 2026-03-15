@@ -9,6 +9,8 @@ expect fun getDeviceDisplayName(): String
 
 expect fun deleteDirectory(path: String): Boolean
 
+expect fun platformSystemBarColorScheme(): ColorScheme?
+
 @Composable
 expect fun getDynamicColorScheme(darkTheme: Boolean, useDynamicColors: Boolean): ColorScheme?
 

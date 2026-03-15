@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 
 data class ShareContent(
     val text: String? = null,
+    val url: String? = null,
     val subject: String? = null,
 
     // TODO? Backwards-compatible single-file (remove later)
@@ -12,6 +13,8 @@ data class ShareContent(
 
     val filePaths: List<String> = emptyList(),
     val mimeTypes: List<String?> = emptyList(),
+    
+    val webObjectUrls: List<String> = emptyList(),
 ) {
     /** Normalized list of files, regardless of whether caller used filePath or filePaths. */
     val allFilePaths: List<String>

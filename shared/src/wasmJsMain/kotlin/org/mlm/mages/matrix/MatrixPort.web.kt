@@ -2,6 +2,7 @@
 
 package org.mlm.mages.matrix
 
+import kotlinx.browser.window
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.Flow
@@ -9,12 +10,18 @@ import kotlinx.coroutines.await
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import org.mlm.mages.AttachmentInfo
 import org.mlm.mages.MessageEvent
 import org.mlm.mages.RoomSummary
 import org.mlm.mages.platform.clearWebBlob
 import org.mlm.mages.platform.retrieveWebBlob
+import org.mlm.mages.platform.navigatorOnLine
+import org.mlm.mages.platform.documentHasFocus
+import org.mlm.mages.platform.openUrl
+import org.w3c.dom.events.Event
 import kotlin.js.JsAny
 import kotlin.js.JsBoolean
 
@@ -22,6 +29,10 @@ class WebStubMatrixPort : MatrixPort {
     private var facade: WebMatrixFacade? = null
     private var currentHs: String? = null
     private var currentAccountId: String? = null
+    private var isInForeground: Boolean = true
+
+    private var nextConnectionObserverToken: ULong = 1uL
+    private val connectionObserverStops = mutableMapOf<ULong, () -> Unit>()
 
     private fun requireFacade(): WebMatrixFacade {
         return facade ?: error("Matrix client not initialized. Wait for init call.")
@@ -311,9 +322,43 @@ class WebStubMatrixPort : MatrixPort {
             ?: error("Thumbnail generation failed")
     }
 
-    override fun observeConnection(observer: MatrixPort.ConnectionObserver): ULong = 0uL
+    override fun observeConnection(observer: MatrixPort.ConnectionObserver): ULong {
+        fun emit() {
+            val connected = navigatorOnLine() && documentHasFocus()
+            observer.onConnectionChange(
+                if (connected) {
+                    MatrixPort.ConnectionState.Connected
+                } else {
+                    MatrixPort.ConnectionState.Disconnected
+                }
+            )
+        }
 
-    override fun stopConnectionObserver(token: ULong) {}
+        val focusHandler: (Event) -> Unit = { emit() }
+        val blurHandler: (Event) -> Unit = { emit() }
+        val onlineHandler: (Event) -> Unit = { emit() }
+        val offlineHandler: (Event) -> Unit = { emit() }
+
+        window.addEventListener("focus", focusHandler)
+        window.addEventListener("blur", blurHandler)
+        window.addEventListener("online", onlineHandler)
+        window.addEventListener("offline", offlineHandler)
+
+        val token = nextConnectionObserverToken++
+        connectionObserverStops[token] = {
+            window.removeEventListener("focus", focusHandler)
+            window.removeEventListener("blur", blurHandler)
+            window.removeEventListener("online", onlineHandler)
+            window.removeEventListener("offline", offlineHandler)
+        }
+
+        emit()
+        return token
+    }
+
+    override fun stopConnectionObserver(token: ULong) {
+        connectionObserverStops.remove(token)?.invoke()
+    }
 
     override fun startVerificationInbox(observer: MatrixPort.VerificationInboxObserver): ULong =
         requireFacade().startVerificationInbox(
@@ -357,7 +402,7 @@ class WebStubMatrixPort : MatrixPort {
         body: String,
         formattedBody: String?
     ): Boolean =
-        requireFacade().reply(roomId, inReplyToEventId, body).await<JsBoolean>().toBoolean()
+        requireFacade().reply(roomId, inReplyToEventId, body, formattedBody).await<JsBoolean>().toBoolean()
 
     override suspend fun edit(
         roomId: String,
@@ -365,7 +410,7 @@ class WebStubMatrixPort : MatrixPort {
         newBody: String,
         formattedBody: String?
     ): Boolean =
-        requireFacade().edit(roomId, targetEventId, newBody).await<JsBoolean>().toBoolean()
+        requireFacade().edit(roomId, targetEventId, newBody, formattedBody).await<JsBoolean>().toBoolean()
 
     override suspend fun redact(roomId: String, eventId: String, reason: String?): Boolean =
         requireFacade().redact(roomId, eventId, reason).await<JsBoolean>().toBoolean()
@@ -506,17 +551,24 @@ class WebStubMatrixPort : MatrixPort {
     override suspend fun cancelVerificationRequest(flowId: String, otherUserId: String?): Boolean =
         requireFacade().cancelVerificationRequest(flowId, otherUserId).await<JsBoolean>().toBoolean()
 
-    override fun enterForeground() {}
+    override fun enterForeground() {
+        isInForeground = true
+    }
 
-    override fun enterBackground() {}
+    override fun enterBackground() {
+        isInForeground = false
+    }
 
     override suspend fun logout(): Boolean {
-        val ignored = requireFacade().logout().await<JsAny?>()
-        facade?.free()
-        facade = null
-        currentHs = null
-        currentAccountId = null
-        return true
+        val result = requireFacade().logout().await<JsBoolean?>()
+        val success = result?.toBoolean() ?: false
+        if (success) {
+            facade?.free()
+            facade = null
+            currentHs = null
+            currentAccountId = null
+        }
+        return success
     }
 
     override suspend fun checkVerificationRequest(userId: String, flowId: String): Boolean =
@@ -564,7 +616,10 @@ class WebStubMatrixPort : MatrixPort {
         query: String,
         limit: Int,
         offset: Int?
-    ): SearchPage = SearchPage(emptyList(), null)
+    ): SearchPage = decodeValueOrNull(
+        requireFacade().searchRoom(roomId, query, limit, offset),
+        "searchRoom"
+    ) ?: SearchPage(emptyList(), null)
 
     override suspend fun recoverWithKey(recoveryKey: String): Boolean =
         requireFacade().recoverWithKey(recoveryKey).await<JsBoolean>().toBoolean()
@@ -664,9 +719,49 @@ class WebStubMatrixPort : MatrixPort {
     override fun roomListSetUnreadOnly(token: ULong, unreadOnly: Boolean): Boolean =
         requireFacade().setRoomListUnreadOnly(token.toDouble(), unreadOnly)
 
-    override suspend fun loginSsoLoopback(openUrl: (String) -> Boolean, deviceName: String?): Boolean = false
+    override suspend fun loginSsoLoopback(openUrl: (String) -> Boolean, deviceName: String?): Boolean {
+        return false
+    }
 
-    override suspend fun loginOauthLoopback(openUrl: (String) -> Boolean, deviceName: String?): Boolean = false
+    override suspend fun loginOauthLoopback(openUrl: (String) -> Boolean, deviceName: String?): Boolean {
+        val redirectUri = "${window.location.origin}/auth/oauth"
+
+        return try {
+            val result = requireFacade()
+                .loginOauthBrowser(redirectUri, deviceName)
+                .await<JsAny?>()
+
+            val obj = result?.toJsonObject() ?: return false
+            val ok = (obj["ok"] as? JsonPrimitive)?.booleanOrNull == true
+            val url = (obj["url"] as? JsonPrimitive)?.contentOrNull
+
+            if (ok && !url.isNullOrBlank()) {
+                window.location.href = url
+                true
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    override suspend fun maybeFinishOauthRedirect(): Boolean {
+        val href = window.location.href
+        if (!href.contains("code=") && !href.contains("error=")) return false
+
+        val ok = requireFacade()
+            .finishLoginFromRedirect(href, "", null)
+            .await<JsBoolean>()
+            .toBoolean()
+
+        if (ok) {
+            window.history.replaceState(null, "", window.location.pathname)
+        }
+
+        return ok
+    }
 
     override suspend fun homeserverLoginDetails(): HomeserverLoginDetails =
         wasmJson.decodeFromJsonElement(
@@ -689,8 +784,14 @@ class WebStubMatrixPort : MatrixPort {
             requireFacade().publicRooms(server, search, limit, since).await<WebPublicRoomsPageValue?>().toJsonElement()
         )
 
-    override suspend fun joinByIdOrAlias(idOrAlias: String): Result<Unit> =
-        runCatching { requireFacade().joinByIdOrAlias(idOrAlias) }.map { }
+    override suspend fun joinByIdOrAlias(idOrAlias: String): Result<Unit> {
+        val result = requireFacade().joinByIdOrAlias(idOrAlias)
+        return if (result) {
+            Result.success(Unit)
+        } else {
+            Result.failure(IllegalStateException("Failed to join room $idOrAlias"))
+        }
+    }
 
     override suspend fun ensureDm(userId: String): String? = requireFacade().ensureDm(userId)
 

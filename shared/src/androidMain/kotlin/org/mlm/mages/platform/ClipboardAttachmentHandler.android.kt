@@ -11,6 +11,7 @@ import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.mlm.mages.ui.components.AttachmentData
+import org.mlm.mages.ui.components.AttachmentSourceKind
 import org.mlm.mages.ui.util.guessMimeType
 import java.io.File
 
@@ -73,7 +74,8 @@ private class AndroidClipboardAttachmentHandler(
             path = outFile.absolutePath,
             mimeType = mimeType,
             fileName = displayName,
-            sizeBytes = outFile.length()
+            sizeBytes = outFile.length(),
+            sourceKind = AttachmentSourceKind.LocalPath
         )
     }
 
