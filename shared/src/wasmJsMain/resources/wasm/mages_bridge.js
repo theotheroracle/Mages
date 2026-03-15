@@ -203,7 +203,11 @@ class WasmClientBridge {
   }
 
   join_by_id_or_alias(idOrAlias) {
-    return this.client.join_by_id_or_alias(idOrAlias);
+    try {
+      return this.client.join_by_id_or_alias(idOrAlias) ? true : false;
+    } catch (e) {
+      return false;
+    }
   }
 
   resolve_room_id(idOrAlias) {
@@ -733,8 +737,8 @@ class WasmClientBridge {
     return this.client.room_send_queue_set_enabled(roomId, enabled);
   }
 
-  async send_message(roomId, body) {
-    return normalizeWasmValue(await this.client.send_message(roomId, body));
+  async send_message(roomId, body, formattedBody) {
+    return normalizeWasmValue(await this.client.send_message(roomId, body, formattedBody ?? undefined));
   }
 
   observe_sends(onUpdate) {
@@ -961,12 +965,12 @@ export class WebMatrixFacade {
     return this.client.react(roomId, eventId, emoji);
   }
 
-  async reply(roomId, inReplyTo, body) {
-    return await this.client.reply(roomId, inReplyTo, body);
+  async reply(roomId, inReplyTo, body, formattedBody) {
+    return await this.client.reply(roomId, inReplyTo, body, formattedBody ?? undefined);
   }
 
-  async edit(roomId, targetEventId, newBody) {
-    return await this.client.edit(roomId, targetEventId, newBody);
+  async edit(roomId, targetEventId, newBody, formattedBody) {
+    return await this.client.edit(roomId, targetEventId, newBody, formattedBody ?? undefined);
   }
 
   async redact(roomId, eventId, reason) {
@@ -1030,7 +1034,11 @@ export class WebMatrixFacade {
   }
 
   joinByIdOrAlias(idOrAlias) {
-    return this.client.join_by_id_or_alias(idOrAlias);
+    try {
+      return this.client.join_by_id_or_alias(idOrAlias);
+    } catch (e) {
+      return false;
+    }
   }
 
   async listInvited() {

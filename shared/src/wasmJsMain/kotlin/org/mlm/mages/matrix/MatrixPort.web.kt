@@ -35,8 +35,10 @@ class WebStubMatrixPort : MatrixPort {
     private val connectionObserverStops = mutableMapOf<ULong, () -> Unit>()
 
     private fun requireFacade(): WebMatrixFacade {
-        return facade ?: error("Matrix client not initialized. Wait for init call.")
+        return facade ?: throw IllegalStateException("Matrix client not initialized. Wait for init call.")
     }
+
+    private fun requireFacadeOrNull(): WebMatrixFacade? = facade
 
     private fun decodeTimelineDiff(diffValue: JsAny?): TimelineDiff<MessageEvent>? {
         val obj = diffValue.toJsonElement() as? JsonObject ?: return null
@@ -196,7 +198,8 @@ class WebStubMatrixPort : MatrixPort {
     }
 
     override fun timelineDiffs(roomId: String): Flow<TimelineDiff<MessageEvent>> = callbackFlow {
-        val subscription = requireFacade().observeTimeline(
+        val f = requireFacadeOrNull() ?: run { close(); return@callbackFlow }
+        val subscription = f.observeTimeline(
             roomId = roomId,
             onDiff = { diffValue ->
                 runCatching {
@@ -215,7 +218,7 @@ class WebStubMatrixPort : MatrixPort {
             }
         )
         awaitClose {
-            requireFacade().unobserveTimeline(subscription)
+            requireFacadeOrNull()?.unobserveTimeline(subscription)
         }
     }
 
@@ -240,7 +243,7 @@ class WebStubMatrixPort : MatrixPort {
     override fun isLoggedIn(): Boolean = facade?.isLoggedIn() == true
 
     override fun close() {
-        facade?.free()
+        try { facade?.free() } catch (e: Exception) { }
         facade = null
         currentHs = null
         currentAccountId = null
@@ -294,13 +297,14 @@ class WebStubMatrixPort : MatrixPort {
     }
 
     override fun observeSends(): Flow<SendUpdate> = callbackFlow {
-        val token = requireFacade().observeSends { updateValue ->
+        val f = requireFacadeOrNull() ?: run { close(); return@callbackFlow }
+        val token = f.observeSends { updateValue ->
             val update = runCatching {
                 wasmJson.decodeFromJsonElement<SendUpdate>(updateValue.toJsonElement())
             }.getOrNull() ?: return@observeSends
             trySend(update)
         }
-        awaitClose { requireFacade().unobserveSends(token) }
+        awaitClose { requireFacadeOrNull()?.unobserveSends(token) }
     }
 
     override suspend fun roomTags(roomId: String): Pair<Boolean, Boolean>? =
@@ -560,15 +564,12 @@ class WebStubMatrixPort : MatrixPort {
     }
 
     override suspend fun logout(): Boolean {
-        val result = requireFacade().logout().await<JsBoolean?>()
-        val success = result?.toBoolean() ?: false
-        if (success) {
-            facade?.free()
-            facade = null
-            currentHs = null
-            currentAccountId = null
+        val f = requireFacadeOrNull() ?: return false
+        return try {
+            f.logout().await<JsBoolean?>()?.toBoolean() ?: false
+        } catch (e: Exception) {
+            false
         }
-        return success
     }
 
     override suspend fun checkVerificationRequest(userId: String, flowId: String): Boolean =
@@ -750,6 +751,8 @@ class WebStubMatrixPort : MatrixPort {
     override suspend fun maybeFinishOauthRedirect(): Boolean {
         val href = window.location.href
         if (!href.contains("code=") && !href.contains("error=")) return false
+
+        if (facade == null) return false
 
         val ok = requireFacade()
             .finishLoginFromRedirect(href, "", null)
