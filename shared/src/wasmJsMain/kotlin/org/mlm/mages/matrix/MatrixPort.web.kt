@@ -1,5 +1,3 @@
-@file:OptIn(ExperimentalWasmJsInterop::class)
-
 package org.mlm.mages.matrix
 
 import kotlinx.browser.window
@@ -20,7 +18,6 @@ import org.mlm.mages.platform.clearWebBlob
 import org.mlm.mages.platform.retrieveWebBlob
 import org.mlm.mages.platform.navigatorOnLine
 import org.mlm.mages.platform.documentHasFocus
-import org.mlm.mages.platform.openUrl
 import org.w3c.dom.events.Event
 import kotlin.js.JsAny
 import kotlin.js.JsBoolean

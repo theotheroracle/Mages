@@ -21,7 +21,6 @@ actual fun rememberShareHandler(): (ShareContent) -> Unit {
     }
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private suspend fun shareContent(content: ShareContent) {
     val title = content.subject?.trim()?.takeIf { it.isNotEmpty() }
     val text = content.text?.trim()?.takeIf { it.isNotEmpty() }
@@ -84,7 +83,6 @@ private suspend fun shareContent(content: ShareContent) {
     }
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private suspend fun copyTextToClipboard(text: String): Boolean {
     if (windowIsSecureContext() && navigatorClipboardWriteTextSupported()) {
         return try {

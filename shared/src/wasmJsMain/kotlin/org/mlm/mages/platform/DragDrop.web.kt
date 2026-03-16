@@ -11,7 +11,6 @@ import org.mlm.mages.ui.components.AttachmentData
 import org.w3c.dom.HTMLElement
 import org.w3c.dom.events.Event
 
-@OptIn(ExperimentalWasmJsInterop::class)
 actual fun Modifier.fileDrop(
     enabled: Boolean,
     onDragEnter: () -> Unit,

@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalWasmJsInterop::class, kotlinx.serialization.ExperimentalSerializationApi::class)
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 
 package org.mlm.mages.matrix
 

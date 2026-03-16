@@ -1,5 +1,8 @@
 package org.mlm.mages.ui.components
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 data class AttachmentData(
     val path: String,
     val mimeType: String,
