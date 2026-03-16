@@ -2137,8 +2137,8 @@ impl WasmClient {
                                         let topic = room.topic();
                                         let is_invited = matches!(room.state(), RoomState::Invited);
 
-                                        // let latest_event =
-                                        //     latest_room_event_for(&state_for_loop.timeline_mgr, room).await;
+                                        let latest_event =
+                                            latest_room_event_for(&state_for_loop.timeline_mgr, room).await;
 
                                         snapshot.push(RoomListEntry {
                                             room_id: room.room_id().to_string(),
@@ -2159,7 +2159,7 @@ impl WasmClient {
                                             is_encrypted,
                                             member_count,
                                             topic,
-                                            latest_event: None,
+                                            latest_event,
                                         });
                                     }
 
