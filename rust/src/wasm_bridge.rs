@@ -112,6 +112,15 @@ fn to_json<T: serde::Serialize>(v: &T) -> JsValue {
     }
 }
 
+#[wasm_bindgen]
+pub fn base64_encode(data: &[u8]) -> Result<String, JsValue> {
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
+
+    let binary_string: String = data.iter().map(|&b| b as char).collect();
+
+    window.btoa(&binary_string)
+}
+
 /// Helper: call a JS function with one argument.
 fn call_js(f: &Function, arg: JsValue) {
     let _ = f.call1(&JsValue::NULL, &arg);
@@ -1598,7 +1607,7 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn thumbnail_to_cache(
+    pub async fn thumbnail_to_cache(
         &self,
         info_json: String,
         width: u32,
@@ -1609,6 +1618,72 @@ impl WasmClient {
             Ok(a) => a,
             Err(_) => return String::new(),
         };
+
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            use js_int::UInt;
+            use matrix_sdk::media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings};
+            use matrix_sdk::ruma::api::client::media::get_content_thumbnail::v3::Method;
+            use matrix_sdk::ruma::events::room::MediaSource;
+
+            let (source, format) = if let Some(enc) = info.thumbnail_encrypted.as_ref() {
+                let ef: matrix_sdk::ruma::events::room::EncryptedFile =
+                    match serde_json::from_str(&enc.json) {
+                        Ok(f) => f,
+                        Err(_) => return String::new(),
+                    };
+                (MediaSource::Encrypted(Box::new(ef)), MediaFormat::File)
+            } else if let Some(mxc) = info.thumbnail_mxc_uri.as_ref() {
+                (MediaSource::Plain(mxc.clone().into()), MediaFormat::File)
+            } else if let Some(enc) = info.encrypted.as_ref() {
+                let ef: matrix_sdk::ruma::events::room::EncryptedFile =
+                    match serde_json::from_str(&enc.json) {
+                        Ok(f) => f,
+                        Err(_) => return String::new(),
+                    };
+                (MediaSource::Encrypted(Box::new(ef)), MediaFormat::File)
+            } else {
+                let method = if crop { Method::Crop } else { Method::Scale };
+                let settings = MediaThumbnailSettings::with_method(
+                    method,
+                    UInt::from(width),
+                    UInt::from(height),
+                );
+                (
+                    MediaSource::Plain(info.mxc_uri.clone().into()),
+                    MediaFormat::Thumbnail(settings),
+                )
+            };
+
+            let req = MediaRequestParameters { source, format };
+            let bytes = match state.client.media().get_media_content(&req, true).await {
+                Ok(b) => b,
+                Err(e) => return format!("error: {:?}", e),
+            };
+
+            let ext = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+                "png"
+            } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+                "jpg"
+            } else if bytes.starts_with(b"GIF8") {
+                "gif"
+            } else {
+                "img"
+            };
+
+            let key = format!("{}|{}x{}|{}", info.mxc_uri, width, height, crop)
+                .chars()
+                .map(|c| c as u8)
+                .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+
+            let out = format!("mxc_thumb_{key}.{ext}");
+
+            if let Ok(base64) = base64_encode(&bytes) {
+                let data_url = format!("data:image/{ext};base64,{base64}");
+                return data_url;
+            }
+            return format!("error: base64 encode failed");
+        }
+
         match self.with_client(|c| c.thumbnail_to_cache(info, width, height, crop)) {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => format!("error: {:?}", e),
@@ -1617,13 +1692,52 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn mxc_thumbnail_to_cache(
+    pub async fn mxc_thumbnail_to_cache(
         &self,
         mxc_uri: String,
         width: u32,
         height: u32,
         crop: bool,
     ) -> String {
+        if let Some(state) = self.async_state.borrow().as_ref().cloned() {
+            use js_int::UInt;
+            use matrix_sdk::media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings};
+            use matrix_sdk::ruma::api::client::media::get_content_thumbnail::v3::Method;
+            use matrix_sdk::ruma::events::room::MediaSource;
+
+            let method = if crop { Method::Crop } else { Method::Scale };
+            let settings = MediaThumbnailSettings::with_method(
+                method,
+                UInt::from(width.max(1)),
+                UInt::from(height.max(1)),
+            );
+
+            let req = MediaRequestParameters {
+                source: MediaSource::Plain(mxc_uri.clone().into()),
+                format: MediaFormat::Thumbnail(settings),
+            };
+
+            let bytes = match state.client.media().get_media_content(&req, true).await {
+                Ok(b) => b,
+                Err(e) => return format!("error: {:?}", e),
+            };
+
+            let ext = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+                "png"
+            } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+                "jpg"
+            } else if bytes.starts_with(b"GIF8") {
+                "gif"
+            } else {
+                "img"
+            };
+
+            if let Ok(base64) = base64_encode(&bytes) {
+                return format!("data:image/{ext};base64,{base64}");
+            }
+            return format!("error: base64 encode failed");
+        }
+
         match self.with_client(|c| c.mxc_thumbnail_to_cache(mxc_uri, width, height, crop)) {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => format!("error: {:?}", e),

@@ -60,7 +60,6 @@ data class AppSettings(
         category = Appearance::class,
         type = Dropdown::class,
         options = ["System", "English", "Spanish"],
-        platforms = [SettingPlatform.JVM, SettingPlatform.ANDROID]
     )
     val language: Int = AppLanguage.System.ordinal,
 

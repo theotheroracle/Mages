@@ -319,8 +319,7 @@ class WebStubMatrixPort : MatrixPort {
         height: Int,
         crop: Boolean
     ): Result<String> = runCatching {
-        requireFacade().thumbnailToCache(wasmJson.encodeToString(info), width, height, crop)
-            ?: error("Thumbnail generation failed")
+        requireFacade().thumbnailToCache(wasmJson.encodeToString(info), width, height, crop).await<JsString?>()?.toString().orEmpty()
     }
 
     override fun observeConnection(observer: MatrixPort.ConnectionObserver): ULong {
@@ -1116,7 +1115,7 @@ class WebStubMatrixPort : MatrixPort {
         decodeValueOrNull(requireFacade().seenByForEvent(roomId, eventId, limit), "seenByForEvent") ?: emptyList()
 
     override suspend fun mxcThumbnailToCache(mxcUri: String, width: Int, height: Int, crop: Boolean): String =
-        requireFacade().mxcThumbnailToCache(mxcUri, width, height, crop).orEmpty()
+        requireFacade().mxcThumbnailToCache(mxcUri, width, height, crop).await<JsString?>()?.toString().orEmpty()
 
     override suspend fun loadRoomListCache(): List<RoomListEntry> =
         wasmJson.decodeFromJsonElement(requireFacade().loadRoomListCache().toJsonArray())

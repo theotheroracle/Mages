@@ -251,10 +251,10 @@ external class WebMatrixFacade {
     fun downloadAttachmentToCacheFile(infoJson: String, filenameHint: String? = definedExternally): String?
 
     @JsName("thumbnailToCache")
-    fun thumbnailToCache(infoJson: String, width: Int, height: Int, crop: Boolean): String?
+    fun thumbnailToCache(infoJson: String, width: Int, height: Int, crop: Boolean): Promise<JsString?>
 
     @JsName("mxcThumbnailToCache")
-    fun mxcThumbnailToCache(mxcUri: String, width: Int, height: Int, crop: Boolean): String?
+    fun mxcThumbnailToCache(mxcUri: String, width: Int, height: Int, crop: Boolean): Promise<JsString?>
 
     @JsName("roomTags")
     fun roomTags(roomId: String): JsAny?
