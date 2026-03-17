@@ -17,7 +17,6 @@ import org.mlm.mages.RoomSummary
 import org.mlm.mages.platform.clearWebBlob
 import org.mlm.mages.platform.retrieveWebBlob
 import org.mlm.mages.platform.navigatorOnLine
-import org.mlm.mages.platform.documentHasFocus
 import org.w3c.dom.events.Event
 import kotlin.js.JsAny
 import kotlin.js.JsBoolean
@@ -324,7 +323,8 @@ class WebStubMatrixPort : MatrixPort {
 
     override fun observeConnection(observer: MatrixPort.ConnectionObserver): ULong {
         fun emit() {
-            val connected = navigatorOnLine() && documentHasFocus()
+            val connected = navigatorOnLine()
+
             observer.onConnectionChange(
                 if (connected) {
                     MatrixPort.ConnectionState.Connected
@@ -334,20 +334,14 @@ class WebStubMatrixPort : MatrixPort {
             )
         }
 
-        val focusHandler: (Event) -> Unit = { emit() }
-        val blurHandler: (Event) -> Unit = { emit() }
         val onlineHandler: (Event) -> Unit = { emit() }
         val offlineHandler: (Event) -> Unit = { emit() }
 
-        window.addEventListener("focus", focusHandler)
-        window.addEventListener("blur", blurHandler)
         window.addEventListener("online", onlineHandler)
         window.addEventListener("offline", offlineHandler)
 
         val token = nextConnectionObserverToken++
         connectionObserverStops[token] = {
-            window.removeEventListener("focus", focusHandler)
-            window.removeEventListener("blur", blurHandler)
             window.removeEventListener("online", onlineHandler)
             window.removeEventListener("offline", offlineHandler)
         }
