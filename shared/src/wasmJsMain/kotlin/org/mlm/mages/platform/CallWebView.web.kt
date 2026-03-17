@@ -7,14 +7,20 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 
-private val ELEMENT_SPECIFIC_ACTIONS = setOf(
+private val LOCAL_ONLY_WIDGET_ACTIONS = setOf(
     "io.element.device_mute",
     "io.element.join",
     "io.element.close",
     "io.element.tile_layout",
     "io.element.spotlight_layout",
+    "set_always_on_screen",
     "minimize",
-    "im.vector.hangup"
+    "im.vector.hangup",
+)
+
+private val CLOSE_ACTIONS = setOf(
+    "io.element.close",
+    "im.vector.hangup",
 )
 
 @Composable
@@ -31,11 +37,7 @@ actual fun CallWebViewHost(
     val controller = remember(widgetUrl) {
         object : CallWebViewController {
             override fun sendToWidget(message: String) {
-                try {
-                    sendToElementCallIframe(message)
-                } catch (e: Exception) {
-                    // Handle error silently
-                }
+                runCatching { sendToElementCallIframe(message) }
             }
 
             override fun close() {
@@ -49,23 +51,24 @@ actual fun CallWebViewHost(
 
         val wrappedOnMessage: (String) -> Unit = { message ->
             val action = extractActionFromMessage(message)
-            
-            if (action in ELEMENT_SPECIFIC_ACTIONS) {
-                sendElementActionResponse(message)
-                
-                when (action) {
-                    "io.element.close", "im.vector.hangup" -> {
-                        onClosed()
-                    }
-                    "minimize" -> {
-                        onMinimizeRequested()
-                    }
-                    else -> {
-                        onMessageFromWidget(message)
+
+            when {
+                action in LOCAL_ONLY_WIDGET_ACTIONS -> {
+                    runCatching { sendElementActionResponse(message) }
+
+                    when (action) {
+                        in CLOSE_ACTIONS -> onClosed()
+                        "minimize" -> onMinimizeRequested()
+                        else -> {
+                            // Ack locally, do NOT forward to Rust.
+                            // Rust widget driver only handles Matrix widget API actions.
+                        }
                     }
                 }
-            } else {
-                onMessageFromWidget(message)
+
+                else -> {
+                    onMessageFromWidget(message)
+                }
             }
         }
 
@@ -101,10 +104,10 @@ actual fun CallWebViewHost(
 }
 
 private fun extractActionFromMessage(message: String): String? {
-    return try {
-        val actionRegex = Regex(""""action"\s*:\s*"([^"]+)"""")
-        actionRegex.find(message)?.groupValues?.get(1)
-    } catch (e: Exception) {
-        null
-    }
+    return runCatching {
+        Regex(""""action"\s*:\s*"([^"]+)"""")
+            .find(message)
+            ?.groupValues
+            ?.getOrNull(1)
+    }.getOrNull()
 }

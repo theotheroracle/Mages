@@ -23,14 +23,15 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.*
 
-private val ELEMENT_SPECIFIC_ACTIONS = setOf(
+private val LOCAL_ONLY_WIDGET_ACTIONS = setOf(
     "io.element.device_mute",
     "io.element.join",
     "io.element.close",
     "io.element.tile_layout",
     "io.element.spotlight_layout",
+    "set_always_on_screen",
     "minimize",
-    "im.vector.hangup"
+    "im.vector.hangup",
 )
 
 @Composable
@@ -185,8 +186,8 @@ private class JcefCallWebViewController(
 
             println("[JcefCallWebView] Widget → Native: action=$action")
 
-            if (action in ELEMENT_SPECIFIC_ACTIONS) {
-                println("[JcefCallWebView] Handling Element-specific action locally: $action")
+            if (action in LOCAL_ONLY_WIDGET_ACTIONS) {
+                println("[JcefCallWebView] Handling host-only widget action locally: $action")
                 sendElementActionResponse(message)
 
                 when (action) {
