@@ -1,5 +1,6 @@
 package org.mlm.mages.matrix
 
+import io.github.vinceglb.filekit.utils.toJsArray
 import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.channels.awaitClose
@@ -21,6 +22,36 @@ import org.mlm.mages.platform.navigatorOnLine
 import org.w3c.dom.url.URL
 import org.w3c.dom.events.Event
 import kotlin.js.JsAny
+import kotlin.js.toJsArray
+
+// -- Kotlin/Wasm cannot pass lambdas as JsAny? --
+
+@JsFun("(fn) => function() { fn(); }")
+private external fun jsCallback0(fn: () -> Unit): JsAny
+
+@JsFun("(fn) => function(a) { return fn(a); }")
+private external fun jsCallback1(fn: (JsAny?) -> Unit): JsAny
+
+@JsFun("(fn) => function(a) { return fn(a); }")
+private external fun jsCallback1r(fn: (JsAny?) -> JsAny?): JsAny
+
+@JsFun("(arr) => arr")
+private external fun jsArrayPassthrough(arr: JsAny): JsAny
+
+@Suppress("KotlinUnreachableCode")
+fun List<String>.toJsArray(): JsAny {
+    val jsArr = js("[]")
+    for (item in this) {
+        js("jsArr.push(item)")
+    }
+    return jsArr
+}
+
+@JsFun("(bytes) => new Uint8Array(bytes)")
+private external fun bytesToUint8Array(bytes: JsAny): JsAny
+
+fun ByteArray.toJsUint8Array(): JsAny = bytesToUint8Array(this.toJsReference())
+// --
 
 class WebStubMatrixPort : MatrixPort {
     private var client: WasmClient? = null
@@ -207,13 +238,13 @@ class WebStubMatrixPort : MatrixPort {
 
     override suspend fun listRooms(): List<RoomSummary> =
         run {
-            val raw = requireClient().listRooms().await<WebRoomSummaryListValue?>()
+            val raw = requireClient().rooms().await<JsAny?>()
             val arr = raw.toJsonArray()
             wasmJson.decodeFromJsonElement<List<RoomSummary>>(arr)
         }
 
     override suspend fun recent(roomId: String, limit: Int): List<MessageEvent> {
-        val raw = requireClient().getRoomTimeline(roomId, limit).await<WebTimelineItemsValue?>()
+        val raw = requireClient().recentEvents(roomId, limit.toDouble()).await<JsAny?>()
         return runCatching {
             println("recent raw = ${raw.toJsonString()}")
             wasmJson.decodeFromJsonElement<List<MessageEvent>>(raw.toJsonArray())
@@ -225,8 +256,8 @@ class WebStubMatrixPort : MatrixPort {
     override fun timelineDiffs(roomId: String): Flow<TimelineDiff<MessageEvent>> = callbackFlow {
         val f = requireClientOrNull() ?: run { close(); return@callbackFlow }
         val subscription = f.observeTimeline(
-            roomId = roomId,
-            onDiff = { diffValue ->
+            roomId,
+            jsCallback1 { diffValue: JsAny? ->
                 runCatching {
                     println("timeline diff raw = ${diffValue.toJsonString()}")
                     decodeTimelineDiff(diffValue)
@@ -236,20 +267,19 @@ class WebStubMatrixPort : MatrixPort {
                     trySend(diff)
                 }
             },
-            onError = { error ->
-                val message = error ?: "Timeline error"
+            jsCallback1 { error: JsAny? ->
+                val message = error?.toString() ?: "Timeline error"
                 println("timeline observer error = $message")
                 close(IllegalStateException(message))
             }
         )
         awaitClose {
-            requireClientOrNull()?.unobserveTimeline(subscription)
+            requireClientOrNull()?.unobserveTimeline(subscription.toDouble())
         }
     }
 
     override suspend fun send(roomId: String, body: String, formattedBody: String?): Boolean {
-        val result = requireClient().sendText(roomId, body, formattedBody).await<WebSendResultValue?>().toJsonObject()
-        return (result?.get("ok") as? JsonPrimitive)?.content == "true"
+        return requireClient().sendMessage(roomId, body).await() ?: false
     }
 
     override suspend fun sendQueueSetEnabled(enabled: Boolean): Boolean =
@@ -283,29 +313,33 @@ class WebStubMatrixPort : MatrixPort {
 
     override fun setupRecovery(observer: MatrixPort.RecoveryObserver): ULong =
         requireClient().setupRecovery(
-            onProgress = { observer.onProgress(it ?: "") },
-            onDone = { observer.onDone(it ?: "") },
-            onError = { observer.onError(it ?: "Recovery error") }
+            jsCallback1 { v: JsAny? -> observer.onProgress(v?.toString() ?: "") },
+            jsCallback1 { v: JsAny? -> observer.onDone(v?.toString() ?: "") },
+            jsCallback1 { v: JsAny? -> observer.onError(v?.toString() ?: "Recovery error") }
         ).toULong()
 
     override fun observeRecoveryState(observer: MatrixPort.RecoveryStateObserver): ULong =
-        requireClient().observeRecoveryState { stateValue: JsAny? ->
-            val state = runCatching {
-                wasmJson.decodeFromJsonElement<MatrixPort.RecoveryState>(stateValue.toJsonElement())
-            }.getOrNull() ?: return@observeRecoveryState
-            observer.onUpdate(state)
-        }.toULong()
+        requireClient().observeRecoveryState(
+            jsCallback1 { stateValue: JsAny? ->
+                val state = runCatching {
+                    wasmJson.decodeFromJsonElement<MatrixPort.RecoveryState>(stateValue.toJsonElement())
+                }.getOrNull() ?: return@jsCallback1
+                observer.onUpdate(state)
+            }
+        ).toULong()
 
     override fun unobserveRecoveryState(subId: ULong): Boolean =
         requireClient().unobserveRecoveryState(subId.toDouble())
 
     override fun observeBackupState(observer: MatrixPort.BackupStateObserver): ULong =
-        requireClient().observeBackupState { stateValue: JsAny? ->
-            val state = runCatching {
-                wasmJson.decodeFromJsonElement<MatrixPort.BackupState>(stateValue.toJsonElement())
-            }.getOrNull() ?: return@observeBackupState
-            observer.onUpdate(state)
-        }.toULong()
+        requireClient().observeBackupState(
+            jsCallback1 { stateValue: JsAny? ->
+                val state = runCatching {
+                    wasmJson.decodeFromJsonElement<MatrixPort.BackupState>(stateValue.toJsonElement())
+                }.getOrNull() ?: return@jsCallback1
+                observer.onUpdate(state)
+            }
+        ).toULong()
 
     override fun unobserveBackupState(subId: ULong): Boolean =
         requireClient().unobserveBackupState(subId.toDouble())
@@ -323,13 +357,15 @@ class WebStubMatrixPort : MatrixPort {
 
     override fun observeSends(): Flow<SendUpdate> = callbackFlow {
         val f = requireClientOrNull() ?: run { close(); return@callbackFlow }
-        val token = f.observeSends { updateValue ->
-            val update = runCatching {
-                wasmJson.decodeFromJsonElement<SendUpdate>(updateValue.toJsonElement())
-            }.getOrNull() ?: return@observeSends
-            trySend(update)
-        }
-        awaitClose { requireClientOrNull()?.unobserveSends(token) }
+        val token = f.observeSends(
+            jsCallback1 { updateValue: JsAny? ->
+                val update = runCatching {
+                    wasmJson.decodeFromJsonElement<SendUpdate>(updateValue.toJsonElement())
+                }.getOrNull() ?: return@jsCallback1
+                trySend(update)
+            }
+        )
+        awaitClose { requireClientOrNull()?.unobserveSends(token.toDouble()) }
     }
 
     override suspend fun roomTags(roomId: String): Pair<Boolean, Boolean>? =
@@ -353,7 +389,7 @@ class WebStubMatrixPort : MatrixPort {
         height: Int,
         crop: Boolean
     ): Result<String> = runCatching {
-        requireClient().thumbnailToCache(wasmJson.encodeToString(info), width, height, crop).await<String?>()
+        requireClient().thumbnailToCache(wasmJson.encodeToString(info), width.toDouble(), height.toDouble(), crop).await<String?>()
             .orEmpty()
     }
 
@@ -392,13 +428,13 @@ class WebStubMatrixPort : MatrixPort {
 
     override fun startVerificationInbox(observer: MatrixPort.VerificationInboxObserver): ULong =
         requireClient().startVerificationInbox(
-            onRequest = { payload ->
+            jsCallback1 { payload: JsAny? ->
                 parseVerificationInboxPayload(payload)?.let { (flowId, fromUser, fromDevice) ->
                     observer.onRequest(flowId, fromUser, fromDevice)
                 }
             },
-            onError = { message ->
-                observer.onError(message ?: "Verification inbox error")
+            jsCallback1 { message: JsAny? ->
+                observer.onError(message?.toString() ?: "Verification inbox error")
             }
         ).toULong()
 
@@ -413,10 +449,10 @@ class WebStubMatrixPort : MatrixPort {
     }
 
     override suspend fun paginateBack(roomId: String, count: Int): Boolean =
-        requireClient().paginateBackwards(roomId, count).await()
+        requireClient().paginateBackwards(roomId, count.toDouble()).await()
 
     override suspend fun paginateForward(roomId: String, count: Int): Boolean =
-        requireClient().paginateForwards(roomId, count).await()
+        requireClient().paginateForwards(roomId, count.toDouble()).await()
 
     override suspend fun markRead(roomId: String): Boolean =
         requireClient().markRead(roomId).await()
@@ -436,7 +472,7 @@ class WebStubMatrixPort : MatrixPort {
         body: String,
         formattedBody: String?
     ): Boolean =
-        requireClient().reply(roomId, inReplyToEventId, body, formattedBody).await()
+        requireClient().reply(roomId, inReplyToEventId, body).await()
 
     override suspend fun edit(
         roomId: String,
@@ -444,7 +480,7 @@ class WebStubMatrixPort : MatrixPort {
         newBody: String,
         formattedBody: String?
     ): Boolean =
-        requireClient().edit(roomId, targetEventId, newBody, formattedBody).await()
+        requireClient().edit(roomId, targetEventId, newBody).await()
 
     override suspend fun redact(roomId: String, eventId: String, reason: String?): Boolean =
         requireClient().redact(roomId, eventId, reason).await()
@@ -462,25 +498,30 @@ class WebStubMatrixPort : MatrixPort {
         decodeStringList(requireClient().getPinnedEvents(roomId))
 
     override suspend fun setPinnedEvents(roomId: String, eventIds: List<String>): Boolean =
-        requireClient().setPinnedEvents(roomId, wasmJson.encodeToString(eventIds).toJsReference())
+        requireClient().setPinnedEvents(roomId, eventIds.toJsArray())
 
     override fun observeTyping(roomId: String, onUpdate: (List<String>) -> Unit): ULong =
-        requireClient().observeTyping(roomId) { users ->
-            val parsed = runCatching {
-                wasmJson.decodeFromJsonElement<List<String>>(users.toJsonElement())
-            }.getOrDefault(emptyList())
-            onUpdate(parsed)
-        }.toULong()
+        requireClient().observeTyping(
+            roomId,
+            jsCallback1 { users: JsAny? ->
+                val parsed = runCatching {
+                    wasmJson.decodeFromJsonElement<List<String>>(users.toJsonElement())
+                }.getOrDefault(emptyList())
+                onUpdate(parsed)
+            }
+        ).toULong()
 
     override fun startSupervisedSync(observer: MatrixPort.SyncObserver) {
-        client?.startSync { stateValue ->
-            val state = runCatching {
-                wasmJson.decodeFromJsonElement<MatrixPort.SyncStatus>(stateValue.toJsonElement())
-            }.getOrElse {
-                MatrixPort.SyncStatus(MatrixPort.SyncPhase.Error, it.message)
+        client?.startSupervisedSync(
+            jsCallback1 { stateValue: JsAny? ->
+                val state = runCatching {
+                    wasmJson.decodeFromJsonElement<MatrixPort.SyncStatus>(stateValue.toJsonElement())
+                }.getOrElse {
+                    MatrixPort.SyncStatus(MatrixPort.SyncPhase.Error, it.message)
+                }
+                observer.onState(state)
             }
-            observer.onState(state)
-        }
+        )
     }
 
     override suspend fun listMyDevices(): List<DeviceSummary> =
@@ -489,17 +530,17 @@ class WebStubMatrixPort : MatrixPort {
     override suspend fun startSelfSas(targetDeviceId: String, observer: VerificationObserver): String =
         requireClient().startSelfSas(
             targetDeviceId,
-            onPhase = { payload ->
+            jsCallback1 { payload: JsAny? ->
                 parseVerificationPhasePayload(payload)?.let { (flowId, phase) ->
                     observer.onPhase(flowId, phase)
                 }
             },
-            onEmojis = { payload ->
+            jsCallback1 { payload: JsAny? ->
                 parseSasEmojisPayload(payload)?.let { (flowId, triple) ->
                     observer.onEmojis(flowId, triple.first, triple.second, triple.third)
                 }
             },
-            onError = { payload ->
+            jsCallback1 { payload: JsAny? ->
                 parseVerificationErrorPayload(payload)?.let { (flowId, message) ->
                     observer.onError(flowId, message)
                 }
@@ -509,17 +550,17 @@ class WebStubMatrixPort : MatrixPort {
     override suspend fun startUserSas(userId: String, observer: VerificationObserver): String =
         requireClient().startUserSas(
             userId,
-            onPhase = { payload ->
+            jsCallback1 { payload: JsAny? ->
                 parseVerificationPhasePayload(payload)?.let { (flowId, phase) ->
                     observer.onPhase(flowId, phase)
                 }
             },
-            onEmojis = { payload ->
+            jsCallback1 { payload: JsAny? ->
                 parseSasEmojisPayload(payload)?.let { (flowId, triple) ->
                     observer.onEmojis(flowId, triple.first, triple.second, triple.third)
                 }
             },
-            onError = { payload ->
+            jsCallback1 { payload: JsAny? ->
                 parseVerificationErrorPayload(payload)?.let { (flowId, message) ->
                     observer.onError(flowId, message)
                 }
@@ -534,17 +575,17 @@ class WebStubMatrixPort : MatrixPort {
         requireClient().acceptVerificationRequest(
             flowId,
             otherUserId,
-            onPhase = { payload ->
+            jsCallback1 { payload: JsAny? ->
                 parseVerificationPhasePayload(payload)?.let { (fid, phase) ->
                     observer.onPhase(fid, phase)
                 }
             },
-            onEmojis = { payload ->
+            jsCallback1 { payload: JsAny? ->
                 parseSasEmojisPayload(payload)?.let { (fid, triple) ->
                     observer.onEmojis(fid, triple.first, triple.second, triple.third)
                 }
             },
-            onError = { payload ->
+            jsCallback1 { payload: JsAny? ->
                 parseVerificationErrorPayload(payload)?.let { (fid, message) ->
                     observer.onError(fid, message)
                 }
@@ -559,17 +600,17 @@ class WebStubMatrixPort : MatrixPort {
         requireClient().acceptSas(
             flowId,
             otherUserId,
-            onPhase = { payload ->
+            jsCallback1 { payload: JsAny? ->
                 parseVerificationPhasePayload(payload)?.let { (fid, phase) ->
                     observer.onPhase(fid, phase)
                 }
             },
-            onEmojis = { payload ->
+            jsCallback1 { payload: JsAny? ->
                 parseSasEmojisPayload(payload)?.let { (fid, triple) ->
                     observer.onEmojis(fid, triple.first, triple.second, triple.third)
                 }
             },
-            onError = { payload ->
+            jsCallback1 { payload: JsAny? ->
                 parseVerificationErrorPayload(payload)?.let { (fid, message) ->
                     observer.onError(fid, message)
                 }
@@ -596,7 +637,7 @@ class WebStubMatrixPort : MatrixPort {
     override suspend fun logout(): Boolean {
         val f = requireClientOrNull() ?: return false
         return try {
-            f.logout().await<Boolean?>() ?: false
+            f.logout()
         } catch (e: Exception) {
             false
         }
@@ -620,20 +661,20 @@ class WebStubMatrixPort : MatrixPort {
         return false
     }
 
-    override suspend fun sendAttachmentBytes(
+    override suspend fun sendAttachmentBytes( // TODO: fix
         roomId: String,
         data: ByteArray,
         mime: String,
         filename: String,
         onProgress: ((Long, Long?) -> Unit)?
-    ): Boolean = requireClient().sendAttachmentBytes(roomId, filename, mime, data.toJsReference()).await()
+    ): Boolean = requireClient().sendAttachmentBytes(roomId, filename, mime, data.toJsArray()).await()
 
     override suspend fun downloadAttachmentToCache(
         info: AttachmentInfo,
         filenameHint: String?
     ): Result<String> = runCatching {
-        requireClient().downloadAttachmentToCacheFile(wasmJson.encodeToString(info), filenameHint)
-            ?: error("Attachment download failed")
+        (requireClient().downloadAttachmentToCacheFile(wasmJson.encodeToString(info), filenameHint)
+            ?: error("Attachment download failed"))
     }
 
     override suspend fun downloadAttachmentToPath(
@@ -648,7 +689,7 @@ class WebStubMatrixPort : MatrixPort {
         limit: Int,
         offset: Int?
     ): SearchPage = decodeValueOrNull(
-        requireClient().searchRoom(roomId, query, limit, offset),
+        requireClient().searchRoom(roomId, query, limit.toDouble(), offset?.toDouble()),
         "searchRoom"
     ) ?: SearchPage(emptyList(), null)
 
@@ -656,7 +697,7 @@ class WebStubMatrixPort : MatrixPort {
         requireClient().recoverWithKey(recoveryKey).await()
 
     override fun observeReceipts(roomId: String, observer: ReceiptsObserver): ULong =
-        requireClient().observeReceipts(roomId) { observer.onChanged() }.toULong()
+        requireClient().observeReceipts(roomId, jsCallback0 { observer.onChanged() }).toULong()
 
     override fun stopReceiptsObserver(token: ULong) {
         requireClient().unobserveReceipts(token.toDouble())
@@ -669,11 +710,13 @@ class WebStubMatrixPort : MatrixPort {
         requireClient().isEventReadBy(roomId, eventId, userId).await()
 
     override fun startCallInbox(observer: MatrixPort.CallObserver): ULong =
-        requireClient().startCallInbox { payload ->
-            val invite = decodeValueOrNull<CallInvite>(payload, "startCallInbox")
-                ?: return@startCallInbox
-            observer.onInvite(invite)
-        }.toULong()
+        requireClient().startCallInbox(
+            jsCallback1 { payload: JsAny? ->
+                val invite = decodeValueOrNull<CallInvite>(payload, "startCallInbox")
+                    ?: return@jsCallback1
+                observer.onInvite(invite)
+            }
+        ).toULong()
 
     override fun stopCallInbox(token: ULong) {
         requireClient().stopCallInbox(token.toDouble())
@@ -697,13 +740,13 @@ class WebStubMatrixPort : MatrixPort {
         decodeOwnLastRead(requireClient().ownLastRead(roomId).await())
 
     override fun observeOwnReceipt(roomId: String, observer: ReceiptsObserver): ULong =
-        requireClient().observeOwnReceipt(roomId) { observer.onChanged() }.toULong()
+        requireClient().observeOwnReceipt(roomId, jsCallback0 { observer.onChanged() }).toULong()
 
     override suspend fun encryptionCatchupOnce(): Boolean = false
 
     override fun observeRoomList(observer: MatrixPort.RoomListObserver): ULong {
         val token = requireClient().observeRoomList(
-            onReset = { itemsValue ->
+            jsCallback1 { itemsValue: JsAny? ->
                 val raw = runCatching { itemsValue.toJsonArray() }.getOrElse {
                     JsonArray(emptyList())
                 }
@@ -712,7 +755,7 @@ class WebStubMatrixPort : MatrixPort {
                 }.getOrDefault(emptyList())
                 observer.onReset(items)
             },
-            onUpdate = { itemValue ->
+            jsCallback1 { itemValue: JsAny? ->
                 val item = runCatching {
                     wasmJson.decodeFromJsonElement<RoomListEntry>(itemValue.toJsonElement())
                 }.getOrNull()
@@ -740,12 +783,12 @@ class WebStubMatrixPort : MatrixPort {
         maxEvents: Int
     ): List<RenderedNotification> =
         decodeValueOrNull(
-            requireClient().fetchNotificationsSince(sinceMs, maxRooms, maxEvents).await(),
+            requireClient().fetchNotificationsSince(sinceMs.toDouble(), maxRooms.toDouble(), maxEvents.toDouble()).await(),
             "fetchNotificationsSince"
         ) ?: emptyList()
 
     override fun roomListSetUnreadOnly(token: ULong, unreadOnly: Boolean): Boolean =
-        requireClient().setRoomListUnreadOnly(token.toDouble(), unreadOnly)
+        requireClient().roomListSetUnreadOnly(token.toDouble(), unreadOnly)
 
     override suspend fun loginSsoLoopback(openUrl: (String) -> Boolean, deviceName: String?): Boolean {
         return false
@@ -824,9 +867,8 @@ class WebStubMatrixPort : MatrixPort {
                 .await<JsAny?>()
                 .toJsonElement()
         )
-
     override suspend fun searchUsers(term: String, limit: Int): List<DirectoryUser> =
-        decodeValueOrNull(requireClient().searchUsers(term, limit), "searchUsers") ?: emptyList()
+        decodeValueOrNull(requireClient().searchUsers(term, limit.toDouble()), "searchUsers") ?: emptyList()
 
     override suspend fun getUserProfile(userId: String): DirectoryUser? =
         decodeValueOrNull(requireClient().getUserProfile(userId), "getUserProfile")
@@ -838,15 +880,15 @@ class WebStubMatrixPort : MatrixPort {
         since: String?
     ): PublicRoomsPage =
         wasmJson.decodeFromJsonElement(
-            requireClient().publicRooms(server, search, limit, since).await<WebPublicRoomsPageValue?>().toJsonElement()
+            requireClient().publicRooms(server, search, limit.toDouble(), since).toJsonElement()
         )
 
     override suspend fun joinByIdOrAlias(idOrAlias: String): Result<Unit> {
-        val result = requireClient().joinByIdOrAlias(idOrAlias).await<Boolean>()
-        return if (result) {
+        return try {
+            requireClient().joinByIdOrAlias(idOrAlias).await<JsAny?>()
             Result.success(Unit)
-        } else {
-            Result.failure(IllegalStateException("Failed to join room $idOrAlias"))
+        } catch (e: Exception) {
+            Result.failure(IllegalStateException("Failed to join room $idOrAlias", e))
         }
     }
 
@@ -875,7 +917,7 @@ class WebStubMatrixPort : MatrixPort {
     ): String? = requireClient().createRoom(
         name,
         topic,
-        wasmJson.encodeToString(invitees).toJsReference(),
+        invitees.toJsArray(),
         isPublic,
         roomAlias
     )
@@ -959,7 +1001,7 @@ class WebStubMatrixPort : MatrixPort {
         maxPages: Int
     ): ThreadSummary =
         decodeValueOrNull(
-            requireClient().threadSummary(roomId, rootEventId, perPage, maxPages).await(),
+            requireClient().threadSummary(roomId, rootEventId, perPage.toDouble(), maxPages.toDouble()).await(),
             "threadSummary"
         ) ?: ThreadSummary(rootEventId, roomId, 0, null)
 
@@ -971,7 +1013,7 @@ class WebStubMatrixPort : MatrixPort {
         forward: Boolean
     ): ThreadPage =
         decodeValueOrNull(
-            requireClient().threadReplies(roomId, rootEventId, from, limit, forward).await(),
+            requireClient().threadReplies(roomId, rootEventId, from, limit.toDouble(), forward).await(),
             "threadReplies"
         ) ?: ThreadPage(rootEventId, roomId, emptyList(), null, null)
 
@@ -979,7 +1021,7 @@ class WebStubMatrixPort : MatrixPort {
         mySpaces().any { it.roomId == roomId }
 
     override suspend fun mySpaces(): List<SpaceInfo> =
-        wasmJson.decodeFromJsonElement(requireClient().mySpaces().await<WebSpacesValue?>().toJsonElement())
+        wasmJson.decodeFromJsonElement(requireClient().mySpaces().await<JsAny?>().toJsonElement())
 
     override suspend fun createSpace(
         name: String,
@@ -987,7 +1029,7 @@ class WebStubMatrixPort : MatrixPort {
         isPublic: Boolean,
         invitees: List<String>
     ): String? =
-        requireClient().createSpace(name, topic, isPublic, wasmJson.encodeToString(invitees).toJsReference()).await()
+        requireClient().createSpace(name, topic, isPublic, invitees.toJsArray()).await()
 
     override suspend fun spaceAddChild(
         spaceId: String,
@@ -1007,7 +1049,7 @@ class WebStubMatrixPort : MatrixPort {
         suggestedOnly: Boolean
     ): SpaceHierarchyPage? = runCatching {
         wasmJson.decodeFromJsonElement<SpaceHierarchyPage>(
-            requireClient().spaceHierarchy(spaceId, from, limit, maxDepth, suggestedOnly).await<WebSpaceHierarchyValue?>().toJsonElement()
+            requireClient().spaceHierarchy(spaceId, from, limit.toDouble(), maxDepth?.toDouble(), suggestedOnly).await<JsAny?>().toJsonElement()
         )
     }.getOrNull()
 
@@ -1060,7 +1102,7 @@ class WebStubMatrixPort : MatrixPort {
         requireClient().setRoomCanonicalAlias(
             roomId,
             alias,
-            wasmJson.encodeToString(altAliases).toJsReference(),
+            wasmJson.encodeToString(altAliases),
         ),
         "set room canonical alias"
     )
@@ -1092,8 +1134,7 @@ class WebStubMatrixPort : MatrixPort {
 
     override suspend fun canUserInvite(roomId: String, userId: String): Boolean = false
 
-    override suspend fun canUserRedactOther(roomId: String, userId: String): Boolean =
-        requireClient().canUserRedactOther(roomId, userId)
+    override suspend fun canUserRedactOther(roomId: String, userId: String): Boolean = false
 
     override suspend fun updatePowerLevelForUser(
         roomId: String,
@@ -1118,7 +1159,7 @@ class WebStubMatrixPort : MatrixPort {
         score: Int?,
         reason: String?
     ): Result<Unit> = unitResult(
-        requireClient().reportContent(roomId, eventId, score, reason),
+        requireClient().reportContent(roomId, eventId, score?.toDouble(), reason),
         "report content"
     )
 
@@ -1165,18 +1206,21 @@ class WebStubMatrixPort : MatrixPort {
         )
 
     override fun observeLiveLocation(roomId: String, onShares: (List<LiveLocationShare>) -> Unit): ULong =
-        requireClient().observeLiveLocation(roomId) { payload ->
-            val shares = decodeValueOrNull<List<LiveLocationShare>>(payload, "observeLiveLocation")
-                ?: emptyList()
-            onShares(shares)
-        }.toULong()
+        requireClient().observeLiveLocation(
+            roomId,
+            jsCallback1 { payload: JsAny? ->
+                val shares = decodeValueOrNull<List<LiveLocationShare>>(payload, "observeLiveLocation")
+                    ?: emptyList()
+                onShares(shares)
+            }
+        ).toULong()
 
     override fun stopObserveLiveLocation(token: ULong) {
         requireClient().unobserveLiveLocation(token.toDouble())
     }
 
     override suspend fun sendPoll(roomId: String, question: String, answers: List<String>): Boolean =
-        requireClient().sendPollStart(roomId, question, wasmJson.encodeToString(answers))
+        requireClient().sendPollStart(roomId, question, wasmJson.encodeToString(answers), "disclosed", 1.0)
 
     override fun seenByForEvent(roomId: String, eventId: String, limit: Int): List<SeenByEntry> =
         decodeValueOrNull(requireClient().seenByForEvent(roomId, eventId, limit.toDouble()), "seenByForEvent") ?: emptyList()
@@ -1211,9 +1255,10 @@ class WebStubMatrixPort : MatrixPort {
                 parentUrl,
                 languageTag,
                 theme,
-            ) { message ->
-                observer.onToWidget(message ?: "")
-            }.await(),
+                jsCallback1 { message: JsAny? ->
+                    observer.onToWidget(message?.toString() ?: "")
+                }
+            ).await(),
             "startElementCall"
         )
 
