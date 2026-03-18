@@ -112,6 +112,13 @@ abstract class GenerateWasmExternsTask : DefaultTask() {
                     sb.appendLine("            baseStoreDir: String,")
                     sb.appendLine("            accountId: String? = kotlin.js.definedExternally")
                     sb.appendLine("        ): Promise<JsAny?>")
+                } else {
+                    // Handle other static methods
+                    val params = m.groupValues[2]
+                    val returnType = m.groupValues[3]
+                    val ktParams = convertParams(params)
+                    val ktReturn = convertReturnType(returnType)
+                    sb.appendLine("        fun $name($ktParams): $ktReturn")
                 }
             }
             sb.appendLine("    }")
@@ -163,7 +170,20 @@ abstract class GenerateWasmExternsTask : DefaultTask() {
                 }
             }
         }
-        
+
+        fun convertParamType(ts: String): String {
+            val t = ts.trim()
+            return when {
+                t == "boolean" || t == "bool" -> "Boolean"
+                t == "string" -> "String"
+                t == "number" -> "Double"
+                t == "boolean | null" || t == "boolean | undefined" -> "Boolean?"
+                t == "number | null" || t == "number | undefined" -> "Double?"
+                t == "string | null" || t == "string | undefined" -> "String?"
+                else -> "JsAny?"
+            }
+        }
+
         fun convertReturnType(ts: String): String {
             val t = ts.trim()
             return when {
@@ -174,15 +194,11 @@ abstract class GenerateWasmExternsTask : DefaultTask() {
                 t == "string | null" || t == "string | undefined" -> "String?"
                 t == "boolean | null" -> "Boolean?"
                 t == "number | null" -> "Double?"
-                t == "Promise<void>" -> "Promise<Unit>"
-                t == "Promise<boolean>" -> "Promise<Boolean>"
-                t == "Promise<string>" -> "Promise<String>"
-                t == "Promise<number>" -> "Promise<Double>"
                 t.startsWith("Promise<") -> "Promise<JsAny?>"
                 else -> "JsAny?"
             }
         }
-        
+
         fun convertParams(ts: String): String {
             if (ts.isBlank()) return ""
             return ts.split(",").joinToString(", ") { param ->
@@ -193,13 +209,7 @@ abstract class GenerateWasmExternsTask : DefaultTask() {
                 val tsName = rawName.removeSuffix("?")
                 val ktName = snakeToCamel(tsName)
                 val tsType = parts[1].trim()
-                val ktType = when {
-                    tsType == "boolean" || tsType == "bool" -> "Boolean"
-                    tsType == "string" -> "String"
-                    tsType == "number" -> "Double"
-                    tsType.contains("Function") -> "JsAny?"
-                    else -> "JsAny?"
-                }
+                val ktType = convertParamType(tsType)
                 if (optional) "$ktName: $ktType = kotlin.js.definedExternally"
                 else "$ktName: $ktType"
             }
