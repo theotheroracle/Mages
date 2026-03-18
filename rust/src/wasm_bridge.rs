@@ -88,7 +88,7 @@ use matrix_sdk::{
         oauth::{ClientId, OAuthSession, UserSession},
     },
     encryption::{BackupDownloadStrategy, EncryptionSettings},
-    ruma::{OwnedRoomId, OwnedEventId, OwnedRoomAliasId},
+    ruma::{OwnedEventId, OwnedRoomAliasId, OwnedRoomId},
 };
 use matrix_sdk_ui::notification_client::{
     NotificationClient, NotificationProcessSetup, NotificationStatus,
@@ -118,7 +118,7 @@ fn to_json<T: serde::Serialize>(v: &T) -> JsValue {
     }
 }
 
-#[wasm_bindgen]
+#[wasm_bindgen(js_name = base64Encode)]
 pub fn base64_encode(data: &[u8]) -> Result<String, JsValue> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
 
@@ -1001,7 +1001,7 @@ impl WasmClient {
         self.with_client(|c| c.whoami()).ok().flatten()
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = accountManagementUrl)]
     pub fn account_management_url(&self) -> Option<String> {
         self.with_client(|c| c.account_management_url())
             .ok()
@@ -1056,7 +1056,7 @@ impl WasmClient {
         }
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = recoveryState)]
     pub fn recovery_state(&self) -> String {
         "Unknown".to_owned()
     }
@@ -1308,7 +1308,7 @@ impl WasmClient {
         to_json(&v)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = loadRoomListCache)]
     pub fn load_room_list_cache(&self) -> JsValue {
         let async_state = self.async_state.borrow().as_ref().cloned();
         if let Some(state) = async_state {
@@ -1339,19 +1339,19 @@ impl WasmClient {
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = roomSendQueueSetEnabled)]
     pub fn room_send_queue_set_enabled(&self, room_id: String, enabled: bool) -> bool {
         self.with_client(|c| c.room_send_queue_set_enabled(room_id, enabled))
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = enqueueText)]
     pub fn enqueue_text(&self, room_id: String, body: String, txn_id: Option<String>) -> String {
         self.with_client(|c| c.enqueue_text(room_id, body, txn_id))
             .unwrap_or_default()
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = retryByTxn)]
     pub fn retry_by_txn(&self, room_id: String, txn_id: String) -> bool {
         self.with_client(|c| c.retry_by_txn(room_id, txn_id))
             .unwrap_or(false)
@@ -1645,7 +1645,7 @@ impl WasmClient {
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = downloadAttachmentToCacheFile)]
     pub fn download_attachment_to_cache_file(
         &self,
         info_json: String,
@@ -1921,7 +1921,7 @@ impl WasmClient {
             .unwrap_or(0.0)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = unobserveTyping)]
     pub fn unobserve_typing(&self, sub_id: f64) -> bool {
         if let Some(state) = self.async_state.borrow().as_ref().cloned() {
             return Self::abort_sub(&state.typing_subs, sub_id as u64);
@@ -1985,7 +1985,7 @@ impl WasmClient {
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = observeOwnReceipt)]
     pub fn observe_own_receipt(&self, room_id: String, on_changed: Function) -> f64 {
         if let Some(state) = self.async_state.borrow().as_ref().cloned() {
             let Ok(rid) = OwnedRoomId::try_from(room_id) else {
@@ -2123,7 +2123,7 @@ impl WasmClient {
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = monitorConnection)]
     pub fn monitor_connection(&self, on_change: Function) -> f64 {
         if self.async_state.borrow().is_some() {
             let _ = on_change;
@@ -2134,7 +2134,7 @@ impl WasmClient {
             .unwrap_or(0.0)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = unobserveConnection)]
     pub fn unobserve_connection(&self, sub_id: f64) -> bool {
         if self.async_state.borrow().is_some() {
             let _ = sub_id;
@@ -2195,7 +2195,7 @@ impl WasmClient {
         let _ = self.with_client(|c| c.start_supervised_sync(obs));
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = enterForeground)]
     pub fn enter_foreground(&self) {
         if let Some(state) = self.async_state.borrow().as_ref().cloned() {
             state.app_in_foreground.set(true);
@@ -2210,7 +2210,7 @@ impl WasmClient {
         let _ = self.with_client(|c| c.enter_foreground());
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = enterBackground)]
     pub fn enter_background(&self) {
         if let Some(state) = self.async_state.borrow().as_ref().cloned() {
             state.app_in_foreground.set(false);
@@ -2379,7 +2379,7 @@ impl WasmClient {
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = roomListSetUnreadOnly)]
     pub fn room_list_set_unread_only(&self, token: f64, unread_only: bool) -> bool {
         if let Some(state) = self.async_state.borrow().as_ref().cloned() {
             let _ = state;
@@ -2664,7 +2664,7 @@ impl WasmClient {
         }
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = applyPowerLevelChanges)]
     pub fn apply_power_level_changes(&self, room_id: String, changes_json: String) -> bool {
         let changes: RoomPowerLevelChanges = match serde_json::from_str(&changes_json) {
             Ok(c) => c,
@@ -2674,7 +2674,7 @@ impl WasmClient {
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = updatePowerLevelForUser)]
     pub fn update_power_level_for_user(
         &self,
         room_id: String,
@@ -2688,7 +2688,7 @@ impl WasmClient {
         .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = reportContent)]
     pub fn report_content(
         &self,
         room_id: String,
@@ -2700,7 +2700,7 @@ impl WasmClient {
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = reportRoom)]
     pub fn report_room(&self, room_id: String, reason: Option<String>) -> bool {
         self.with_client(|c| c.report_room(room_id, reason).is_ok())
             .unwrap_or(false)
@@ -2841,7 +2841,7 @@ impl WasmClient {
         to_json(&v)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = roomUnreadStats)]
     pub fn room_unread_stats(&self, room_id: String) -> JsValue {
         if let Some(state) = self.async_state.borrow().as_ref().cloned() {
             let Ok(rid) = OwnedRoomId::try_from(room_id) else {
@@ -2891,7 +2891,7 @@ impl WasmClient {
         to_json(&v)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = seenByForEvent)]
     pub fn seen_by_for_event(&self, room_id: String, event_id: String, limit: u32) -> JsValue {
         if self.async_state.borrow().is_some() {
             return to_json(&Vec::<crate::SeenByEntry>::new());
@@ -3210,7 +3210,7 @@ impl WasmClient {
         }
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = sendPollStart)]
     pub fn send_poll_start(
         &self,
         room_id: String,
@@ -3235,7 +3235,7 @@ impl WasmClient {
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = sendPollResponse)]
     pub fn send_poll_response(
         &self,
         room_id: String,
@@ -3250,7 +3250,7 @@ impl WasmClient {
         .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = sendPollEnd)]
     pub fn send_poll_end(&self, room_id: String, poll_event_id: String) -> bool {
         self.with_client(|c| c.send_poll_end(room_id, poll_event_id).is_ok())
             .unwrap_or(false)
@@ -3903,7 +3903,7 @@ impl WasmClient {
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = ignoredUsers)]
     pub fn ignored_users(&self) -> JsValue {
         let v = self
             .with_client(|c| c.ignored_users().unwrap_or_default())
@@ -3911,25 +3911,25 @@ impl WasmClient {
         to_json(&v)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = isUserIgnored)]
     pub fn is_user_ignored(&self, user_id: String) -> bool {
         self.with_client(|c| c.is_user_ignored(user_id))
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = publishRoomAlias)]
     pub fn publish_room_alias(&self, room_id: String, alias: String) -> bool {
         self.with_client(|c| c.publish_room_alias(room_id, alias).ok().unwrap_or(false))
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = unpublishRoomAlias)]
     pub fn unpublish_room_alias(&self, room_id: String, alias: String) -> bool {
         self.with_client(|c| c.unpublish_room_alias(room_id, alias).ok().unwrap_or(false))
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = setRoomCanonicalAlias)]
     pub fn set_room_canonical_alias(
         &self,
         room_id: String,
@@ -3944,7 +3944,7 @@ impl WasmClient {
         .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = roomAliases)]
     pub fn room_aliases(&self, room_id: String) -> JsValue {
         let v = self
             .with_client(|c| c.room_aliases(room_id))
@@ -3952,7 +3952,7 @@ impl WasmClient {
         to_json(&v)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = roomJoinRule)]
     pub fn room_join_rule(&self, room_id: String) -> Option<String> {
         let r = self
             .with_client(|c| c.room_join_rule(room_id).ok())
@@ -3970,7 +3970,7 @@ impl WasmClient {
         )
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = setRoomJoinRule)]
     pub fn set_room_join_rule(&self, room_id: String, rule: String) -> bool {
         let r = match rule.as_str() {
             "Public" => RoomJoinRule::Public,
@@ -3984,7 +3984,7 @@ impl WasmClient {
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = roomHistoryVisibility)]
     pub fn room_history_visibility(&self, room_id: String) -> Option<String> {
         let r = self
             .with_client(|c| c.room_history_visibility(room_id).ok())
@@ -4001,7 +4001,7 @@ impl WasmClient {
         )
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = setRoomHistoryVisibility)]
     pub fn set_room_history_visibility(&self, room_id: String, visibility: String) -> bool {
         let v = match visibility.as_str() {
             "Invited" => RoomHistoryVisibility::Invited,
@@ -4014,7 +4014,7 @@ impl WasmClient {
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = roomDirectoryVisibility)]
     pub fn room_directory_visibility(&self, room_id: String) -> Option<String> {
         let r = self
             .with_client(|c| c.room_directory_visibility(room_id).ok())
@@ -4029,7 +4029,7 @@ impl WasmClient {
         )
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = setRoomDirectoryVisibility)]
     pub fn set_room_directory_visibility(&self, room_id: String, visibility: String) -> bool {
         let v = match visibility.as_str() {
             "Public" => RoomDirectoryVisibility::Public,
@@ -4196,7 +4196,7 @@ impl WasmClient {
         }
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = observeLiveLocation)]
     pub fn observe_live_location(&self, room_id: String, on_update: Function) -> f64 {
         if let Some(state) = self.async_state.borrow().as_ref().cloned() {
             let Ok(rid) = OwnedRoomId::try_from(room_id) else {
@@ -4260,7 +4260,7 @@ impl WasmClient {
             .unwrap_or(0.0)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = unobserveLiveLocation)]
     pub fn unobserve_live_location(&self, sub_id: f64) -> bool {
         if let Some(state) = self.async_state.borrow().as_ref().cloned() {
             return Self::abort_sub(&state.live_location_subs, sub_id as u64);
@@ -4270,7 +4270,7 @@ impl WasmClient {
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = startCallInbox)]
     pub fn start_call_inbox(&self, on_invite: Function) -> f64 {
         if let Some(state) = self.async_state.borrow().as_ref().cloned() {
             let obs: Arc<dyn CallObserver> = Arc::new(JsCallObserver(on_invite));
@@ -4318,7 +4318,7 @@ impl WasmClient {
             .unwrap_or(0.0)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = stopCallInbox)]
     pub fn stop_call_inbox(&self, token: f64) -> bool {
         if let Some(state) = self.async_state.borrow().as_ref().cloned() {
             return Self::abort_sub(&state.call_subs, token as u64);
@@ -4486,7 +4486,7 @@ impl WasmClient {
         }
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = callWidgetFromWebview)]
     pub fn call_widget_from_webview(&self, session_id: f64, message: String) -> bool {
         if let Some(state) = self.async_state.borrow().as_ref().cloned() {
             if let Some(handle) = state
@@ -4507,7 +4507,7 @@ impl WasmClient {
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = stopElementCall)]
     pub fn stop_element_call(&self, session_id: f64) -> bool {
         if let Some(state) = self.async_state.borrow().as_ref().cloned() {
             let sid = session_id as u64;
@@ -4529,7 +4529,7 @@ impl WasmClient {
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = searchRoom)]
     pub fn search_room(
         &self,
         room_id: String,
@@ -4600,7 +4600,7 @@ impl WasmClient {
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = registerUnifiedpush)]
     pub fn register_unifiedpush(
         &self,
         app_id: String,
@@ -4623,13 +4623,13 @@ impl WasmClient {
         .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = unregisterUnifiedpush)]
     pub fn unregister_unifiedpush(&self, app_id: String, pushkey: String) -> bool {
         self.with_client(|c| c.unregister_unifiedpush(app_id, pushkey))
             .unwrap_or(false)
     }
 
-    #[wasm_bindgen]
+    #[wasm_bindgen(js_name = encryptionCatchupOnce)]
     pub fn encryption_catchup_once(&self) -> bool {
         false
     }
@@ -4728,13 +4728,23 @@ impl WasmClient {
             Err(_) => UrlOrQuery::Query(callback_url_or_query),
         };
 
-        if state.client.oauth().finish_login(url_or_query).await.is_err() {
+        if state
+            .client
+            .oauth()
+            .finish_login(url_or_query)
+            .await
+            .is_err()
+        {
             return false;
         }
 
         state.persist_session();
 
-        state.client.encryption().wait_for_e2ee_initialization_tasks().await;
+        state
+            .client
+            .encryption()
+            .wait_for_e2ee_initialization_tasks()
+            .await;
         let _ = state.ensure_sync_service().await;
         let _ = state.client.event_cache().subscribe();
         state.ensure_send_queue_supervision();
