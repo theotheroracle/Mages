@@ -962,12 +962,12 @@ export class WebMatrixFacade {
     return this.client.room_tags(roomId);
   }
 
-  setRoomFavourite(roomId, favourite) {
-    return this.client.set_room_favourite(roomId, favourite);
+  async setRoomFavourite(roomId, favourite) {
+    return await this.client.set_room_favourite(roomId, favourite);
   }
 
-  setRoomLowPriority(roomId, lowPriority) {
-    return this.client.set_room_low_priority(roomId, lowPriority);
+  async setRoomLowPriority(roomId, lowPriority) {
+    return await this.client.set_room_low_priority(roomId, lowPriority);
   }
 
   async getRoomTimeline(roomId, limit = 50) {
@@ -1001,16 +1001,16 @@ export class WebMatrixFacade {
     return await this.client.paginate_forwards(roomId, count);
   }
 
-  markRead(roomId) {
-    return this.client.mark_read(roomId);
+  async markRead(roomId) {
+    return await this.client.mark_read(roomId);
   }
 
-  markReadAt(roomId, eventId) {
-    return this.client.mark_read_at(roomId, eventId);
+  async markReadAt(roomId, eventId) {
+    return await this.client.mark_read_at(roomId, eventId);
   }
 
-  react(roomId, eventId, emoji) {
-    return this.client.react(roomId, eventId, emoji);
+  async react(roomId, eventId, emoji) {
+    return await this.client.react(roomId, eventId, emoji);
   }
 
   async reply(roomId, inReplyTo, body, formattedBody) {
@@ -1065,12 +1065,12 @@ export class WebMatrixFacade {
     return this.client.unobserve_typing(token);
   }
 
-  reactionsForEvent(roomId, eventId) {
-    return this.client.reactions_for_event(roomId, eventId);
+  async reactionsForEvent(roomId, eventId) {
+    return await this.client.reactions_for_event(roomId, eventId);
   }
 
-  reactionsBatch(roomId, eventIdsJson) {
-    return this.client.reactions_batch(roomId, eventIdsJson);
+  async reactionsBatch(roomId, eventIdsJson) {
+    return await this.client.reactions_batch(roomId, eventIdsJson);
   }
 
   async publicRooms(server, search, limit, since) {
@@ -1093,8 +1093,8 @@ export class WebMatrixFacade {
     return await this.client.list_invited();
   }
 
-  acceptInvite(roomId) {
-    return this.client.accept_invite(roomId);
+  async acceptInvite(roomId) {
+    return await this.client.accept_invite(roomId);
   }
 
   leaveRoom(roomId) {
@@ -1105,12 +1105,12 @@ export class WebMatrixFacade {
     return this.client.create_room(name ?? undefined, topic ?? undefined, invitees, isPublic, roomAlias ?? undefined);
   }
 
-  setRoomName(roomId, name) {
-    return this.client.set_room_name(roomId, name);
+  async setRoomName(roomId, name) {
+    return await this.client.set_room_name(roomId, name);
   }
 
-  setRoomTopic(roomId, topic) {
-    return this.client.set_room_topic(roomId, topic);
+  async setRoomTopic(roomId, topic) {
+    return await this.client.set_room_topic(roomId, topic);
   }
 
   async roomProfile(roomId) {
@@ -1293,8 +1293,8 @@ export class WebMatrixFacade {
     return await this.client.is_event_read_by(roomId, eventId, userId);
   }
 
-  markFullyReadAt(roomId, eventId) {
-    return this.client.mark_fully_read_at(roomId, eventId);
+  async markFullyReadAt(roomId, eventId) {
+    return await this.client.mark_fully_read_at(roomId, eventId);
   }
 
   observeReceipts(roomId, onChanged) {

@@ -337,10 +337,16 @@ class WebStubMatrixPort : MatrixPort {
         decodeRoomTags(requireFacade().roomTags(roomId))
 
     override suspend fun setRoomFavourite(roomId: String, favourite: Boolean): Result<Unit> =
-        unitResult(requireFacade().setRoomFavourite(roomId, favourite), "update room favourite")
+        unitResult(
+            requireFacade().setRoomFavourite(roomId, favourite).await<JsBoolean>().toBoolean(),
+            "update room favourite"
+        )
 
     override suspend fun setRoomLowPriority(roomId: String, lowPriority: Boolean): Result<Unit> =
-        unitResult(requireFacade().setRoomLowPriority(roomId, lowPriority), "update room priority")
+        unitResult(
+            requireFacade().setRoomLowPriority(roomId, lowPriority).await<JsBoolean>().toBoolean(),
+            "update room priority"
+        )
 
     override suspend fun thumbnailToCache(
         info: AttachmentInfo,
@@ -855,7 +861,7 @@ class WebStubMatrixPort : MatrixPort {
             "listInvited"
         ) ?: emptyList()
 
-    override suspend fun acceptInvite(roomId: String): Boolean = requireFacade().acceptInvite(roomId)
+    override suspend fun acceptInvite(roomId: String): Boolean = requireFacade().acceptInvite(roomId).await<JsBoolean>().toBoolean()
 
     override suspend fun leaveRoom(roomId: String): Result<Unit> =
         unitResult(requireFacade().leaveRoom(roomId), "leave room")
@@ -875,10 +881,16 @@ class WebStubMatrixPort : MatrixPort {
     )
 
     override suspend fun setRoomName(roomId: String, name: String): Result<Unit> =
-        unitResult(requireFacade().setRoomName(roomId, name), "set room name")
+        unitResult(
+            requireFacade().setRoomName(roomId, name).await<JsBoolean>().toBoolean(),
+            "set room name"
+        )
 
     override suspend fun setRoomTopic(roomId: String, topic: String): Result<Unit> =
-        unitResult(requireFacade().setRoomTopic(roomId, topic), "set room topic")
+        unitResult(
+            requireFacade().setRoomTopic(roomId, topic).await<JsBoolean>().toBoolean(),
+            "set room topic"
+        )
 
     override suspend fun roomProfile(roomId: String): RoomProfile? =
         decodeValueOrNull(
@@ -909,14 +921,19 @@ class WebStubMatrixPort : MatrixPort {
         ) ?: emptyList()
 
     override suspend fun reactions(roomId: String, eventId: String): List<ReactionSummary> =
-        wasmJson.decodeFromJsonElement(requireFacade().reactionsForEvent(roomId, eventId).toJsonElement())
+        wasmJson.decodeFromJsonElement(
+            requireFacade().reactionsForEvent(roomId, eventId).await<WebReactionsValue?>().toJsonElement()
+        )
 
     override suspend fun reactionsBatch(
         roomId: String,
         eventIds: List<String>
     ): Map<String, List<ReactionSummary>> =
         wasmJson.decodeFromJsonElement(
-            requireFacade().reactionsBatch(roomId, wasmJson.encodeToString(eventIds)).toJsonElement()
+            requireFacade()
+                .reactionsBatch(roomId, wasmJson.encodeToString(eventIds))
+                .await<WebReactionsValue?>()
+                .toJsonElement()
         )
 
     override suspend fun sendThreadText(

@@ -123,10 +123,10 @@ external class WebMatrixFacade {
     fun unobserveTyping(id: Double): Boolean
 
     @JsName("reactionsForEvent")
-    fun reactionsForEvent(roomId: String, eventId: String): WebReactionsValue?
+    fun reactionsForEvent(roomId: String, eventId: String): Promise<WebReactionsValue?>
 
     @JsName("reactionsBatch")
-    fun reactionsBatch(roomId: String, eventIdsJson: String): WebReactionsValue?
+    fun reactionsBatch(roomId: String, eventIdsJson: String): Promise<WebReactionsValue?>
 
     @JsName("publicRooms")
     fun publicRooms(
@@ -143,7 +143,7 @@ external class WebMatrixFacade {
     fun listInvited(): Promise<JsAny?>
 
     @JsName("acceptInvite")
-    fun acceptInvite(roomId: String): Boolean
+    fun acceptInvite(roomId: String): Promise<JsBoolean>
 
     @JsName("leaveRoom")
     fun leaveRoom(roomId: String): Boolean
@@ -158,10 +158,10 @@ external class WebMatrixFacade {
     ): String?
 
     @JsName("setRoomName")
-    fun setRoomName(roomId: String, name: String): Boolean
+    fun setRoomName(roomId: String, name: String): Promise<JsBoolean>
 
     @JsName("setRoomTopic")
-    fun setRoomTopic(roomId: String, topic: String): Boolean
+    fun setRoomTopic(roomId: String, topic: String): Promise<JsBoolean>
 
     @JsName("roomProfile")
     fun roomProfile(roomId: String): Promise<JsAny?>
@@ -260,10 +260,10 @@ external class WebMatrixFacade {
     fun roomTags(roomId: String): JsAny?
 
     @JsName("setRoomFavourite")
-    fun setRoomFavourite(roomId: String, favourite: Boolean): Boolean
+    fun setRoomFavourite(roomId: String, favourite: Boolean): Promise<JsBoolean>
 
     @JsName("setRoomLowPriority")
-    fun setRoomLowPriority(roomId: String, lowPriority: Boolean): Boolean
+    fun setRoomLowPriority(roomId: String, lowPriority: Boolean): Promise<JsBoolean>
 
     @JsName("fetchNotification")
     fun fetchNotification(roomId: String, eventId: String): Promise<JsAny?>
