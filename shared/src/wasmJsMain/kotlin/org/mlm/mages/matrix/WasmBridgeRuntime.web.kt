@@ -35,15 +35,14 @@ internal val wasmJson = Json {
 }
 
 internal suspend fun ensureWasmBridgeReady() {
-    @Suppress("UNUSED_VARIABLE")
-    val ignored: JsAny? = ensureMagesFfi().await()
+    // wasm-bindgen auto-initializes when the module is loaded
 }
 
-internal suspend fun createWebMatrixFacade(
+internal suspend fun createWasmClient(
     homeserverUrl: String,
     baseStoreDir: String,
     accountId: String?,
-): WebMatrixFacade {
-    val created: JsAny? = WebMatrixFacade.create(homeserverUrl, baseStoreDir, accountId).await()
-    return asWebMatrixFacade(created)
+): WasmClient {
+    val created: JsAny? = WasmClient.createAsync(homeserverUrl, baseStoreDir, accountId).await()
+    return asWasmClient(created)
 }

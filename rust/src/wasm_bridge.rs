@@ -2619,11 +2619,11 @@ impl WasmClient {
                 Ok(levels) => {
                     let mut users = std::collections::HashMap::new();
                     for (user_id, level) in levels.users.iter() {
-                        users.insert(user_id.to_string(), (*level).i64());
+                        users.insert(user_id.to_string(), (*level).into());
                     }
                     let mut events = std::collections::HashMap::new();
                     for (event_type, level) in levels.events.iter() {
-                        events.insert(event_type.to_string(), (*level).i64());
+                        events.insert(event_type.to_string(), (*level).into());
                     }
                     let state_default: i64 = levels.state_default.into();
                     #[derive(serde::Serialize)]
@@ -2640,14 +2640,14 @@ impl WasmClient {
                     }
                     let json = PowerLevelsJson {
                         users,
-                        users_default: levels.users_default.i64(),
+                        users_default: levels.users_default.into(),
                         events,
-                        events_default: levels.events_default.i64(),
+                        events_default: levels.events_default.into(),
                         state_default,
-                        ban: levels.ban.i64(),
-                        kick: levels.kick.i64(),
-                        redact: levels.redact.i64(),
-                        invite: levels.invite.i64(),
+                        ban: levels.ban.into(),
+                        kick: levels.kick.into(),
+                        redact: levels.redact.into(),
+                        invite: levels.invite.into(),
                     };
                     return to_json(&json);
                 }
@@ -2942,7 +2942,7 @@ impl WasmClient {
             if let Some(room) = state.client.get_dm_room(&uid) {
                 return Some(room.room_id().to_string());
             }
-            match state.client.create_dm(uid).await {
+            match state.client.create_dm(&uid).await {
                 Ok(room) => return Some(room.room_id().to_string()),
                 Err(_) => return None,
             }

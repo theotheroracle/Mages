@@ -24,7 +24,7 @@ import kotlin.js.JsAny
 import kotlin.js.JsBoolean
 
 class WebStubMatrixPort : MatrixPort {
-    private var client: WebMatrixFacade? = null
+    private var client: WasmClient? = null
     private var currentHs: String? = null
     private var currentAccountId: String? = null
     private var isInForeground: Boolean = true
@@ -60,11 +60,11 @@ class WebStubMatrixPort : MatrixPort {
         storage.removeItem(PENDING_OAUTH_ACCOUNT_ID_KEY)
     }
 
-    private fun requireClient(): WebMatrixFacade {
+    private fun requireClient(): WasmClient {
         return client ?: throw IllegalStateException("Matrix client not initialized. Wait for init call.")
     }
 
-    private fun requireClientOrNull(): WebMatrixFacade? = client
+    private fun requireClientOrNull(): WasmClient? = client
 
     private fun decodeTimelineDiff(diffValue: JsAny?): TimelineDiff<MessageEvent>? {
         val obj = diffValue.toJsonElement() as? JsonObject ?: return null
@@ -186,7 +186,7 @@ class WebStubMatrixPort : MatrixPort {
 
         ensureWasmBridgeReady()
         client?.free()
-        client = createWebMatrixFacade(
+        client = createWasmClient(
             hs,
             org.mlm.mages.platform.MagesPaths.storeDir(),
             accountId,
@@ -196,7 +196,7 @@ class WebStubMatrixPort : MatrixPort {
     }
 
     override suspend fun login(user: String, password: String, deviceDisplayName: String?) {
-        val result = requireClient().login(user, password, deviceDisplayName).await<JsAny?>()
+        val result = requireClient().loginAsync(user, password, deviceDisplayName).await<JsAny?>()
         val error = result?.toString()?.takeIf { it.isNotBlank() }
         if (error != null) {
             throw IllegalStateException(error)
