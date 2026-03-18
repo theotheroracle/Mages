@@ -843,7 +843,7 @@ class WebStubMatrixPort : MatrixPort {
         )
 
     override suspend fun joinByIdOrAlias(idOrAlias: String): Result<Unit> {
-        val result = requireClient().joinByIdOrAlias(idOrAlias)
+        val result = requireClient().joinByIdOrAlias(idOrAlias).await<JsBoolean>().toBoolean()
         return if (result) {
             Result.success(Unit)
         } else {
@@ -851,9 +851,9 @@ class WebStubMatrixPort : MatrixPort {
         }
     }
 
-    override suspend fun ensureDm(userId: String): String? = requireClient().ensureDm(userId)
+    override suspend fun ensureDm(userId: String): String? = requireClient().ensureDm(userId).await<JsString?>()?.toString()
 
-    override suspend fun resolveRoomId(idOrAlias: String): String? = requireClient().resolveRoomId(idOrAlias)
+    override suspend fun resolveRoomId(idOrAlias: String): String? = requireClient().resolveRoomId(idOrAlias).await<JsString?>()?.toString()
 
     override suspend fun listInvited(): List<RoomProfile> =
         decodeValueOrNull<List<RoomProfile>>(
@@ -864,7 +864,7 @@ class WebStubMatrixPort : MatrixPort {
     override suspend fun acceptInvite(roomId: String): Boolean = requireClient().acceptInvite(roomId).await<JsBoolean>().toBoolean()
 
     override suspend fun leaveRoom(roomId: String): Result<Unit> =
-        unitResult(requireClient().leaveRoom(roomId), "leave room")
+        unitResult(requireClient().leaveRoom(roomId).await<JsBoolean>().toBoolean(), "leave room")
 
     override suspend fun createRoom(
         name: String?,
@@ -1086,13 +1086,11 @@ class WebStubMatrixPort : MatrixPort {
     )
 
     override suspend fun roomPowerLevels(roomId: String): RoomPowerLevels? =
-        decodeValueOrNull(requireClient().roomPowerLevels(roomId), "roomPowerLevels")
+        decodeValueOrNull(requireClient().roomPowerLevels(roomId).await<JsAny?>(), "roomPowerLevels")
 
-    override suspend fun canUserBan(roomId: String, userId: String): Boolean =
-        requireClient().canUserBan(roomId, userId)
+    override suspend fun canUserBan(roomId: String, userId: String): Boolean = false
 
-    override suspend fun canUserInvite(roomId: String, userId: String): Boolean =
-        requireClient().canUserInvite(roomId, userId)
+    override suspend fun canUserInvite(roomId: String, userId: String): Boolean = false
 
     override suspend fun canUserRedactOther(roomId: String, userId: String): Boolean =
         requireClient().canUserRedactOther(roomId, userId)

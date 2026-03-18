@@ -7,6 +7,7 @@ use crate::CallSessionInfo;
 use crate::Direction;
 use crate::HomeserverLoginDetails;
 use crate::OriginalSyncCallInviteEvent;
+use crate::ReactionSummary;
 use crate::RsMode;
 use crate::VerifMap;
 use crate::owned_device_id;
@@ -33,6 +34,7 @@ use matrix_sdk::authentication::oauth::registration::language_tags::LanguageTag;
 use matrix_sdk::encryption::verification::{Verification, VerificationRequest};
 use matrix_sdk::room::Receipts;
 use matrix_sdk::ruma::events::reaction::ReactionEventContent;
+use matrix_sdk::ruma::events::room::{name::RoomNameEventContent, topic::RoomTopicEventContent};
 use matrix_sdk::ruma::{
     OwnedDeviceId, OwnedUserId,
     events::{
@@ -86,7 +88,7 @@ use matrix_sdk::{
         oauth::{ClientId, OAuthSession, UserSession},
     },
     encryption::{BackupDownloadStrategy, EncryptionSettings},
-    ruma::{OwnedRoomId, UserId},
+    ruma::{OwnedRoomId, OwnedEventId, OwnedRoomAliasId},
 };
 use matrix_sdk_ui::notification_client::{
     NotificationClient, NotificationProcessSetup, NotificationStatus,
@@ -2391,7 +2393,18 @@ impl WasmClient {
 
     #[wasm_bindgen]
     #[wasm_bindgen(js_name = leaveRoom)]
-    pub fn leave_room(&self, room_id: String) -> bool {
+    pub async fn leave_room(&self, room_id: String) -> bool {
+        let async_state = self.async_state.borrow().as_ref().cloned();
+        if let Some(state) = async_state {
+            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+                return false;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return false;
+            };
+            use matrix_sdk::room::Room;
+            return room.leave().await.is_ok();
+        }
         self.with_client(|c| c.leave_room(room_id).is_ok())
             .unwrap_or(false)
     }
@@ -2592,7 +2605,55 @@ impl WasmClient {
     }
 
     #[wasm_bindgen(js_name = roomPowerLevels)]
-    pub fn room_power_levels(&self, room_id: String) -> JsValue {
+    pub async fn room_power_levels(&self, room_id: String) -> JsValue {
+        let async_state = self.async_state.borrow().as_ref().cloned();
+        if let Some(state) = async_state {
+            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+                return JsValue::NULL;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return JsValue::NULL;
+            };
+            use matrix_sdk::room::Room;
+            match room.power_levels().await {
+                Ok(levels) => {
+                    let mut users = std::collections::HashMap::new();
+                    for (user_id, level) in levels.users.iter() {
+                        users.insert(user_id.to_string(), (*level).i64());
+                    }
+                    let mut events = std::collections::HashMap::new();
+                    for (event_type, level) in levels.events.iter() {
+                        events.insert(event_type.to_string(), (*level).i64());
+                    }
+                    let state_default: i64 = levels.state_default.into();
+                    #[derive(serde::Serialize)]
+                    struct PowerLevelsJson {
+                        users: std::collections::HashMap<String, i64>,
+                        users_default: i64,
+                        events: std::collections::HashMap<String, i64>,
+                        events_default: i64,
+                        state_default: i64,
+                        ban: i64,
+                        kick: i64,
+                        redact: i64,
+                        invite: i64,
+                    }
+                    let json = PowerLevelsJson {
+                        users,
+                        users_default: levels.users_default.i64(),
+                        events,
+                        events_default: levels.events_default.i64(),
+                        state_default,
+                        ban: levels.ban.i64(),
+                        kick: levels.kick.i64(),
+                        redact: levels.redact.i64(),
+                        invite: levels.invite.i64(),
+                    };
+                    return to_json(&json);
+                }
+                Err(_) => return JsValue::NULL,
+            }
+        }
         let v = self
             .with_client(|c| c.room_power_levels(room_id).ok())
             .ok()
@@ -2872,7 +2933,20 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn ensure_dm(&self, user_id: String) -> Option<String> {
+    pub async fn ensure_dm(&self, user_id: String) -> Option<String> {
+        let async_state = self.async_state.borrow().as_ref().cloned();
+        if let Some(state) = async_state {
+            let Ok(uid) = OwnedUserId::try_from(user_id) else {
+                return None;
+            };
+            if let Some(room) = state.client.get_dm_room(&uid) {
+                return Some(room.room_id().to_string());
+            }
+            match state.client.create_dm(uid).await {
+                Ok(room) => return Some(room.room_id().to_string()),
+                Err(_) => return None,
+            }
+        }
         self.with_client(|c| c.ensure_dm(user_id).ok())
             .ok()
             .flatten()
@@ -2917,14 +2991,42 @@ impl WasmClient {
     }
 
     #[wasm_bindgen(js_name = joinByIdOrAlias)]
-    pub fn join_by_id_or_alias(&self, id_or_alias: String) -> Result<(), String> {
+    pub async fn join_by_id_or_alias(&self, id_or_alias: String) -> Result<(), String> {
+        let async_state = self.async_state.borrow().as_ref().cloned();
+        if let Some(state) = async_state {
+            let Ok(target) = OwnedRoomOrAliasId::try_from(id_or_alias.clone()) else {
+                return Err("Invalid room id or alias".into());
+            };
+            return state
+                .client
+                .join_room_by_id_or_alias(&target, &[])
+                .await
+                .map_err(|e| e.to_string())
+                .map(|_| ());
+        }
         self.with_client(|c| c.join_by_id_or_alias(id_or_alias))
             .map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))?
             .map_err(|e| e.to_string())
     }
 
     #[wasm_bindgen(js_name = resolveRoomId)]
-    pub fn resolve_room_id(&self, id_or_alias: String) -> Option<String> {
+    pub async fn resolve_room_id(&self, id_or_alias: String) -> Option<String> {
+        let async_state = self.async_state.borrow().as_ref().cloned();
+        if let Some(state) = async_state {
+            if id_or_alias.starts_with('!') {
+                return Some(id_or_alias);
+            }
+            if id_or_alias.starts_with('#') {
+                let Ok(alias) = OwnedRoomAliasId::try_from(id_or_alias) else {
+                    return None;
+                };
+                match state.client.resolve_room_alias(&alias).await {
+                    Ok(resp) => return Some(resp.room_id.to_string()),
+                    Err(_) => return None,
+                }
+            }
+            return None;
+        }
         self.with_client(|c| c.resolve_room_id(id_or_alias).ok())
             .ok()
             .flatten()
@@ -4720,37 +4822,123 @@ impl WasmClient {
     }
 
     #[wasm_bindgen(js_name = acceptInvite)]
-    pub fn accept_invite(&self, room_id: String) -> bool {
+    pub async fn accept_invite(&self, room_id: String) -> bool {
+        let async_state = self.async_state.borrow().as_ref().cloned();
+        if let Some(state) = async_state {
+            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+                return false;
+            };
+            return state.client.join_room_by_id(&rid).await.is_ok();
+        }
         self.with_client(|c| c.accept_invite(room_id))
             .unwrap_or(false)
     }
 
     #[wasm_bindgen(js_name = setRoomName)]
-    pub fn set_room_name(&self, room_id: String, name: String) -> bool {
+    pub async fn set_room_name(&self, room_id: String, name: String) -> bool {
+        let async_state = self.async_state.borrow().as_ref().cloned();
+        if let Some(state) = async_state {
+            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+                return false;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return false;
+            };
+            use matrix_sdk::room::Room;
+            return room
+                .send_state_event(RoomNameEventContent::new(name))
+                .await
+                .is_ok();
+        }
         self.with_client(|c| c.set_room_name(room_id, name))
             .unwrap_or(false)
     }
 
     #[wasm_bindgen(js_name = setRoomTopic)]
-    pub fn set_room_topic(&self, room_id: String, topic: String) -> bool {
+    pub async fn set_room_topic(&self, room_id: String, topic: String) -> bool {
+        let async_state = self.async_state.borrow().as_ref().cloned();
+        if let Some(state) = async_state {
+            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+                return false;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return false;
+            };
+            use matrix_sdk::room::Room;
+            return room
+                .send_state_event(RoomTopicEventContent::new(topic))
+                .await
+                .is_ok();
+        }
         self.with_client(|c| c.set_room_topic(room_id, topic))
             .unwrap_or(false)
     }
 
     #[wasm_bindgen(js_name = setRoomFavourite)]
-    pub fn set_room_favourite(&self, room_id: String, favourite: bool) -> bool {
+    pub async fn set_room_favourite(&self, room_id: String, favourite: bool) -> bool {
+        let async_state = self.async_state.borrow().as_ref().cloned();
+        if let Some(state) = async_state {
+            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+                return false;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return false;
+            };
+            use matrix_sdk::room::Room;
+            return room.set_is_favourite(favourite, None).await.is_ok();
+        }
         self.with_client(|c| c.set_room_favourite(room_id, favourite))
             .unwrap_or(false)
     }
 
     #[wasm_bindgen(js_name = setRoomLowPriority)]
-    pub fn set_room_low_priority(&self, room_id: String, low_priority: bool) -> bool {
+    pub async fn set_room_low_priority(&self, room_id: String, low_priority: bool) -> bool {
+        let async_state = self.async_state.borrow().as_ref().cloned();
+        if let Some(state) = async_state {
+            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+                return false;
+            };
+            let Some(room) = state.client.get_room(&rid) else {
+                return false;
+            };
+            use matrix_sdk::room::Room;
+            return room.set_is_low_priority(low_priority, None).await.is_ok();
+        }
         self.with_client(|c| c.set_room_low_priority(room_id, low_priority))
             .unwrap_or(false)
     }
 
     #[wasm_bindgen(js_name = reactionsForEvent)]
-    pub fn reactions_for_event(&self, room_id: String, event_id: String) -> JsValue {
+    pub async fn reactions_for_event(&self, room_id: String, event_id: String) -> JsValue {
+        let async_state = self.async_state.borrow().as_ref().cloned();
+        if let Some(state) = async_state {
+            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+                return JsValue::NULL;
+            };
+            let Ok(eid) = OwnedEventId::try_from(event_id) else {
+                return JsValue::NULL;
+            };
+            let Some(tl) = state.timeline_mgr.timeline_for(&rid).await else {
+                return JsValue::NULL;
+            };
+            let Some(item) = tl.item_by_event_id(&eid).await else {
+                return JsValue::NULL;
+            };
+            let me = state.client.user_id();
+            let mut out = Vec::new();
+            if let Some(reactions) = item.content().reactions() {
+                for (key, by_sender) in reactions.iter() {
+                    let count = by_sender.len() as u32;
+                    let me_reacted = me.map(|u| by_sender.contains_key(u)).unwrap_or(false);
+                    out.push(ReactionSummary {
+                        key: key.to_string(),
+                        count,
+                        mine: me_reacted,
+                    });
+                }
+            }
+            return to_json(&out);
+        }
         let value = self
             .with_client(|c| c.reactions_for_event(room_id, event_id))
             .unwrap_or_default();

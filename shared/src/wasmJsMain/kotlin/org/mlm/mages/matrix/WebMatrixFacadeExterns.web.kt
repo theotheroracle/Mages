@@ -137,7 +137,7 @@ external class WebMatrixFacade {
     ): Promise<WebPublicRoomsPageValue?>
 
     @JsName("joinByIdOrAlias")
-    fun joinByIdOrAlias(idOrAlias: String): Boolean
+    fun joinByIdOrAlias(idOrAlias: String): Promise<JsBoolean>
 
     @JsName("listInvited")
     fun listInvited(): Promise<JsAny?>
@@ -146,7 +146,7 @@ external class WebMatrixFacade {
     fun acceptInvite(roomId: String): Promise<JsBoolean>
 
     @JsName("leaveRoom")
-    fun leaveRoom(roomId: String): Boolean
+    fun leaveRoom(roomId: String): Promise<JsBoolean>
 
     @JsName("createRoom")
     fun createRoom(
@@ -173,25 +173,19 @@ external class WebMatrixFacade {
     fun setRoomNotificationMode(roomId: String, mode: String): Promise<JsBoolean>
 
     @JsName("ensureDm")
-    fun ensureDm(userId: String): String?
+    fun ensureDm(userId: String): Promise<JsString?>
 
     @JsName("resolveRoomId")
-    fun resolveRoomId(idOrAlias: String): String?
+    fun resolveRoomId(idOrAlias: String): Promise<JsString?>
 
     @JsName("listMembers")
     fun listMembers(roomId: String): Promise<WebMembersValue?>
 
     @JsName("roomPowerLevels")
-    fun roomPowerLevels(roomId: String): JsAny?
+    fun roomPowerLevels(roomId: String): Promise<JsAny?>
 
     @JsName("getUserPowerLevel")
     fun getUserPowerLevel(roomId: String, userId: String): Promise<JsAny?>
-
-    @JsName("canUserBan")
-    fun canUserBan(roomId: String, userId: String): Boolean
-
-    @JsName("canUserInvite")
-    fun canUserInvite(roomId: String, userId: String): Boolean
 
     @JsName("canUserRedactOther")
     fun canUserRedactOther(roomId: String, userId: String): Boolean
