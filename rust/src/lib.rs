@@ -10,6 +10,7 @@ use matrix_sdk::authentication::oauth::registration::{
 };
 use matrix_sdk::notification_settings::RoomNotificationMode as RsMode;
 use matrix_sdk::reqwest::Url;
+use matrix_sdk::ruma::OwnedEventId;
 use matrix_sdk::ruma::events::room::power_levels::UserPowerLevel;
 use matrix_sdk::ruma::events::{AnySyncMessageLikeEvent, AnySyncTimelineEvent};
 use matrix_sdk::ruma::room::JoinRuleSummary;
@@ -65,10 +66,12 @@ use tokio::runtime::Runtime;
 use tracing::{error, info, warn};
 use uniffi::{Enum, Object, Record, export, setup_scaffolding};
 
-// wasm-bindgen bridge for Kotlin/Wasm
+mod core;
 mod platform;
 #[cfg(target_family = "wasm")]
 mod wasm_bridge;
+
+pub use core::{CoreClient, TimelineManager};
 
 use matrix_sdk::{
     Client as SdkClient, OwnedServerName, Room, RoomMemberships, SessionTokens,
@@ -164,14 +167,13 @@ use matrix_sdk::widget::{
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-// UniFFI macro-first setup
 setup_scaffolding!();
 
-const MIN_VISIBLE_AFTER_RESET: usize = 20;
-const BACKFILL_CHUNK: u16 = 20;
-const MAX_BACKFILL_ROUNDS: u8 = 8;
+pub(crate) const MIN_VISIBLE_AFTER_RESET: usize = 20;
+pub(crate) const BACKFILL_CHUNK: u16 = 20;
+pub(crate) const MAX_BACKFILL_ROUNDS: u8 = 8;
+pub(crate) const INITIAL_BACK_PAGINATION: u16 = 20;
 
-// Types exposed to Kotlin
 #[derive(Clone, Serialize, Deserialize, Record)]
 pub struct RoomSummary {
     pub id: String,
@@ -225,7 +227,6 @@ pub struct MessageEvent {
     pub item_id: String,
     pub event_id: String,
     pub room_id: String,
-    /// Full MXID
     pub sender: String,
     pub sender_display_name: Option<String>,
     pub sender_avatar_url: Option<String>,
@@ -264,9 +265,7 @@ pub enum AttachmentKind {
 
 #[derive(Clone, Serialize, Deserialize, Record)]
 pub struct EncFile {
-    /// mxc://… of the encrypted media
     pub url: String,
-    /// Full JSON of ruma::events::room::message::EncryptedFile (v2)
     pub json: String,
 }
 
@@ -279,11 +278,8 @@ pub struct AttachmentInfo {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub duration_ms: Option<u64>,
-    /// Provided when available, else UI uses `mxc_uri` to request a thumbnail.
     pub thumbnail_mxc_uri: Option<String>,
-    /// encrypted "file" (main content)
     pub encrypted: Option<EncFile>,
-    /// encrypted "thumbnail_file"
     pub thumbnail_encrypted: Option<EncFile>,
 }
 
@@ -336,7 +332,7 @@ pub struct CallInvite {
 
 #[export(callback_interface)]
 pub trait CallObserver: Send + Sync {
-    fn on_invite(&self, invite: CallInvite); // Optional future: on_hangup, on_answer…
+    fn on_invite(&self, invite: CallInvite);
 }
 
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize, Enum)]
@@ -361,12 +357,12 @@ pub enum BackupState {
 impl std::str::FromStr for RecoveryState {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Disabled" => Ok(RecoveryState::Disabled),
-            "Enabled" => Ok(RecoveryState::Enabled),
-            "Incomplete" => Ok(RecoveryState::Incomplete),
-            _ => Ok(RecoveryState::Unknown),
-        }
+        Ok(match s {
+            "Disabled" => RecoveryState::Disabled,
+            "Enabled" => RecoveryState::Enabled,
+            "Incomplete" => RecoveryState::Incomplete,
+            _ => RecoveryState::Unknown,
+        })
     }
 }
 
@@ -424,8 +420,8 @@ pub struct RenderedNotification {
     pub room_id: String,
     pub event_id: String,
     pub room_name: String,
-    pub sender: String,         // display name
-    pub sender_user_id: String, // full MXID
+    pub sender: String,
+    pub sender_user_id: String,
     pub body: String,
     pub is_noisy: bool,
     pub has_mention: bool,
@@ -568,7 +564,6 @@ pub struct RoomListEntry {
     pub is_favourite: bool,
     pub is_low_priority: bool,
     pub is_invited: bool,
-
     pub avatar_url: Option<String>,
     pub is_dm: bool,
     pub is_encrypted: bool,
@@ -671,7 +666,6 @@ pub enum TimelineDiffKind {
     PushFront {
         value: MessageEvent,
     },
-
     PopBack,
     PopFront,
     Truncate {
@@ -681,7 +675,6 @@ pub enum TimelineDiffKind {
     Reset {
         values: Vec<MessageEvent>,
     },
-
     UpdateByItemId {
         item_id: String,
         value: MessageEvent,
@@ -692,7 +685,7 @@ pub enum TimelineDiffKind {
     UpsertByItemId {
         item_id: String,
         value: MessageEvent,
-    }, // Insert if not found, update if found
+    },
 }
 
 #[uniffi::export(callback_interface)]
@@ -719,19 +712,14 @@ pub struct SearchHit {
 #[derive(Clone, Serialize, Deserialize, Record)]
 pub struct SearchPage {
     pub hits: Vec<SearchHit>,
-    /// Pagination offset for the *next* page. `None` means “no more results”.
     pub next_offset: Option<u32>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Record)]
 pub struct PollDefinition {
-    /// Question text
     pub question: String,
-    /// Answer labels – IDs will be generated as "a", "b", "c", ...
     pub answers: Vec<String>,
-    /// Poll kind: disclosed vs. undisclosed
     pub kind: PollKind,
-    /// Max selections per user (1 = single choice)
     pub max_selections: u32,
 }
 
@@ -832,7 +820,6 @@ pub struct RoomPowerLevels {
     pub kick: i64,
     pub redact: i64,
     pub invite: i64,
-    // Granular state event permissions
     pub room_name: i64,
     pub room_avatar: i64,
     pub room_topic: i64,
@@ -900,33 +887,9 @@ pub struct HomeserverLoginDetails {
     pub supports_password: bool,
 }
 
-fn mages_client_metadata(redirect_uri: &Url) -> Raw<ClientMetadata> {
-    let client_uri = Localized::new(
-        Url::parse("https://github.com/mlm-games/mages").expect("valid URL"),
-        [],
-    );
-
-    let metadata = ClientMetadata {
-        client_name: Some(Localized::new("Mages".to_owned(), [])),
-        policy_uri: Some(client_uri.clone()),
-        tos_uri: Some(client_uri.clone()),
-        ..ClientMetadata::new(
-            ApplicationType::Native,
-            vec![OAuthGrantType::AuthorizationCode {
-                redirect_uris: vec![redirect_uri.clone()],
-            }],
-            client_uri,
-        )
-    };
-
-    Raw::new(&metadata).expect("Couldn't serialize client metadata")
-}
-
 #[derive(Clone, Copy, Serialize, Deserialize, Enum)]
 pub enum ElementCallIntent {
-    /// Start a new call in this room.
     StartCall,
-    /// Join an existing call in this room.
     JoinExisting,
     StartCallVoiceDm,
     JoinExistingVoiceDm,
@@ -934,9 +897,7 @@ pub enum ElementCallIntent {
 
 #[derive(Clone, Serialize, Deserialize, Record)]
 pub struct CallSessionInfo {
-    /// Token to identify this running call session on the Rust side.
     pub session_id: u64,
-    /// Fully-expanded Element Call URL to load into a WebView.
     pub widget_url: String,
     pub widget_base_url: Option<String>,
     pub parent_url: Option<String>,
@@ -944,210 +905,7 @@ pub struct CallSessionInfo {
 
 #[export(callback_interface)]
 pub trait CallWidgetObserver: Send + Sync {
-    /// Called whenever a JSON `postMessage` payload needs to go *to* the widget.
-    ///
-    /// Kotlin should forward this verbatim into the WebView using `postMessage`.
     fn on_to_widget(&self, message: String);
-}
-
-fn cache_dir(dir: &PathBuf) -> PathBuf {
-    dir.join("media_cache")
-}
-
-// Runtime - multi-threaded for native, single-threaded for WASM
-#[cfg(not(target_arch = "wasm32"))]
-static RT: Lazy<Runtime> = Lazy::new(|| {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime")
-});
-
-#[cfg(target_arch = "wasm32")]
-static RT: Lazy<Runtime> = Lazy::new(|| {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime")
-});
-
-/// Spawn a background task. On native uses the multi/current-thread runtime; on wasm uses
-/// `spawn_local` since wasm futures are not `Send`.
-#[cfg(not(target_family = "wasm"))]
-macro_rules! spawn_task {
-    ($fut:expr) => {
-        RT.spawn($fut)
-    };
-}
-
-#[cfg(target_family = "wasm")]
-macro_rules! spawn_task {
-    ($fut:expr) => {
-        tokio::task::spawn_local($fut)
-    };
-}
-
-/// Fire-and-forget spawn. Safe to use in both statement and expression positions.
-#[cfg(not(target_family = "wasm"))]
-macro_rules! spawn_detached {
-    ($fut:expr) => {{
-        let _ = tokio::spawn($fut);
-    }};
-}
-
-#[cfg(target_family = "wasm")]
-macro_rules! spawn_detached {
-    ($fut:expr) => {{
-        wasm_bindgen_futures::spawn_local($fut);
-    }};
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
-}
-
-async fn await_room_send_queue_completion_with_progress(
-    mut updates: tokio::sync::broadcast::Receiver<matrix_sdk::send_queue::RoomSendQueueUpdate>,
-    txn_id: &str,
-    progress_observer: Option<Arc<dyn ProgressObserver>>,
-) -> bool {
-    use matrix_sdk::send_queue::RoomSendQueueUpdate as U;
-
-    loop {
-        match updates.recv().await {
-            Ok(U::MediaUpload {
-                related_to,
-                progress,
-                ..
-            }) if related_to.to_string() == txn_id => {
-                if let Some(observer) = progress_observer.as_ref() {
-                    let _ = catch_unwind(AssertUnwindSafe(|| {
-                        observer.on_progress(progress.current as u64, Some(progress.total as u64))
-                    }));
-                }
-            }
-            Ok(U::SentEvent { transaction_id, .. }) if transaction_id.to_string() == txn_id => {
-                return true;
-            }
-            Ok(U::SendError { transaction_id, .. }) if transaction_id.to_string() == txn_id => {
-                return false;
-            }
-            Ok(U::CancelledLocalEvent { transaction_id })
-                if transaction_id.to_string() == txn_id =>
-            {
-                return false;
-            }
-            Ok(_) => {}
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
-        }
-    }
-}
-
-fn notification_event_ts_ms(ev: &NotificationEvent) -> u64 {
-    match ev {
-        NotificationEvent::Timeline(timeline_ev) => timeline_ev.origin_server_ts().get().into(),
-        NotificationEvent::Invite(_) => now_ms(),
-    }
-}
-
-fn strip_matrix_path(mut u: Url) -> Url {
-    //Example: https://hs/_matrix/client/v3, strips at /_matrix/
-    if let Some(idx) = u.path().find("/_matrix/") {
-        let new_path = u.path()[..idx].to_string();
-        u.set_path(&new_path);
-        u.set_query(None);
-        u.set_fragment(None);
-    }
-    u
-}
-
-// Session persistence
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-struct SessionInfo {
-    user_id: String,
-    device_id: String,
-    access_token: String,
-    refresh_token: Option<String>,
-    homeserver: String,
-    recovery_state: Option<String>,
-}
-
-#[derive(Clone)]
-struct LiveLocationBeaconState {
-    event_id: String,
-    duration_ms: u64,
-    description: Option<String>,
-}
-
-#[derive(Debug, Error, Serialize, uniffi::Error)]
-pub enum FfiError {
-    #[error("{0}")]
-    Msg(String),
-}
-
-impl From<matrix_sdk::Error> for FfiError {
-    fn from(e: matrix_sdk::Error) -> Self {
-        FfiError::Msg(format!("matrix_sdk error: {e:?}"))
-    }
-}
-
-impl From<matrix_sdk_ui::notification_client::Error> for FfiError {
-    fn from(e: matrix_sdk_ui::notification_client::Error) -> Self {
-        FfiError::Msg(format!("NotificationClient error: {e:?}"))
-    }
-}
-
-impl From<std::io::Error> for FfiError {
-    fn from(e: std::io::Error) -> Self {
-        FfiError::Msg(format!("io error: {e:?}"))
-    }
-}
-
-struct VerifFlow {
-    sas: SasVerification,
-    _other_user: OwnedUserId,
-    _other_device: OwnedDeviceId,
-}
-
-type VerifMap = Arc<Mutex<HashMap<String, VerifFlow>>>;
-
-#[derive(Object)]
-pub struct Client {
-    inner: ManuallyDrop<SdkClient>,
-    store_dir: PathBuf,
-    guards: Mutex<Vec<tokio::task::JoinHandle<()>>>,
-    verifs: VerifMap,
-    send_observers: Arc<Mutex<HashMap<u64, Arc<dyn SendObserver>>>>,
-    send_obs_counter: AtomicU64,
-    send_tx: tokio::sync::mpsc::UnboundedSender<SendUpdate>,
-    inbox: Arc<Mutex<HashMap<String, (OwnedUserId, OwnedDeviceId)>>>,
-    sync_service: Arc<Mutex<Option<Arc<SyncService>>>>,
-    subs_counter: AtomicU64,
-    timeline_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
-    typing_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
-    connection_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
-    inbox_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
-    receipts_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
-    room_list_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
-    room_list_cmds: Mutex<HashMap<u64, tokio::sync::mpsc::UnboundedSender<RoomListCmd>>>,
-    send_handles_by_txn: Arc<Mutex<HashMap<String, SendHandle>>>,
-    send_queue_supervised: AtomicBool,
-    call_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
-    live_location_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
-    live_location_beacons: Mutex<HashMap<String, LiveLocationBeaconState>>,
-    recovery_state_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
-    backup_state_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
-
-    pub app_in_foreground: Arc<AtomicBool>,
-    widget_handles: Mutex<HashMap<u64, WidgetDriverHandle>>,
-    widget_driver_tasks: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
-    widget_recv_tasks: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
-
-    timeline_mgr: TimelineManager,
 }
 
 #[derive(Clone, Serialize, Deserialize, Enum)]
@@ -1180,6 +938,62 @@ pub trait SendObserver: Send + Sync {
     fn on_update(&self, update: SendUpdate);
 }
 
+pub(crate) type VerifMap = Arc<Mutex<HashMap<String, VerifFlow>>>;
+
+pub(crate) struct VerifFlow {
+    pub(crate) sas: SasVerification,
+    pub(crate) _other_user: OwnedUserId,
+    pub(crate) _other_device: OwnedDeviceId,
+}
+
+fn cache_dir(dir: &PathBuf) -> PathBuf {
+    dir.join("media_cache")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+static RT: Lazy<Runtime> = Lazy::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime")
+});
+
+#[cfg(target_arch = "wasm32")]
+static RT: Lazy<Runtime> = Lazy::new(|| {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime")
+});
+
+#[cfg(not(target_family = "wasm"))]
+macro_rules! spawn_task {
+    ($fut:expr) => {
+        RT.spawn($fut)
+    };
+}
+
+#[cfg(target_family = "wasm")]
+macro_rules! spawn_task {
+    ($fut:expr) => {
+        tokio::task::spawn_local($fut)
+    };
+}
+
+#[cfg(not(target_family = "wasm"))]
+macro_rules! spawn_detached {
+    ($fut:expr) => {{
+        let _ = tokio::spawn($fut);
+    }};
+}
+
+#[cfg(target_family = "wasm")]
+macro_rules! spawn_detached {
+    ($fut:expr) => {{
+        wasm_bindgen_futures::spawn_local($fut);
+    }};
+}
+
 macro_rules! sub_manager {
     ($self:expr, $subs:ident, $spawn:expr) => {{
         let id = $self.next_sub_id();
@@ -1200,39 +1014,331 @@ macro_rules! unsub {
     }};
 }
 
-macro_rules! with_room_async {
-    ($self:expr, $room_id:expr, $body:expr) => {{
-        RT.block_on(async {
-            let rid = match OwnedRoomId::try_from($room_id) {
-                Ok(r) => r,
-                Err(_) => return false,
-            };
-            let room = match $self.inner.get_room(&rid) {
-                Some(r) => r,
-                None => return false,
-            };
-            $body(room, rid).await
-        })
-    }};
+macro_rules! delegate_bool {
+    ($($name:ident($($arg:ident : $ty:ty),* $(,)?));+ $(;)?) => {
+        #[uniffi::export]
+        impl Client {
+            $(
+                pub fn $name(&self, $($arg: $ty),*) -> bool {
+                    RT.block_on(self.core.$name($($arg),*))
+                }
+            )+
+        }
+    };
 }
 
-macro_rules! with_timeline_async {
-    ($self:expr, $room_id:expr, $body:expr) => {{
-        RT.block_on(async {
-            let rid = match OwnedRoomId::try_from($room_id) {
-                Ok(r) => r,
-                Err(_) => return false,
-            };
-            let tl = match $self.timeline_mgr.timeline_for(&rid).await {
-                Some(t) => t,
-                None => return false,
-            };
-            $body(tl, rid).await
-        })
-    }};
+macro_rules! delegate_unit_result {
+    ($($name:ident($($arg:ident : $ty:ty),* $(,)?));+ $(;)?) => {
+        #[uniffi::export]
+        impl Client {
+            $(
+                pub fn $name(&self, $($arg: $ty),*) -> Result<(), FfiError> {
+                    RT.block_on(self.core.$name($($arg),*))
+                }
+            )+
+        }
+    };
 }
 
-const INITIAL_BACK_PAGINATION: u16 = 20;
+macro_rules! delegate_result {
+    ($ret:ty; $($name:ident($($arg:ident : $ty:ty),* $(,)?));+ $(;)?) => {
+        #[uniffi::export]
+        impl Client {
+            $(
+                pub fn $name(&self, $($arg: $ty),*) -> Result<$ret, FfiError> {
+                    RT.block_on(self.core.$name($($arg),*))
+                }
+            )+
+        }
+    };
+}
+
+macro_rules! delegate_option {
+    ($ret:ty; $($name:ident($($arg:ident : $ty:ty),* $(,)?));+ $(;)?) => {
+        #[uniffi::export]
+        impl Client {
+            $(
+                pub fn $name(&self, $($arg: $ty),*) -> Option<$ret> {
+                    RT.block_on(self.core.$name($($arg),*))
+                }
+            )+
+        }
+    };
+}
+
+macro_rules! delegate_plain {
+    ($ret:ty; $($name:ident($($arg:ident : $ty:ty),* $(,)?));+ $(;)?) => {
+        #[uniffi::export]
+        impl Client {
+            $(
+                pub fn $name(&self, $($arg: $ty),*) -> $ret {
+                    RT.block_on(self.core.$name($($arg),*))
+                }
+            )+
+        }
+    };
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct SessionInfo {
+    user_id: String,
+    device_id: String,
+    access_token: String,
+    refresh_token: Option<String>,
+    homeserver: String,
+    recovery_state: Option<String>,
+}
+
+#[derive(Clone)]
+struct LiveLocationBeaconState {
+    event_id: String,
+    duration_ms: u64,
+    description: Option<String>,
+}
+
+#[derive(Debug, thiserror::Error, Serialize, uniffi::Error)]
+pub enum FfiError {
+    #[error("{0}")]
+    Msg(String),
+}
+
+impl From<matrix_sdk::Error> for FfiError {
+    fn from(e: matrix_sdk::Error) -> Self {
+        FfiError::Msg(format!("matrix_sdk error: {e:?}"))
+    }
+}
+impl From<matrix_sdk_ui::notification_client::Error> for FfiError {
+    fn from(e: matrix_sdk_ui::notification_client::Error) -> Self {
+        FfiError::Msg(format!("NotificationClient error: {e:?}"))
+    }
+}
+impl From<std::io::Error> for FfiError {
+    fn from(e: std::io::Error) -> Self {
+        FfiError::Msg(format!("io error: {e:?}"))
+    }
+}
+
+delegate_bool! {
+    set_typing(room_id: String, typing: bool);
+    send_message(room_id: String, body: String, formatted_body: Option<String>);
+    reply(room_id: String, in_reply_to: String, body: String, formatted_body: Option<String>);
+    edit(room_id: String, target_event_id: String, new_body: String, formatted_body: Option<String>);
+    redact(room_id: String, event_id: String, reason: Option<String>);
+    react(room_id: String, event_id: String, emoji: String);
+    send_thread_text(room_id: String, root_event_id: String, body: String,
+                     reply_to_event_id: Option<String>, latest_event_id: Option<String>,
+                     formatted_body: Option<String>);
+    mark_read(room_id: String);
+    mark_read_at(room_id: String, event_id: String);
+    mark_fully_read_at(room_id: String, event_id: String);
+    set_mark_unread(room_id: String, unread: bool);
+    paginate_backwards(room_id: String, count: u16);
+    paginate_forwards(room_id: String, count: u16);
+    ban_user(room_id: String, user_id: String, reason: Option<String>);
+    unban_user(room_id: String, user_id: String, reason: Option<String>);
+    kick_user(room_id: String, user_id: String, reason: Option<String>);
+    invite_user(room_id: String, user_id: String);
+    accept_invite(room_id: String);
+    enable_room_encryption(room_id: String);
+    set_room_name(room_id: String, name: String);
+    set_room_topic(room_id: String, topic: String);
+    set_pinned_events(room_id: String, event_ids: Vec<String>);
+    set_room_favourite(room_id: String, fav: bool);
+    set_room_low_priority(room_id: String, low: bool);
+    is_event_read_by(room_id: String, event_id: String, user_id: String);
+    is_user_ignored(user_id: String);
+    knock(id_or_alias: String);
+    space_invite_user(space_id: String, user_id: String);
+    is_space(room_id: String);
+}
+
+delegate_unit_result! {
+    leave_room(room_id: String);
+    set_room_notification_mode(room_id: String, mode: FfiRoomNotificationMode);
+    set_room_canonical_alias(room_id: String, alias: Option<String>, alt_aliases: Vec<String>);
+    set_room_directory_visibility(room_id: String, visibility: RoomDirectoryVisibility);
+    set_room_join_rule(room_id: String, rule: RoomJoinRule);
+    set_room_history_visibility(room_id: String, visibility: RoomHistoryVisibility);
+    apply_power_level_changes(room_id: String, changes: RoomPowerLevelChanges);
+    update_power_level_for_user(room_id: String, user_id: String, power_level: i64);
+    ignore_user(user_id: String);
+    unignore_user(user_id: String);
+    report_content(room_id: String, event_id: String, score: Option<i32>, reason: Option<String>);
+    report_room(room_id: String, reason: Option<String>);
+    send_poll_response(room_id: String, poll_event_id: String, answers: Vec<String>);
+    send_poll_end(room_id: String, poll_event_id: String);
+    space_add_child(space_id: String, child_room_id: String, order: Option<String>, suggested: Option<bool>);
+    space_remove_child(space_id: String, child_room_id: String);
+    start_live_location(room_id: String, duration_ms: u64, description: Option<String>);
+    stop_live_location(room_id: String);
+    send_live_location(room_id: String, geo_uri: String);
+    set_presence(state: Presence, status_msg: Option<String>);
+    accept_knock_request(room_id: String, user_id: String);
+    decline_knock_request(room_id: String, user_id: String, reason: Option<String>);
+}
+
+delegate_result! { Vec<MemberSummary>;
+    list_members(room_id: String);
+}
+delegate_result! { Vec<RoomProfile>;
+    list_invited();
+}
+delegate_result! { Vec<String>;
+    ignored_users();
+}
+delegate_result! { Vec<DirectoryUser>;
+    search_users(search_term: String, limit: u64);
+}
+delegate_result! { DirectoryUser;
+    get_user_profile(user_id: String);
+}
+delegate_result! { PublicRoomsPage;
+    public_rooms(server: Option<String>, search: Option<String>, limit: u32, since: Option<String>);
+}
+delegate_result! { RoomPowerLevels;
+    room_power_levels(room_id: String);
+}
+delegate_result! { RoomDirectoryVisibility;
+    room_directory_visibility(room_id: String);
+}
+delegate_result! { RoomJoinRule;
+    room_join_rule(room_id: String);
+}
+delegate_result! { RoomHistoryVisibility;
+    room_history_visibility(room_id: String);
+}
+delegate_result! { Vec<SeenByEntry>;
+    seen_by_for_event(room_id: String, event_id: String, limit: u32);
+}
+delegate_result! { String;
+    upgrade_room(room_id: String, new_version: String);
+    ensure_dm(user_id: String);
+}
+delegate_result! { Vec<KnockRequestSummary>;
+    list_knock_requests(room_id: String);
+}
+delegate_result! { bool;
+    can_user_ban(room_id: String, user_id: String);
+    can_user_invite(room_id: String, user_id: String);
+    can_user_redact_other(room_id: String, user_id: String);
+}
+
+delegate_option! { FfiRoomNotificationMode;
+    room_notification_mode(room_id: String);
+}
+delegate_option! { UnreadStats;
+    room_unread_stats(room_id: String);
+}
+delegate_option! { RoomTags;
+    room_tags(room_id: String);
+}
+delegate_option! { String;
+    dm_peer_user_id(room_id: String);
+    resolve_room_id(id_or_alias: String);
+}
+delegate_option! { SuccessorRoomInfo;
+    room_successor(room_id: String);
+}
+delegate_option! { PredecessorRoomInfo;
+    room_predecessor(room_id: String);
+}
+delegate_option! { bool;
+    is_marked_unread(room_id: String);
+}
+
+delegate_plain! { Vec<MessageEvent>;
+    recent_events(room_id: String, limit: u32);
+}
+delegate_plain! { Vec<String>;
+    get_pinned_events(room_id: String);
+    room_aliases(room_id: String);
+}
+delegate_plain! { i64;
+    get_user_power_level(room_id: String, user_id: String);
+}
+delegate_plain! { OwnReceipt;
+    own_last_read(room_id: String);
+}
+delegate_plain! { HashMap<String, Vec<ReactionSummary>>;
+    reactions_batch(room_id: String, event_ids: Vec<String>);
+}
+delegate_plain! { Vec<ReactionSummary>;
+    reactions_for_event(room_id: String, event_id: String);
+}
+delegate_plain! { Vec<SpaceInfo>;
+    my_spaces();
+}
+delegate_plain! { Vec<RoomSummary>;
+    rooms();
+}
+
+#[derive(Object)]
+pub struct Client {
+    core: Arc<CoreClient>,
+    store_dir: PathBuf,
+    guards: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    verifs: VerifMap,
+    send_observers: Arc<Mutex<HashMap<u64, Arc<dyn SendObserver>>>>,
+    send_obs_counter: AtomicU64,
+    send_tx: tokio::sync::mpsc::UnboundedSender<SendUpdate>,
+    inbox: Arc<Mutex<HashMap<String, (OwnedUserId, OwnedDeviceId)>>>,
+    subs_counter: AtomicU64,
+    timeline_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
+    typing_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
+    connection_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
+    inbox_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
+    receipts_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
+    room_list_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
+    room_list_cmds: Mutex<HashMap<u64, tokio::sync::mpsc::UnboundedSender<RoomListCmd>>>,
+    send_handles_by_txn: Arc<Mutex<HashMap<String, SendHandle>>>,
+    send_queue_supervised: AtomicBool,
+    call_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
+    live_location_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
+    recovery_state_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
+    backup_state_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
+    pub app_in_foreground: Arc<AtomicBool>,
+    widget_handles: Mutex<HashMap<u64, WidgetDriverHandle>>,
+    widget_driver_tasks: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
+    widget_recv_tasks: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
+    timeline_mgr: TimelineManager,
+}
+
+fn mages_client_metadata(redirect_uri: &Url) -> Raw<ClientMetadata> {
+    let client_uri = Localized::new(
+        Url::parse("https://github.com/mlm-games/mages").expect("valid URL"),
+        [],
+    );
+    let metadata = ClientMetadata {
+        client_name: Some(Localized::new("Mages".to_owned(), [])),
+        policy_uri: Some(client_uri.clone()),
+        tos_uri: Some(client_uri.clone()),
+        ..ClientMetadata::new(
+            ApplicationType::Native,
+            vec![OAuthGrantType::AuthorizationCode {
+                redirect_uris: vec![redirect_uri.clone()],
+            }],
+            client_uri,
+        )
+    };
+    Raw::new(&metadata).expect("Couldn't serialize client metadata")
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+fn strip_matrix_path(mut u: Url) -> Url {
+    if let Some(idx) = u.path().find("/_matrix/") {
+        let new_path = u.path()[..idx].to_string();
+        u.set_path(&new_path);
+        u.set_query(None);
+        u.set_fragment(None);
+    }
+    u
+}
 
 #[export]
 impl Client {
@@ -1300,24 +1406,23 @@ impl Client {
                         .build()
                         .await
                 };
-
                 client
             })
             .map_err(|e| FfiError::Msg(format!("failed to build client: {e}")))?;
 
-        let timeline_mgr = TimelineManager::new(inner.clone());
-
+        let core = Arc::new(CoreClient::new(inner.clone()));
+        let timeline_mgr = core.timeline_mgr.clone();
         let (send_tx, mut send_rx) = tokio::sync::mpsc::unbounded_channel::<SendUpdate>();
+
         let this = Self {
-            inner: ManuallyDrop::new(inner),
+            core: core.clone(),
             store_dir: store_dir_path,
             guards: Mutex::new(vec![]),
-            verifs: Arc::new(Mutex::new(HashMap::new())),
+            verifs: core.verifs.clone(),
             send_observers: Arc::new(Mutex::new(HashMap::new())),
             send_obs_counter: AtomicU64::new(0),
             send_tx,
-            inbox: Arc::new(Mutex::new(HashMap::new())),
-            sync_service: Arc::new(Mutex::new(None)),
+            inbox: core.inbox.clone(),
             subs_counter: AtomicU64::new(0),
             timeline_subs: Mutex::new(HashMap::new()),
             typing_subs: Mutex::new(HashMap::new()),
@@ -1326,21 +1431,20 @@ impl Client {
             receipts_subs: Mutex::new(HashMap::new()),
             room_list_subs: Mutex::new(HashMap::new()),
             room_list_cmds: Mutex::new(HashMap::new()),
-            send_handles_by_txn: Arc::new(Mutex::new(HashMap::new())),
+            send_handles_by_txn: core.send_handles_by_txn.clone(),
             send_queue_supervised: AtomicBool::new(false),
             call_subs: Mutex::new(HashMap::new()),
             live_location_subs: Mutex::new(HashMap::new()),
-            live_location_beacons: Mutex::new(HashMap::new()),
             recovery_state_subs: Mutex::new(HashMap::new()),
             backup_state_subs: Mutex::new(HashMap::new()),
             widget_handles: Mutex::new(HashMap::new()),
             widget_driver_tasks: Mutex::new(HashMap::new()),
             widget_recv_tasks: Mutex::new(HashMap::new()),
-
             app_in_foreground: Arc::new(AtomicBool::new(false)),
             timeline_mgr,
         };
 
+        // send observer fan-out task
         {
             let observers = this.send_observers.clone();
             let h = spawn_task!(async move {
@@ -1358,9 +1462,9 @@ impl Client {
             this.guards.lock().unwrap().push(h);
         }
 
+        // Restore session
         #[cfg(not(target_family = "wasm"))]
         RT.block_on(async {
-            // Restore session from session.json if present
             if let Some(info) = platform::load_session(&this.store_dir).await {
                 if let Ok(user_id) = info.user_id.parse::<OwnedUserId>() {
                     let session = MatrixSession {
@@ -1373,21 +1477,19 @@ impl Client {
                             refresh_token: info.refresh_token.clone(),
                         },
                     };
-                    if this.inner.restore_session(session).await.is_ok() {
-                        // Wait for E2EE init to fetch recovery state from server
-                        this.inner
+                    if this.core.sdk.restore_session(session).await.is_ok() {
+                        this.core
+                            .sdk
                             .encryption()
                             .wait_for_e2ee_initialization_tasks()
                             .await;
-
-                        this.ensure_sync_service().await;
-
-                        if let Err(e) = this.inner.event_cache().subscribe() {
+                        this.core.ensure_sync_service().await;
+                        if let Err(e) = this.core.sdk.event_cache().subscribe() {
                             warn!("event_cache.subscribe() failed after login: {e:?}");
                         }
-
                         this.ensure_send_queue_supervision();
-                        this.inner
+                        this.core
+                            .sdk
                             .send_queue()
                             .respawn_tasks_for_rooms_with_unsent_requests()
                             .await;
@@ -1399,24 +1501,24 @@ impl Client {
             }
         });
 
+        // Token refresh persistence task
         {
-            let inner = this.inner.clone();
+            let sdk = this.core.sdk.clone();
             let store = this.store_dir.clone();
             let h = spawn_task!(async move {
-                let mut session_rx = inner.subscribe_to_session_changes();
+                let mut session_rx = sdk.subscribe_to_session_changes();
                 while let Ok(update) = session_rx.recv().await {
                     if let matrix_sdk::SessionChange::TokensRefreshed = update {
-                        if let Some(sess) = inner.matrix_auth().session() {
+                        if let Some(sess) = sdk.matrix_auth().session() {
                             let recovery_state = platform::load_session(&store)
                                 .await
                                 .and_then(|info| info.recovery_state);
-
                             let info = SessionInfo {
                                 user_id: sess.meta.user_id.to_string(),
                                 device_id: sess.meta.device_id.to_string(),
                                 access_token: sess.tokens.access_token.clone(),
                                 refresh_token: sess.tokens.refresh_token.clone(),
-                                homeserver: inner.homeserver().to_string(),
+                                homeserver: sdk.homeserver().to_string(),
                                 recovery_state,
                             };
                             let _ = platform::persist_session(&store, &info).await;
@@ -1427,13 +1529,14 @@ impl Client {
             this.guards.lock().unwrap().push(h);
         }
 
+        // Room key decryption retry task
         {
-            let client = this.inner.clone();
+            let sdk = this.core.sdk.clone();
+            let mgr = this.core.timeline_mgr.clone();
             let h = spawn_task!(async move {
-                if let Some(mut stream) = client.encryption().room_keys_received_stream().await {
+                if let Some(mut stream) = sdk.encryption().room_keys_received_stream().await {
                     while let Some(batch) = stream.next().await {
                         let Ok(infos) = batch else { continue };
-                        use HashMap;
                         let mut by_room: HashMap<OwnedRoomId, Vec<String>> = HashMap::new();
                         for info in infos {
                             by_room
@@ -1442,10 +1545,8 @@ impl Client {
                                 .push(info.session_id.clone());
                         }
                         for (rid, sessions) in by_room {
-                            if let Some(room) = client.get_room(&rid) {
-                                if let Ok(tl) = room.timeline().await {
-                                    tl.retry_decryption(sessions).await;
-                                }
+                            if let Some(tl) = mgr.timeline_for(&rid).await {
+                                tl.retry_decryption(sessions).await;
                             }
                         }
                     }
@@ -1457,193 +1558,217 @@ impl Client {
         Ok(this)
     }
 
-    pub fn whoami(&self) -> Option<String> {
-        self.inner.user_id().map(|u| u.to_string())
+    // these ones' return types don't fit into the macros
+
+    pub fn room_profile(&self, room_id: String) -> Result<Option<RoomProfile>, FfiError> {
+        RT.block_on(self.core.room_profile(room_id))
     }
 
-    pub fn account_management_url(&self) -> Option<String> {
-        RT.block_on(async {
-            match self.inner.oauth().cached_server_metadata().await {
-                Ok(metadata) => metadata.account_management_uri.map(|u| u.to_string()),
-                Err(_) => None,
-            }
-        })
-    }
-
-    pub fn account_management_url_with_action(&self, action: &str) -> Option<String> {
-        RT.block_on(async {
-            match self.inner.oauth().cached_server_metadata().await {
-                Ok(metadata) => metadata
-                    .account_management_uri
-                    .map(|u| format!("{}?action={}", u, action)),
-                Err(_) => None,
-            }
-        })
-    }
-
-    pub fn load_room_list_cache(&self) -> Vec<RoomListEntry> {
-        RT.block_on(async { platform::load_room_list_cache(&self.store_dir).await })
-    }
-
-    pub fn login(
+    pub fn send_poll_start(
         &self,
-        username: String,
-        password: String,
-        device_display_name: Option<String>,
-    ) -> Result<(), FfiError> {
-        RT.block_on(async {
-            let mut req = self
-                .inner
-                .matrix_auth()
-                .login_username(username.as_str(), &password);
-            if let Some(name) = device_display_name.as_ref() {
-                req = req.initial_device_display_name(name);
-            }
+        room_id: String,
+        def: PollDefinition,
+    ) -> Result<String, FfiError> {
+        RT.block_on(self.core.send_poll_start(room_id, def))
+    }
 
-            let res = req.send().await.map_err(|e| FfiError::Msg(e.to_string()))?;
+    pub fn create_room(
+        &self,
+        name: Option<String>,
+        topic: Option<String>,
+        invitees: Vec<String>,
+        is_public: bool,
+        room_alias: Option<String>,
+    ) -> Result<String, FfiError> {
+        RT.block_on(
+            self.core
+                .create_room(name, topic, invitees, is_public, room_alias),
+        )
+    }
 
-            let info = SessionInfo {
-                user_id: res.user_id.to_string(),
-                device_id: res.device_id.to_string(),
-                access_token: res.access_token.clone(),
-                refresh_token: res.refresh_token.clone(),
-                homeserver: self.inner.homeserver().to_string(),
-                recovery_state: None,
+    pub fn create_space(
+        &self,
+        name: String,
+        topic: Option<String>,
+        is_public: bool,
+        invitees: Vec<String>,
+    ) -> Result<String, FfiError> {
+        RT.block_on(self.core.create_space(name, topic, is_public, invitees))
+    }
+
+    pub fn room_preview(&self, id_or_alias: String) -> Result<RoomPreview, FfiError> {
+        RT.block_on(self.core.room_preview(id_or_alias))
+    }
+
+    pub fn space_hierarchy(
+        &self,
+        space_id: String,
+        from: Option<String>,
+        limit: u32,
+        max_depth: Option<u32>,
+        suggested_only: bool,
+    ) -> Result<SpaceHierarchyPage, FfiError> {
+        RT.block_on(
+            self.core
+                .space_hierarchy(space_id, from, limit, max_depth, suggested_only),
+        )
+    }
+
+    pub fn thread_replies(
+        &self,
+        room_id: String,
+        root_event_id: String,
+        from: Option<String>,
+        limit: u32,
+        direction_forward: bool,
+    ) -> Result<ThreadPage, FfiError> {
+        RT.block_on(self.core.thread_replies(
+            room_id,
+            root_event_id,
+            from,
+            limit,
+            direction_forward,
+        ))
+    }
+
+    pub fn thread_summary(
+        &self,
+        room_id: String,
+        root_event_id: String,
+        per_page: u32,
+        max_pages: u32,
+    ) -> Result<ThreadSummary, FfiError> {
+        RT.block_on(
+            self.core
+                .thread_summary(room_id, root_event_id, per_page, max_pages),
+        )
+    }
+
+    pub fn get_presence(&self, user_id: String) -> Result<PresenceInfo, FfiError> {
+        RT.block_on(self.core.get_presence(user_id))
+    }
+
+    pub fn publish_room_alias(&self, room_id: String, alias: String) -> Result<bool, FfiError> {
+        RT.block_on(self.core.publish_room_alias(room_id, alias))
+    }
+
+    pub fn unpublish_room_alias(&self, room_id: String, alias: String) -> Result<bool, FfiError> {
+        RT.block_on(self.core.unpublish_room_alias(room_id, alias))
+    }
+
+    pub fn room_upgrade_links(&self, room_id: String) -> Option<RoomUpgradeLinks> {
+        RT.block_on(self.core.room_upgrade_links(room_id))
+    }
+
+    pub fn join_by_id_or_alias(&self, id_or_alias: String) -> Result<(), FfiError> {
+        RT.block_on(self.core.join_by_id_or_alias(id_or_alias))
+    }
+
+    pub fn search_room(
+        &self,
+        room_id: String,
+        query: String,
+        limit: u32,
+        offset: Option<u32>,
+    ) -> Result<SearchPage, FfiError> {
+        #[cfg(target_family = "wasm")]
+        return Err(FfiError::Msg("search_room: not supported on web".into()));
+
+        #[cfg(not(target_family = "wasm"))]
+        RT.block_on(self.core.search_room(room_id, query, limit, offset))
+    }
+
+    pub fn whoami(&self) -> Option<String> {
+        self.core.whoami()
+    }
+    pub fn is_logged_in(&self) -> bool {
+        self.core.is_logged_in()
+    }
+
+    fn next_sub_id(&self) -> u64 {
+        self.subs_counter
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1)
+    }
+
+    pub fn observe_typing(&self, room_id: String, observer: Box<dyn TypingObserver>) -> u64 {
+        let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            return 0;
+        };
+        let obs: Arc<dyn TypingObserver> = Arc::from(observer);
+        let core = self.core.clone();
+        sub_manager!(self, typing_subs, async move {
+            let Some(stream) = core.typing_stream(&rid).await else {
+                return;
             };
-
-            platform::persist_session(&self.store_dir, &info).await?;
-
-            // Wait for E2EE init to fetch recovery state from server
-            self.inner
-                .encryption()
-                .wait_for_e2ee_initialization_tasks()
-                .await;
-
-            self.ensure_sync_service().await;
-
-            if let Err(e) = self.inner.event_cache().subscribe() {
-                warn!("event_cache.subscribe() failed after login: {e:?}");
+            tokio::pin!(stream);
+            let mut last: Vec<String> = Vec::new();
+            while let Some(names) = stream.next().await {
+                if names != last {
+                    last = names.clone();
+                    let _ = catch_unwind(AssertUnwindSafe(|| obs.on_update(names)));
+                }
             }
-
-            self.ensure_send_queue_supervision();
-            self.inner
-                .send_queue()
-                .respawn_tasks_for_rooms_with_unsent_requests()
-                .await;
-
-            Ok(())
         })
     }
 
-    pub fn rooms(&self) -> Vec<RoomSummary> {
-        RT.block_on(async {
-            let mut out = Vec::new();
-            for r in self.inner.joined_rooms() {
-                let name = r
-                    .display_name()
-                    .await
-                    .map(|dn| dn.to_string())
-                    .unwrap_or_else(|_| r.room_id().to_string());
-                out.push(RoomSummary {
-                    id: r.room_id().to_string(),
-                    name,
-                });
+    pub fn unobserve_typing(&self, sub_id: u64) -> bool {
+        unsub!(self, typing_subs, sub_id)
+    }
+
+    pub fn observe_receipts(&self, room_id: String, observer: Box<dyn ReceiptsObserver>) -> u64 {
+        let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            return 0;
+        };
+        let obs: Arc<dyn ReceiptsObserver> = Arc::from(observer);
+        let core = self.core.clone();
+        sub_manager!(self, receipts_subs, async move {
+            let Some(mut stream) = core.receipts_changed_stream(&rid).await else {
+                return;
+            };
+            while let Some(()) = stream.next().await {
+                let _ = catch_unwind(AssertUnwindSafe(|| obs.on_changed()));
             }
-            out
         })
     }
 
-    pub fn set_typing(&self, room_id: String, typing: bool) -> bool {
-        with_room_async!(self, room_id, |room: Room, _rid| async move {
-            room.typing_notice(typing).await.is_ok()
-        })
+    pub fn unobserve_receipts(&self, sub_id: u64) -> bool {
+        unsub!(self, receipts_subs, sub_id)
     }
 
-    pub fn enter_foreground(&self) {
-        self.app_in_foreground
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        let _ = RT.block_on(async {
-            self.ensure_sync_service().await;
-
-            if let Err(e) = self.inner.event_cache().subscribe() {
-                warn!("event_cache.subscribe() failed: {e:?}");
+    pub fn observe_own_receipt(&self, room_id: String, observer: Box<dyn ReceiptsObserver>) -> u64 {
+        let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            return 0;
+        };
+        let obs: Arc<dyn ReceiptsObserver> = Arc::from(observer);
+        let sdk = self.core.sdk.clone();
+        sub_manager!(self, receipts_subs, async move {
+            let stream = sdk.observe_room_events::<SyncReceiptEvent, matrix_sdk::room::Room>(&rid);
+            let mut sub = stream.subscribe();
+            while let Some((_ev, _room)) = sub.next().await {
+                let _ = catch_unwind(AssertUnwindSafe(|| obs.on_changed()));
             }
-
-            if let Some(svc) = self.sync_service.lock().unwrap().as_ref().cloned() {
-                let _ = svc.start().await;
-            }
-        });
-    }
-
-    /// Send the app to background: stop Sliding Sync supervision.
-    pub fn enter_background(&self) {
-        self.app_in_foreground
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-        let _ = RT.block_on(async {
-            self.ensure_sync_service().await;
-            if let Some(svc) = self.sync_service.lock().unwrap().as_ref().cloned() {
-                let _ = svc.stop().await;
-            }
-        });
-    }
-
-    pub fn recent_events(&self, room_id: String, limit: u32) -> Vec<MessageEvent> {
-        RT.block_on(async {
-            let Ok(room_id) = OwnedRoomId::try_from(room_id) else {
-                return vec![];
-            };
-
-            let Some(timeline) = self.timeline_mgr.timeline_for(&room_id).await else {
-                return vec![];
-            };
-
-            let me = self
-                .inner
-                .user_id()
-                .map(|u| u.to_string())
-                .unwrap_or_default();
-
-            let (items, _stream) = timeline.subscribe().await;
-            let mut out: Vec<MessageEvent> = items
-                .iter()
-                .rev()
-                .filter_map(|it| {
-                    it.as_event().and_then(|ev| {
-                        map_timeline_event(
-                            ev,
-                            room_id.as_str(),
-                            Some(&it.unique_id().0.to_string()),
-                            &me,
-                        )
-                    })
-                })
-                .take(limit as usize)
-                .collect();
-            out.reverse();
-            out
         })
     }
 
     pub fn observe_timeline(&self, room_id: String, observer: Box<dyn TimelineObserver>) -> u64 {
-        let client = self.inner_clone();
-        let mgr = self.timeline_mgr.clone();
         let Ok(room_id) = OwnedRoomId::try_from(room_id) else {
             return 0;
         };
         let obs: Arc<dyn TimelineObserver> = Arc::from(observer);
-
-        let me = client.user_id().map(|u| u.to_string()).unwrap_or_default();
-
+        let me = self
+            .core
+            .sdk
+            .user_id()
+            .map(|u| u.to_string())
+            .unwrap_or_default();
+        let mgr = self.core.timeline_mgr.clone();
         sub_manager!(self, timeline_subs, async move {
             let Some(tl) = mgr.timeline_for(&room_id).await else {
                 return;
             };
-
             let (items, mut stream) = tl.subscribe().await;
-
             emit_timeline_reset_filled(&obs, &tl, &room_id, &me).await;
-
-            // Fetch missing reply details
             for it in items.iter() {
                 if let Some(ev) = it.as_event() {
                     if let Some(eid) = missing_reply_event_id(ev) {
@@ -1654,7 +1779,6 @@ impl Client {
                     }
                 }
             }
-
             while let Some(diffs) = stream.next().await {
                 for diff in diffs {
                     match diff {
@@ -1665,7 +1789,6 @@ impl Client {
                         | VectorDiff::Clear => {
                             emit_timeline_reset_filled(&obs, &tl, &room_id, &me).await;
                         }
-
                         other => {
                             if let Some(mapped) = map_vec_diff(other, &room_id, &tl, &me) {
                                 let _ = catch_unwind(AssertUnwindSafe(|| obs.on_diff(mapped)));
@@ -1681,151 +1804,225 @@ impl Client {
         unsub!(self, timeline_subs, sub_id)
     }
 
-    pub fn start_verification_inbox(&self, observer: Box<dyn VerificationInboxObserver>) -> u64 {
-        let client = self.inner_clone();
-        let obs: Arc<dyn VerificationInboxObserver> = Arc::from(observer);
-        let inbox = self.inbox.clone();
-
+    pub fn observe_room_list(&self, observer: Box<dyn RoomListObserver>) -> u64 {
+        let obs: Arc<dyn RoomListObserver> = Arc::from(observer);
+        let core = self.core.clone();
+        let store_dir = self.store_dir.clone();
         let id = self.next_sub_id();
+        let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<RoomListCmd>();
+        self.room_list_cmds.lock().unwrap().insert(id, cmd_tx);
+
         let h = spawn_task!(async move {
-            info!("verification_inbox: start (sub_id={})", id);
-
-            client
-                .encryption()
-                .wait_for_e2ee_initialization_tasks()
-                .await;
-
-            if let Err(e) = client.event_cache().subscribe() {
-                warn!("verification_inbox: event_cache.subscribe() failed: {e:?}");
-            }
-
-            let td_handler = client.observe_events::<ToDeviceKeyVerificationRequestEvent, ()>();
-            let mut td_sub = td_handler.subscribe();
-            info!("verification_inbox: subscribed to ToDeviceKeyVerificationRequestEvent");
-
-            let ir_handler = client.observe_events::<SyncRoomMessageEvent, Room>();
-            let mut ir_sub = ir_handler.subscribe();
-            info!("verification_inbox: subscribed to SyncRoomMessageEvent");
+            core.ensure_sync_service().await;
+            let svc = loop {
+                if let Some(s) = core.sync_service.lock().unwrap().as_ref().cloned() {
+                    break s;
+                }
+                sleep(Duration::from_millis(200)).await;
+            };
+            let rls = svc.room_list_service();
+            let Ok(all) = rls.all_rooms().await else {
+                return;
+            };
+            let (stream, controller) = all.entries_with_dynamic_adapters(50);
+            tokio::pin!(stream);
+            controller.set_filter(Box::new(filters::new_filter_non_left()));
+            use matrix_sdk_ui::room_list_service::RoomListItem;
+            let mut items = Vector::<RoomListItem>::new();
 
             loop {
                 tokio::select! {
-                    maybe = td_sub.next() => {
-                        info!("verification_inbox: to-device next = {:?}", maybe.as_ref().map(|(ev, _)| &ev.content.transaction_id));
-                        if let Some((ev, ())) = maybe {
-                            let flow_id     = ev.content.transaction_id.to_string();
-                            let from_user   = ev.sender.to_string();
-                            let from_device = ev.content.from_device.to_string();
-
-                            inbox.lock().unwrap().insert(
-                                flow_id.clone(),
-                                (ev.sender, ev.content.from_device.clone()),
-                            );
-
-                            info!("verification_inbox: got to-device request flow_id={} from {} / {}",
-                                  flow_id, from_user, from_device);
-
-                            let _ = catch_unwind(AssertUnwindSafe(|| {
-                                obs.on_request(flow_id, from_user, from_device);
-                            }));
-                        } else {
-                            info!("verification_inbox: to-device stream ended");
-                            break;
-                        }
-                    }
-
-                    maybe = ir_sub.next() => {
-                        info!("verification_inbox: in-room next = {:?}", maybe.as_ref().map(|(ev, _)| ev.event_id()));
-                        if let Some((ev, _room)) = maybe {
-                            if let SyncRoomMessageEvent::Original(o) = ev {
-                                if let MessageType::VerificationRequest(_c) = &o.content.msgtype {
-                                    let flow_id   = o.event_id.to_string();
-                                    let from_user = o.sender.to_string();
-
-                                    inbox.lock().unwrap().insert(
-                                        flow_id.clone(),
-                                        (o.sender.clone(), owned_device_id!("inroom")),
-                                    );
-
-                                    info!("verification_inbox: got in-room request flow_id={} from {}",
-                                          flow_id, from_user);
-
-                                    let _ = catch_unwind(AssertUnwindSafe(|| {
-                                        obs.on_request(flow_id, from_user, String::new());
-                                    }));
+                    Some(cmd) = cmd_rx.recv() => {
+                        match cmd {
+                            RoomListCmd::SetUnreadOnly(unread_only) => {
+                                if unread_only {
+                                    controller.set_filter(Box::new(filters::new_filter_all(vec![
+                                        Box::new(filters::new_filter_non_left()),
+                                        Box::new(filters::new_filter_unread()),
+                                    ])));
+                                } else {
+                                    controller.set_filter(Box::new(filters::new_filter_non_left()));
                                 }
                             }
-                        } else {
-                            info!("verification_inbox: in-room stream ended");
-                            break;
                         }
                     }
+                    Some(diffs) = stream.next() => {
+                        let mut changed = false;
+                        for diff in diffs {
+                            match diff {
+                                VectorDiff::Reset { values }  => { items = values;   changed = true; }
+                                VectorDiff::Clear             => { items.clear();     changed = true; }
+                                VectorDiff::PushFront { value } => { items.insert(0, value); changed = true; }
+                                VectorDiff::PushBack  { value } => { items.push_back(value); changed = true; }
+                                VectorDiff::PopFront => { if !items.is_empty() { items.remove(0); changed = true; } }
+                                VectorDiff::PopBack  => { items.pop_back(); changed = true; }
+                                VectorDiff::Insert { index, value } => { if index <= items.len() { items.insert(index, value); changed = true; } }
+                                VectorDiff::Set    { index, value } => { if index < items.len()  { items[index] = value;       changed = true; } }
+                                VectorDiff::Remove { index }        => { if index < items.len()  { items.remove(index);        changed = true; } }
+                                VectorDiff::Truncate { length }     => { items.truncate(length);  changed = true; }
+                                VectorDiff::Append   { values }     => { items.append(values);    changed = true; }
+                            }
+                        }
+
+                        if changed {
+                            let mut snapshot: Vec<RoomListEntry> = Vec::new();
+                            for item in items.iter() {
+                                let room = &**item;
+                                let last_ts  = room.recency_stamp().map_or(0, |s| s.into());
+                                let is_dm    = room.is_direct().await.unwrap_or(false);
+                                let mut avatar_url = room.avatar_url().map(|mxc| mxc.to_string());
+                                if avatar_url.is_none() && is_dm {
+                                    avatar_url = CoreClient::dm_peer_avatar_url(room, core.sdk.user_id()).await;
+                                }
+                                let latest_event = latest_room_event_for(&core.timeline_mgr, room).await;
+                                snapshot.push(RoomListEntry {
+                                    room_id: room.room_id().to_string(),
+                                    name: item.cached_display_name()
+                                        .clone().unwrap_or(RoomDisplayName::Named(room.room_id().to_string()))
+                                        .to_string(),
+                                    last_ts,
+                                    notifications: room.num_unread_notifications(),
+                                    messages:      room.num_unread_messages(),
+                                    mentions:      room.num_unread_mentions(),
+                                    marked_unread: room.is_marked_unread(),
+                                    is_favourite:  room.is_favourite(),
+                                    is_low_priority: room.is_low_priority(),
+                                    is_invited: matches!(room.state(), RoomState::Invited),
+                                    avatar_url,
+                                    is_dm,
+                                    is_encrypted: matches!(room.encryption_state(), matrix_sdk::EncryptionState::Encrypted),
+                                    member_count: room.joined_members_count().min(u32::MAX as u64) as u32,
+                                    topic: room.topic(),
+                                    latest_event,
+                                });
+                            }
+                            let _ = platform::write_room_list_cache(&store_dir, &snapshot).await;
+                            let obs_clone = obs.clone();
+                            let _ = catch_unwind(AssertUnwindSafe(move || obs_clone.on_reset(snapshot)));
+                        }
+                    }
+                    else => break,
                 }
             }
         });
-
-        self.inbox_subs.lock().unwrap().insert(id, h);
+        self.room_list_subs.lock().unwrap().insert(id, h);
         id
     }
 
-    pub fn unobserve_verification_inbox(&self, sub_id: u64) -> bool {
-        unsub!(self, inbox_subs, sub_id)
+    pub fn unobserve_room_list(&self, token: u64) -> bool {
+        self.room_list_cmds.lock().unwrap().remove(&token);
+        unsub!(self, room_list_subs, token)
     }
 
-    pub fn check_verification_request(&self, user_id: String, flow_id: String) -> bool {
-        RT.block_on(async {
-            let Ok(uid) = user_id.parse::<OwnedUserId>() else {
-                return false;
-            };
+    pub fn room_list_set_unread_only(&self, token: u64, unread_only: bool) -> bool {
+        if let Some(tx) = self.room_list_cmds.lock().unwrap().get(&token).cloned() {
+            tx.send(RoomListCmd::SetUnreadOnly(unread_only)).is_ok()
+        } else {
+            false
+        }
+    }
 
-            self.inner
-                .encryption()
-                .get_verification_request(&uid, &flow_id)
-                .await
-                .is_some()
+    pub fn start_call_inbox(&self, observer: Box<dyn CallObserver>) -> u64 {
+        let obs: Arc<dyn CallObserver> = Arc::from(observer);
+        let sdk = self.core.sdk.clone();
+        sub_manager!(self, call_subs, async move {
+            let handler = sdk.observe_events::<OriginalSyncCallInviteEvent, Room>();
+            let mut sub = handler.subscribe();
+            while let Some((ev, room)) = sub.next().await {
+                let invite = CallInvite {
+                    room_id: room.room_id().to_string(),
+                    sender: ev.sender.to_string(),
+                    call_id: ev.content.call_id.to_string(),
+                    is_video: ev.content.offer.sdp.contains("m=video"),
+                    ts_ms: ev.origin_server_ts.0.into(),
+                };
+                let _ = catch_unwind(AssertUnwindSafe(|| obs.on_invite(invite)));
+            }
         })
     }
 
+    pub fn stop_call_inbox(&self, token: u64) -> bool {
+        unsub!(self, call_subs, token)
+    }
+
+    pub fn observe_live_location(
+        &self,
+        room_id: String,
+        observer: Box<dyn LiveLocationObserver>,
+    ) -> u64 {
+        let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            return 0;
+        };
+        let obs: Arc<dyn LiveLocationObserver> = Arc::from(observer);
+        let sdk = self.core.sdk.clone();
+        sub_manager!(self, live_location_subs, async move {
+            let Some(room) = sdk.get_room(&rid) else {
+                return;
+            };
+            let observable = room.observe_live_location_shares();
+            let stream = observable.subscribe();
+            use futures_util::{StreamExt, pin_mut};
+            pin_mut!(stream);
+            let mut latest_shares: HashMap<String, LiveLocationShareInfo> = HashMap::new();
+            while let Some(event) = stream.next().await {
+                let info = LiveLocationShareInfo {
+                    user_id: event.user_id.to_string(),
+                    geo_uri: event.last_location.location.uri.to_string(),
+                    ts_ms: event.last_location.ts.0.into(),
+                    is_live: event
+                        .beacon_info
+                        .as_ref()
+                        .map(|i| i.is_live())
+                        .unwrap_or(true),
+                };
+                latest_shares.insert(info.user_id.clone(), info);
+                let snapshot = latest_shares.values().cloned().collect();
+                let _ = catch_unwind(AssertUnwindSafe(|| obs.on_update(snapshot)));
+            }
+        })
+    }
+
+    pub fn unobserve_live_location(&self, sub_id: u64) -> bool {
+        unsub!(self, live_location_subs, sub_id)
+    }
+
     pub fn monitor_connection(&self, observer: Box<dyn ConnectionObserver>) -> u64 {
-        let client = self.inner_clone();
+        let sdk = self.core.sdk.clone();
         let obs: Arc<dyn ConnectionObserver> = Arc::from(observer);
-
-        let id = self.next_sub_id();
-        let h = spawn_task!(async move {
+        sub_manager!(self, connection_subs, async move {
             let mut last_state = ConnectionState::Disconnected;
-            let mut session_rx = client.subscribe_to_session_changes();
-
+            let mut session_rx = sdk.subscribe_to_session_changes();
             loop {
                 tokio::select! {
                     Ok(change) = session_rx.recv() => {
                         let current = match change {
                             matrix_sdk::SessionChange::TokensRefreshed => ConnectionState::Connected,
-                            matrix_sdk::SessionChange::UnknownToken { .. } => ConnectionState::Reconnecting { attempt: 1, next_retry_secs: 5 },
+                            matrix_sdk::SessionChange::UnknownToken { .. } =>
+                                ConnectionState::Reconnecting { attempt: 1, next_retry_secs: 5 },
                         };
                         if !matches!((&current, &last_state),
                             (ConnectionState::Connected, ConnectionState::Connected) |
-                            (ConnectionState::Disconnected, ConnectionState::Disconnected))
-                        {
+                            (ConnectionState::Disconnected, ConnectionState::Disconnected)) {
                             obs.on_connection_change(current.clone());
                             last_state = current;
                         }
                     }
                     _ = sleep(Duration::from_secs(30)) => {
-                        let is_active = client.is_active();
-                        let current = if is_active { ConnectionState::Connected } else { ConnectionState::Disconnected };
+                        let current = if sdk.is_active() {
+                            ConnectionState::Connected
+                        } else {
+                            ConnectionState::Disconnected
+                        };
                         if !matches!((&current, &last_state),
                             (ConnectionState::Connected, ConnectionState::Connected) |
-                            (ConnectionState::Disconnected, ConnectionState::Disconnected))
-                        {
+                            (ConnectionState::Disconnected, ConnectionState::Disconnected)) {
                             obs.on_connection_change(current.clone());
                             last_state = current;
                         }
                     }
                 }
             }
-        });
-
-        self.connection_subs.lock().unwrap().insert(id, h);
-        id
+        })
     }
 
     pub fn unobserve_connection(&self, sub_id: u64) -> bool {
@@ -1848,910 +2045,11 @@ impl Client {
         self.send_observers.lock().unwrap().remove(&id).is_some()
     }
 
-    pub fn send_message(
-        &self,
-        room_id: String,
-        body: String,
-        formatted_body: Option<String>,
-    ) -> bool {
-        RT.block_on(async {
-            use matrix_sdk::ruma::events::room::message::RoomMessageEventContent as Msg;
-
-            let Ok(room_id) = OwnedRoomId::try_from(room_id) else {
-                return false;
-            };
-            let Some(timeline) = self.timeline_mgr.timeline_for(&room_id).await else {
-                return false;
-            };
-
-            let content = if let Some(formatted) = formatted_body {
-                Msg::text_html(body.clone(), formatted)
-            } else {
-                Msg::text_plain(body.clone())
-            };
-
-            match timeline.send(content.into()).await {
-                Ok(handle) => {
-                    let items = timeline.items().await;
-                    if let Some(last_item) = items.last() {
-                        if let Some(ev) = last_item.as_event() {
-                            if ev.event_id().is_none() {
-                                if let Some(txn) = ev.transaction_id() {
-                                    self.send_handles_by_txn
-                                        .lock()
-                                        .unwrap()
-                                        .insert(txn.to_string(), handle.clone());
-                                }
-                            }
-                        }
-                    }
-                    true
-                }
-                Err(_) => false,
-            }
-        })
-    }
-
-    pub fn shutdown(&self) {
-        if let Some(svc) = self.sync_service.lock().unwrap().as_ref().cloned() {
-            let _ = RT.block_on(async { svc.stop().await });
-        }
-        for (_, h) in self.timeline_subs.lock().unwrap().drain() {
-            h.abort();
-        }
-        for (_, h) in self.typing_subs.lock().unwrap().drain() {
-            h.abort();
-        }
-        for (_, h) in self.connection_subs.lock().unwrap().drain() {
-            h.abort();
-        }
-        for (_, h) in self.inbox_subs.lock().unwrap().drain() {
-            h.abort();
-        }
-        for h in self.guards.lock().unwrap().drain(..) {
-            h.abort();
-        }
-        for (_, h) in self.receipts_subs.lock().unwrap().drain() {
-            h.abort();
-        }
-        for (_, h) in self.room_list_subs.lock().unwrap().drain() {
-            h.abort();
-        }
-        for (_, h) in self.call_subs.lock().unwrap().drain() {
-            h.abort();
-        }
-        for (_, h) in self.live_location_subs.lock().unwrap().drain() {
-            h.abort();
-        }
-        for (_, h) in self.widget_driver_tasks.lock().unwrap().drain() {
-            h.abort();
-        }
-        for (_, h) in self.widget_recv_tasks.lock().unwrap().drain() {
-            h.abort();
-        }
-        self.widget_handles.lock().unwrap().clear();
-        self.timeline_mgr.clear();
-    }
-
-    pub fn logout(&self) -> bool {
-        self.shutdown();
-        let _ = RT.block_on(async { self.inner.logout().await });
-        platform::remove_session_file(&self.store_dir);
-        platform::reset_store_dir(&self.store_dir);
-        true
-    }
-
-    pub fn mark_read(&self, room_id: String) -> bool {
-        with_timeline_async!(self, room_id, |tl: Arc<Timeline>, _rid| async move {
-            tl.mark_as_read(ReceiptType::ReadPrivate).await.is_ok()
-        })
-    }
-
-    pub fn mark_read_at(&self, room_id: String, event_id: String) -> bool {
-        RT.block_on(async {
-            let Ok(room_id) = OwnedRoomId::try_from(room_id) else {
-                return false;
-            };
-            let Ok(eid) = EventId::parse(event_id) else {
-                return false;
-            };
-            let Some(room) = self.inner.get_room(&room_id) else {
-                return false;
-            };
-
-            room.send_single_receipt(
-                ReceiptType::ReadPrivate,
-                ReceiptThread::Unthreaded,
-                eid.to_owned(),
-            )
-            .await
-            .is_ok()
-        })
-    }
-
-    pub fn set_mark_unread(&self, room_id: String, unread: bool) -> bool {
-        with_room_async!(self, room_id, |room: Room, _rid| async move {
-            room.set_unread_flag(unread).await.is_ok()
-        })
-    }
-
-    pub fn is_marked_unread(&self, room_id: String) -> Option<bool> {
-        RT.block_on(async {
-            let Ok(rid) = ruma::OwnedRoomId::try_from(room_id) else {
-                return None;
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return None;
-            };
-            Some(room.is_marked_unread())
-        })
-    }
-
-    /// Configure the SDK's media retention policy and apply it immediately.
-    /// Any `None` will keep the SDK default for that parameter.
-    pub fn set_media_retention_policy(
-        &self,
-        max_cache_size_bytes: Option<u64>,
-        max_file_size_bytes: Option<u64>,
-        last_access_expiry_secs: Option<u64>,
-        cleanup_frequency_secs: Option<u64>,
-    ) -> Result<(), FfiError> {
-        RT.block_on(async {
-            use Duration;
-            let mut policy = MediaRetentionPolicy::new();
-            if max_cache_size_bytes.is_some() {
-                policy = policy.with_max_cache_size(max_cache_size_bytes);
-            }
-            if max_file_size_bytes.is_some() {
-                policy = policy.with_max_file_size(max_file_size_bytes);
-            }
-            if last_access_expiry_secs.is_some() {
-                policy = policy
-                    .with_last_access_expiry(last_access_expiry_secs.map(Duration::from_secs));
-            }
-            if cleanup_frequency_secs.is_some() {
-                policy =
-                    policy.with_cleanup_frequency(cleanup_frequency_secs.map(Duration::from_secs));
-            }
-
-            self.inner
-                .media()
-                .set_media_retention_policy(policy)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            // Apply right away.
-            self.inner
-                .media()
-                .clean()
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    /// Run a cleanup of the SDK's media cache with the current policy.
-    pub fn media_cache_clean(&self) -> Result<(), FfiError> {
-        RT.block_on(async {
-            self.inner
-                .media()
-                .clean()
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    pub fn thumbnail_to_cache(
-        &self,
-        att: AttachmentInfo,
-        width: u32,
-        height: u32,
-        use_crop: bool,
-    ) -> Result<String, FfiError> {
-        use matrix_sdk::media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings};
-        use ruma::events::room::MediaSource;
-
-        let (source, format, name_key) = if let Some(enc) = att.thumbnail_encrypted.as_ref() {
-            let ef: EncryptedFile = serde_json::from_str(&enc.json)
-                .map_err(|e| FfiError::Msg(format!("thumb enc parse: {e}")))?;
-            (
-                MediaSource::Encrypted(Box::new(ef)),
-                MediaFormat::File,
-                enc.url.clone(),
-            )
-        } else if let Some(mxc) = att.thumbnail_mxc_uri.as_ref() {
-            (
-                MediaSource::Plain(mxc.clone().into()),
-                MediaFormat::File,
-                mxc.clone(),
-            )
-        } else if let Some(enc) = att.encrypted.as_ref() {
-            // fetch full encrypted file as fallback
-            let ef: EncryptedFile = serde_json::from_str(&enc.json)
-                .map_err(|e| FfiError::Msg(format!("file enc parse: {e}")))?;
-            (
-                MediaSource::Encrypted(Box::new(ef)),
-                MediaFormat::File,
-                enc.url.clone(),
-            )
-        } else {
-            // Plain primary mxc
-            let settings = if use_crop {
-                MediaThumbnailSettings::with_method(
-                    matrix_sdk::ruma::api::client::media::get_content_thumbnail::v3::Method::Crop,
-                    width.into(),
-                    height.into(),
-                )
-            } else {
-                MediaThumbnailSettings::new(width.into(), height.into())
-            };
-            let mxc = att.mxc_uri.clone();
-            (
-                MediaSource::Plain(mxc.clone().into()),
-                MediaFormat::Thumbnail(settings),
-                mxc,
-            )
-        };
-
-        let req = MediaRequestParameters { source, format };
-
-        let dir = cache_dir(&self.store_dir);
-        platform::ensure_dir(&dir);
-        fn sanitize(name: &str) -> String {
-            let mut s = String::with_capacity(name.len());
-            for ch in name.chars() {
-                if ch.is_ascii_alphanumeric() || "-_.".contains(ch) {
-                    s.push(ch);
-                } else {
-                    s.push('_');
-                }
-            }
-            s.trim_matches('_').to_string()
-        }
-        let key =
-            blake3::hash(format!("{}-{}x{}-{}", name_key, width, height, use_crop).as_bytes())
-                .to_hex();
-        let ext = att
-            .mime
-            .as_deref()
-            .and_then(|m| m.split('/').nth(1))
-            .filter(|e| !e.is_empty())
-            .unwrap_or("jpg");
-        let fname = format!(
-            "thumb_{}_{}x{}{}.{ext}",
-            &key[..16],
-            width,
-            height,
-            if use_crop { "_crop" } else { "_scale" }
-        );
-        let out = dir.join(sanitize(&fname));
-
-        #[cfg(not(target_family = "wasm"))]
-        {
-            if let Some(parent) = out.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-
-            let bytes = RT
-                .block_on(async { self.inner.media().get_media_content(&req, true).await })
-                .or_else(|_e| {
-                    // Fallback only when we asked for a server-side thumb of a plain mxc
-                    if matches!(req.format, MediaFormat::Thumbnail(_)) {
-                        let req_full = MediaRequestParameters {
-                            source: req.source.clone(),
-                            format: MediaFormat::File,
-                        };
-                        RT.block_on(async {
-                            self.inner.media().get_media_content(&req_full, true).await
-                        })
-                    } else {
-                        Err(_e)
-                    }
-                })
-                .map_err(|e| FfiError::Msg(format!("thumbnail fetch: {e}")))?;
-
-            std::fs::write(&out, &bytes)?;
-            Ok(out.to_string_lossy().to_string())
-        }
-        #[cfg(target_family = "wasm")]
-        Err(FfiError::Msg(
-            "thumbnail_to_cache: not supported on wasm".into(),
-        ))
-    }
-
-    pub fn react(&self, room_id: String, event_id: String, emoji: String) -> bool {
-        with_timeline_async!(self, room_id, |tl: Arc<Timeline>, _rid| async move {
-            let Ok(eid) = EventId::parse(&event_id) else {
-                return false;
-            };
-            let Some(item) = tl.item_by_event_id(&eid).await else {
-                return false;
-            };
-            let item_id = item.identifier();
-            tl.toggle_reaction(&item_id, &emoji).await.is_ok()
-        })
-    }
-
-    pub fn reply(
-        &self,
-        room_id: String,
-        in_reply_to: String,
-        body: String,
-        formatted_body: Option<String>,
-    ) -> bool {
-        with_timeline_async!(self, room_id, |tl: Arc<Timeline>, _rid| async move {
-            use matrix_sdk::ruma::events::room::message::RoomMessageEventContentWithoutRelation as MsgNoRel;
-
-            let Ok(reply_to) = EventId::parse(&in_reply_to) else {
-                return false;
-            };
-            let content = if let Some(formatted) = formatted_body {
-                MsgNoRel::text_html(body, formatted)
-            } else {
-                MsgNoRel::text_plain(body)
-            };
-            tl.send_reply(content, reply_to.to_owned()).await.is_ok()
-        })
-    }
-
-    pub fn edit(
-        &self,
-        room_id: String,
-        target_event_id: String,
-        new_body: String,
-        formatted_body: Option<String>,
-    ) -> bool {
-        with_timeline_async!(self, room_id, |tl: Arc<Timeline>, _rid| async move {
-            use matrix_sdk::room::edit::EditedContent;
-            use matrix_sdk::ruma::events::room::message::RoomMessageEventContentWithoutRelation as MsgNoRel;
-
-            let Ok(eid) = EventId::parse(&target_event_id) else {
-                return false;
-            };
-            let Some(item) = tl.item_by_event_id(&eid).await else {
-                return false;
-            };
-            let item_id = item.identifier();
-            let edited = EditedContent::RoomMessage(if let Some(formatted) = formatted_body {
-                MsgNoRel::text_html(new_body, formatted)
-            } else {
-                MsgNoRel::text_plain(new_body)
-            });
-
-            tl.edit(&item_id, edited).await.is_ok()
-        })
-    }
-
-    pub fn paginate_backwards(&self, room_id: String, count: u16) -> bool {
-        let me = self
-            .inner
-            .user_id()
-            .map(|u| u.to_string())
-            .unwrap_or_default();
-
-        with_timeline_async!(self, room_id, move |tl: Arc<Timeline>, rid| async move {
-            paginate_backwards_visible(&tl, &rid, &me, count as usize).await
-        })
-    }
-
-    pub fn paginate_forwards(&self, room_id: String, count: u16) -> bool {
-        with_timeline_async!(self, room_id, |tl: Arc<Timeline>, _rid| async move {
-            tl.paginate_forwards(count).await.unwrap_or(false)
-        })
-    }
-
-    pub fn redact(&self, room_id: String, event_id: String, reason: Option<String>) -> bool {
-        with_room_async!(self, room_id, |room: Room, _rid| async move {
-            let Ok(eid) = EventId::parse(&event_id) else {
-                return false;
-            };
-            room.redact(&eid, reason.as_deref(), None).await.is_ok()
-        })
-    }
-
-    pub fn get_user_power_level(&self, room_id: String, user_id: String) -> i64 {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                return -1;
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return -1;
-            };
-            let Ok(uid) = UserId::parse(&user_id) else {
-                return -1;
-            };
-            match room.get_user_power_level(&uid).await {
-                Ok(level) => match level {
-                    UserPowerLevel::Infinite => i64::MAX,
-                    UserPowerLevel::Int(int_val) => int_val.into(),
-                    _ => -1, // Handle any future variants
-                },
-                Err(_) => -1,
-            }
-        })
-    }
-
-    pub fn observe_typing(&self, room_id: String, observer: Box<dyn TypingObserver>) -> u64 {
-        let client = self.inner_clone();
-        let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-            return 0;
-        };
-        let obs: Arc<dyn TypingObserver> = Arc::from(observer);
-        let id = self.next_sub_id();
-
-        let h = spawn_task!(async move {
-            let Some(room) = client.get_room(&rid) else {
-                return;
-            };
-            // Keep the guard alive here.
-            let (_guard, mut rx) = room.subscribe_to_typing_notifications();
-
-            let mut cache: HashMap<OwnedUserId, String> = HashMap::new();
-            let mut last: Vec<String> = Vec::new();
-
-            while let Ok(user_ids) = rx.recv().await {
-                let mut names = Vec::with_capacity(user_ids.len());
-                for uid in user_ids {
-                    if let Some(n) = cache.get(&uid) {
-                        names.push(n.clone());
-                        continue;
-                    }
-                    let name = match room.get_member(&uid).await {
-                        Ok(Some(m)) => m
-                            .display_name()
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| uid.localpart().to_string()),
-                        _ => uid.localpart().to_string(),
-                    };
-                    cache.insert(uid.clone(), name.clone());
-                    names.push(name);
-                }
-                names.sort();
-                names.dedup();
-                if names != last {
-                    last = names.clone();
-                    let _ = catch_unwind(AssertUnwindSafe(|| obs.on_update(names)));
-                }
-            }
-        });
-
-        self.typing_subs.lock().unwrap().insert(id, h);
-        id
-    }
-
-    pub fn unobserve_typing(&self, sub_id: u64) -> bool {
-        unsub!(self, typing_subs, sub_id)
-    }
-    pub fn observe_receipts(&self, room_id: String, observer: Box<dyn ReceiptsObserver>) -> u64 {
-        let client = self.inner_clone();
-        let Ok(rid) = ruma::OwnedRoomId::try_from(room_id) else {
-            return 0;
-        };
-        let obs: std::sync::Arc<dyn ReceiptsObserver> = std::sync::Arc::from(observer);
-        let id = self.next_sub_id();
-
-        let h = spawn_task!(async move {
-            let Some(room) = client.get_room(&rid) else {
-                return;
-            };
-            let Ok(tl) = room.timeline().await else {
-                return;
-            };
-            let mut stream = tl.subscribe_own_user_read_receipts_changed().await;
-
-            while let Some(()) = stream.next().await {
-                let _ = catch_unwind(AssertUnwindSafe(|| obs.on_changed()));
-            }
-        });
-        self.receipts_subs.lock().unwrap().insert(id, h);
-        id
-    }
-
-    pub fn unobserve_receipts(&self, sub_id: u64) -> bool {
-        unsub!(self, receipts_subs, sub_id)
-    }
-
-    pub fn dm_peer_user_id(&self, room_id: String) -> Option<String> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                return None;
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return None;
-            };
-            let Some(me) = self.inner.user_id() else {
-                return None;
-            };
-            if let Ok(members) = room.members(RoomMemberships::ACTIVE).await {
-                for m in members {
-                    if m.user_id() != me {
-                        return Some(m.user_id().to_string());
-                    }
-                }
-            }
-            None
-        })
-    }
-
-    pub fn is_event_read_by(&self, room_id: String, event_id: String, user_id: String) -> bool {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                return false;
-            };
-            let Ok(eid) = EventId::parse(&event_id) else {
-                return false;
-            };
-            let Ok(uid) = user_id.parse::<OwnedUserId>() else {
-                return false;
-            };
-            let Some(tl) = self.timeline_mgr.timeline_for(&rid).await else {
-                return false;
-            };
-            let latest_opt = tl.latest_user_read_receipt_timeline_event_id(&uid).await;
-            let Some(latest) = latest_opt else {
-                return false;
-            };
-            // Compare positions within current items
-            let items = tl.items().await;
-            let mut idx_latest = None;
-            let mut idx_mine = None;
-            for (i, it) in items.iter().enumerate() {
-                if let Some(ev) = it.as_event() {
-                    if let Some(e) = ev.event_id() {
-                        if e == &latest {
-                            idx_latest = Some(i);
-                        }
-                        if e == &eid {
-                            idx_mine = Some(i);
-                        }
-                    }
-                }
-                if idx_latest.is_some() && idx_mine.is_some() {
-                    break;
-                }
-            }
-            matches!((idx_mine, idx_latest), (Some(i_m), Some(i_l)) if i_l >= i_m)
-        })
-    }
-
-    pub fn start_call_inbox(&self, observer: Box<dyn CallObserver>) -> u64 {
-        let client = self.inner_clone();
-        let obs: Arc<dyn CallObserver> = Arc::from(observer);
-        let id = self.next_sub_id();
-        let h = spawn_task!(async move {
-            let handler = client.observe_events::<OriginalSyncCallInviteEvent, Room>();
-            let mut sub = handler.subscribe();
-            while let Some((ev, room)) = sub.next().await {
-                let call_id = ev.content.call_id.to_string();
-                let is_video = ev.content.offer.sdp.contains("m=video");
-                let ts: u64 = ev.origin_server_ts.0.into();
-                let invite = CallInvite {
-                    room_id: room.room_id().to_string(),
-                    sender: ev.sender.to_string(),
-                    call_id,
-                    is_video,
-                    ts_ms: ts,
-                };
-                let _ = catch_unwind(AssertUnwindSafe(|| obs.on_invite(invite)));
-            }
-        });
-        self.call_subs.lock().unwrap().insert(id, h);
-        id
-    }
-
-    pub fn stop_call_inbox(&self, token: u64) -> bool {
-        unsub!(self, call_subs, token)
-    }
-
-    pub fn send_attachment_bytes(
-        &self,
-        room_id: String,
-        filename: String,
-        mime: String,
-        bytes: Vec<u8>,
-        progress: Option<Box<dyn ProgressObserver>>,
-    ) -> bool {
-        RT.block_on(async {
-            self.ensure_send_queue_supervision();
-
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                return false;
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return false;
-            };
-
-            let parsed: Mime = mime.parse().unwrap_or(mime::APPLICATION_OCTET_STREAM);
-            let queue = room.send_queue();
-            let (_, updates) = match queue.subscribe().await {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            let txn_id = matrix_sdk::ruma::TransactionId::new();
-
-            let handle = match queue
-                .send_attachment(
-                    filename,
-                    parsed,
-                    bytes,
-                    matrix_sdk::attachment::AttachmentConfig::new().txn_id(txn_id.clone()),
-                )
-                .await
-            {
-                Ok(handle) => handle,
-                Err(_) => return false,
-            };
-
-            let txn_id = txn_id.to_string();
-            let progress = progress.map(Arc::from);
-
-            self.send_handles_by_txn
-                .lock()
-                .unwrap()
-                .insert(txn_id.clone(), handle);
-
-            await_room_send_queue_completion_with_progress(updates, &txn_id, progress).await
-        })
-    }
-
-    pub fn send_attachment_from_path(
-        &self,
-        room_id: String,
-        path: String,
-        mime: String,
-        filename: Option<String>,
-        progress: Option<Box<dyn ProgressObserver>>,
-    ) -> bool {
-        RT.block_on(async {
-            self.ensure_send_queue_supervision();
-
-            let Ok(rid) = ruma::OwnedRoomId::try_from(room_id) else {
-                return false;
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return false;
-            };
-
-            let parsed: Mime = mime.parse().unwrap_or(mime::APPLICATION_OCTET_STREAM);
-
-            #[cfg(not(target_family = "wasm"))]
-            let bytes = match tokio::fs::read(&path).await {
-                Ok(bytes) => bytes,
-                Err(_) => return false,
-            };
-
-            #[cfg(target_family = "wasm")]
-            let bytes = {
-                return false;
-            };
-
-            let filename = filename.unwrap_or_else(|| {
-                Path::new(&path)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| "attachment".to_owned())
-            });
-
-            let queue = room.send_queue();
-            let (_, updates) = match queue.subscribe().await {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            let txn_id = matrix_sdk::ruma::TransactionId::new();
-
-            let handle = match queue
-                .send_attachment(
-                    filename,
-                    parsed,
-                    bytes,
-                    matrix_sdk::attachment::AttachmentConfig::new().txn_id(txn_id.clone()),
-                )
-                .await
-            {
-                Ok(handle) => handle,
-                Err(_) => return false,
-            };
-
-            let txn_id = txn_id.to_string();
-            let progress = progress.map(Arc::from);
-
-            self.send_handles_by_txn
-                .lock()
-                .unwrap()
-                .insert(txn_id.clone(), handle);
-
-            await_room_send_queue_completion_with_progress(updates, &txn_id, progress).await
-        })
-    }
-
-    pub fn start_supervised_sync(&self, observer: Box<dyn SyncObserver>) {
-        let obs: Arc<dyn SyncObserver> = Arc::from(observer);
-        let svc_slot = self.sync_service.clone();
-        let in_foreground = self.app_in_foreground.clone();
-
-        let h = spawn_task!(async move {
-            obs.on_state(SyncStatus {
-                phase: SyncPhase::Idle,
-                message: None,
-            });
-
-            let svc = loop {
-                if let Some(s) = { svc_slot.lock().unwrap().as_ref().cloned() } {
-                    break s;
-                }
-                sleep(Duration::from_millis(200)).await;
-            };
-
-            let mut st = svc.state();
-
-            svc.start().await;
-
-            while let Some(state) = st.next().await {
-                match state {
-                    State::Idle => {
-                        obs.on_state(SyncStatus {
-                            phase: SyncPhase::Idle,
-                            message: None,
-                        });
-                    }
-                    State::Running => {
-                        obs.on_state(SyncStatus {
-                            phase: SyncPhase::Running,
-                            message: None,
-                        });
-                    }
-                    State::Offline => {
-                        obs.on_state(SyncStatus {
-                            phase: SyncPhase::BackingOff,
-                            message: Some("Offline (auto-retrying)".into()),
-                        });
-                    }
-                    State::Terminated => {
-                        obs.on_state(SyncStatus {
-                            phase: SyncPhase::Idle,
-                            message: Some("Sync stopped".into()),
-                        });
-
-                        if in_foreground.load(std::sync::atomic::Ordering::SeqCst) {
-                            sleep(Duration::from_millis(500)).await;
-                            svc.start().await;
-                        }
-                    }
-                    State::Error(err) => {
-                        obs.on_state(SyncStatus {
-                            phase: SyncPhase::Error,
-                            message: Some(format!("Sync error: {err:?}")),
-                        });
-
-                        sleep(Duration::from_secs(2)).await;
-                        svc.start().await;
-                    }
-                }
-            }
-        });
-
-        self.guards.lock().unwrap().push(h);
-    }
-
-    fn next_sub_id(&self) -> u64 {
-        self.subs_counter
-            .fetch_add(1, Ordering::Relaxed)
-            .wrapping_add(1)
-    }
-
-    pub fn recover_with_key(&self, recovery_key: String) -> bool {
-        RT.block_on(async {
-            let rec = self.inner.encryption().recovery();
-            rec.recover(&recovery_key).await.is_ok()
-        })
-    }
-
-    pub fn backup_exists_on_server(&self, fetch: bool) -> bool {
-        RT.block_on(async {
-            let backups = self.inner.encryption().backups();
-            if fetch {
-                backups.fetch_exists_on_server().await.unwrap_or(false)
-            } else {
-                backups.exists_on_server().await.unwrap_or(false)
-            }
-        })
-    }
-
-    pub fn set_key_backup_enabled(&self, enabled: bool) -> bool {
-        RT.block_on(async {
-            let backups = self.inner.encryption().backups();
-            if enabled {
-                backups.create().await.is_ok()
-            } else {
-                backups.disable().await.is_ok()
-            }
-        })
-    }
-
-    pub fn setup_recovery(&self, observer: Box<dyn RecoveryObserver>) -> u64 {
-        let obs: Arc<dyn RecoveryObserver> = Arc::from(observer);
-
-        // Share the recovery state cache with the async block
-        let inner_client = self.inner.clone();
-
-        let id = self.next_sub_id();
-        let h = spawn_task!(async move {
-            let client = inner_client;
-            let recovery = client.encryption().recovery();
-
-            let _ = client.refresh_access_token().await;
-
-            let current = recovery.state();
-            let is_first_time = matches!(
-                current,
-                matrix_sdk::encryption::recovery::RecoveryState::Disabled
-            );
-
-            let _ = catch_unwind(AssertUnwindSafe(|| {
-                obs.on_progress(if is_first_time {
-                    "Starting recovery setup...".into()
-                } else {
-                    "Regenerating recovery key...".into()
-                });
-            }));
-
-            let result = if is_first_time {
-                let enable = recovery.enable();
-                let mut progress = enable.subscribe_to_progress();
-
-                let obs_clone = obs.clone();
-                let progress_task = spawn_task!(async move {
-                    while let Some(Ok(p)) = progress.next().await {
-                        let step = match p {
-                            matrix_sdk::encryption::recovery::EnableProgress::Starting => "Starting...",
-                            matrix_sdk::encryption::recovery::EnableProgress::CreatingBackup => "Creating backup...",
-                            matrix_sdk::encryption::recovery::EnableProgress::CreatingRecoveryKey => "Generating recovery key...",
-                            matrix_sdk::encryption::recovery::EnableProgress::BackingUp(_) => "Uploading keys...",
-                            matrix_sdk::encryption::recovery::EnableProgress::Done { .. } => "Done",
-                            _ => "In progress...",
-                        };
-                        let _ = catch_unwind(AssertUnwindSafe(|| {
-                            obs_clone.on_progress(step.to_string())
-                        }));
-                    }
-                });
-
-                let res = enable.await;
-                let _ = progress_task.await;
-                res
-            } else {
-                recovery.reset_key().await
-            };
-
-            match result {
-                Ok(key) => {
-                    let _ = catch_unwind(AssertUnwindSafe(|| obs.on_done(key)));
-                }
-                Err(e) => {
-                    let msg = e.to_string();
-                    let friendly = if msg.contains("Invalid refresh token")
-                        || msg.contains("UnknownToken")
-                    {
-                        "Session expired. Please log out and log in again to continue."
-                    } else if msg.contains("backup already exists") || msg.contains("BackupExists")
-                    {
-                        "Recovery is already set up. Use 'Change recovery key' instead."
-                    } else {
-                        &msg
-                    };
-                    let _ = catch_unwind(AssertUnwindSafe(|| obs.on_error(friendly.to_string())));
-                }
-            }
-        });
-
-        self.guards.lock().unwrap().push(h);
-        id
-    }
-
     pub fn observe_recovery_state(&self, observer: Box<dyn RecoveryStateObserver>) -> u64 {
         let obs: Arc<dyn RecoveryStateObserver> = Arc::from(observer);
-        let inner = self.inner.clone();
+        let sdk = self.core.sdk.clone();
         sub_manager!(self, recovery_state_subs, async move {
-            let mut stream = inner.encryption().recovery().state_stream();
+            let mut stream = sdk.encryption().recovery().state_stream();
             while let Some(state) = stream.next().await {
                 let mapped = match state {
                     matrix_sdk::encryption::recovery::RecoveryState::Disabled => {
@@ -2770,11 +2068,15 @@ impl Client {
         })
     }
 
+    pub fn unobserve_recovery_state(&self, sub_id: u64) -> bool {
+        unsub!(self, recovery_state_subs, sub_id)
+    }
+
     pub fn observe_backup_state(&self, observer: Box<dyn BackupStateObserver>) -> u64 {
         let obs: Arc<dyn BackupStateObserver> = Arc::from(observer);
-        let inner = self.inner.clone();
+        let sdk = self.core.sdk.clone();
         sub_manager!(self, backup_state_subs, async move {
-            let mut stream = inner.encryption().backups().state_stream();
+            let mut stream = sdk.encryption().backups().state_stream();
             while let Some(state) = stream.next().await {
                 let mapped = match state {
                     Ok(matrix_sdk::encryption::backups::BackupState::Unknown) => {
@@ -2805,1730 +2107,355 @@ impl Client {
         })
     }
 
-    pub fn unobserve_recovery_state(&self, sub_id: u64) -> bool {
-        unsub!(self, recovery_state_subs, sub_id)
-    }
-
     pub fn unobserve_backup_state(&self, sub_id: u64) -> bool {
         unsub!(self, backup_state_subs, sub_id)
     }
 
-    pub fn list_my_devices(&self) -> Vec<DeviceSummary> {
-        RT.block_on(async {
-            let Some(me) = self.inner.user_id() else {
-                return vec![];
-            };
-
-            let Ok(user_devs) = self.inner.encryption().get_user_devices(me).await else {
-                return vec![];
-            };
-
-            user_devs
-                .devices()
-                .map(|dev| {
-                    let ed25519 = dev.ed25519_key().map(|k| k.to_base64()).unwrap_or_default();
-                    let is_own = self
-                        .inner
-                        .device_id()
-                        .map(|my| my == dev.device_id())
-                        .unwrap_or(false);
-
-                    DeviceSummary {
-                        device_id: dev.device_id().to_string(),
-                        display_name: dev.display_name().unwrap_or_default().to_string(),
-                        ed25519,
-                        is_own,
-                        verified: dev.is_verified(),
+    pub fn start_verification_inbox(&self, observer: Box<dyn VerificationInboxObserver>) -> u64 {
+        let sdk = self.core.sdk.clone();
+        let obs: Arc<dyn VerificationInboxObserver> = Arc::from(observer);
+        let inbox = self.core.inbox.clone();
+        sub_manager!(self, inbox_subs, async move {
+            sdk.encryption().wait_for_e2ee_initialization_tasks().await;
+            if let Err(e) = sdk.event_cache().subscribe() {
+                warn!("verification_inbox: event_cache.subscribe() failed: {e:?}");
+            }
+            let td_handler = sdk.observe_events::<ToDeviceKeyVerificationRequestEvent, ()>();
+            let mut td_sub = td_handler.subscribe();
+            let ir_handler = sdk.observe_events::<SyncRoomMessageEvent, Room>();
+            let mut ir_sub = ir_handler.subscribe();
+            loop {
+                tokio::select! {
+                    maybe = td_sub.next() => {
+                        if let Some((ev, ())) = maybe {
+                            let flow_id   = ev.content.transaction_id.to_string();
+                            let from_user = ev.sender.to_string();
+                            let from_device = ev.content.from_device.to_string();
+                            inbox.lock().unwrap().insert(flow_id.clone(), (ev.sender, ev.content.from_device.clone()));
+                            let _ = catch_unwind(AssertUnwindSafe(|| obs.on_request(flow_id, from_user, from_device)));
+                        } else { break; }
                     }
-                })
-                .collect()
-        })
-    }
-
-    pub fn start_self_sas(
-        &self,
-        device_id: String,
-        observer: Box<dyn VerificationObserver>,
-    ) -> String {
-        let obs: Arc<dyn VerificationObserver> = Arc::from(observer);
-        RT.block_on(async {
-            info!("start_self_sas: device_id={}", device_id);
-
-            let Some(me) = self.inner.user_id() else {
-                warn!("start_self_sas: no user");
-                obs.on_error("".into(), "No user".into());
-                return "".into();
-            };
-
-            // Ensure crypto is fully initialised
-            self.inner
-                .encryption()
-                .wait_for_e2ee_initialization_tasks()
-                .await;
-
-            let Ok(devices) = self.inner.encryption().get_user_devices(me).await else {
-                warn!("start_self_sas: Devices unavailable");
-                obs.on_error("".into(), "Devices unavailable".into());
-                return "".into();
-            };
-
-            let mut target = None;
-            for d in devices.devices() {
-                if d.device_id().as_str() == device_id {
-                    target = Some(d);
-                    break;
-                }
-            }
-            let Some(dev) = target else {
-                warn!("start_self_sas: device not found");
-                obs.on_error("".into(), "Device not found".into());
-                return "".into();
-            };
-
-            match dev.request_verification().await {
-                Ok(req) => {
-                    let flow_id = req.flow_id().to_string();
-                    info!(
-                        "start_self_sas: got VerificationRequest flow_id={}",
-                        flow_id
-                    );
-                    self.wait_and_start_sas(flow_id.clone(), req, obs.clone());
-                    flow_id
-                }
-                Err(e) => {
-                    error!("start_self_sas: request_verification failed: {e}");
-                    obs.on_error("".into(), e.to_string());
-                    "".into()
-                }
-            }
-        })
-    }
-
-    pub fn start_user_sas(
-        &self,
-        user_id: String,
-        observer: Box<dyn VerificationObserver>,
-    ) -> String {
-        let obs: Arc<dyn VerificationObserver> = Arc::from(observer);
-        RT.block_on(async {
-            info!("start_user_sas: user_id={}", user_id);
-
-            let Ok(uid) = user_id.parse::<OwnedUserId>() else {
-                warn!("start_user_sas: bad user id");
-                obs.on_error("".into(), "Bad user id".into());
-                return "".into();
-            };
-
-            self.inner
-                .encryption()
-                .wait_for_e2ee_initialization_tasks()
-                .await;
-
-            match self.inner.encryption().request_user_identity(&uid).await {
-                Ok(Some(identity)) => match identity.request_verification().await {
-                    Ok(req) => {
-                        let flow_id = req.flow_id().to_string();
-                        info!(
-                            "start_user_sas: got VerificationRequest flow_id={}",
-                            flow_id
-                        );
-                        self.wait_and_start_sas(flow_id.clone(), req, obs.clone());
-                        flow_id
-                    }
-                    Err(e) => {
-                        error!("start_user_sas: request_verification failed: {e}");
-                        obs.on_error("".into(), e.to_string());
-                        "".into()
-                    }
-                },
-                Ok(None) => {
-                    warn!("start_user_sas: user has no cross-signing identity");
-                    obs.on_error("".into(), "User has no cross‑signing identity".into());
-                    "".into()
-                }
-                Err(e) => {
-                    error!("start_user_sas: Identity fetch failed: {e}");
-                    obs.on_error("".into(), format!("Identity fetch failed: {e}"));
-                    "".into()
-                }
-            }
-        })
-    }
-
-    pub fn accept_verification_request(
-        &self,
-        flow_id: String,
-        other_user_id: Option<String>,
-        observer: Box<dyn VerificationObserver>,
-    ) -> bool {
-        let obs: Arc<dyn VerificationObserver> = Arc::from(observer);
-
-        RT.block_on(async {
-            info!(
-                "accept_verification_request: flow_id={:?}, other_user_id={:?}",
-                flow_id, other_user_id
-            );
-
-            let Some(user) = self.resolve_other_user_for_flow(&flow_id, other_user_id) else {
-                warn!(
-                    "accept_verification_request: could not resolve user for flow_id={}",
-                    flow_id
-                );
-                return false;
-            };
-
-            // If the request exists, accept it and start monitoring until it transitions to SAS.
-            if let Some(req) = self
-                .inner
-                .encryption()
-                .get_verification_request(&user, &flow_id)
-                .await
-            {
-                info!("accept_verification_request: found VerificationRequest, accepting");
-                if req.accept().await.is_err() {
-                    warn!("accept_verification_request: req.accept() failed");
-                    return false;
-                }
-
-                self.wait_and_start_sas(flow_id.clone(), req, obs.clone());
-                return true;
-            }
-
-            warn!(
-                "accept_verification_request: no VerificationRequest found for user={} flow_id={}",
-                user, flow_id
-            );
-            false
-        })
-    }
-
-    pub fn accept_sas(
-        &self,
-        flow_id: String,
-        other_user_id: Option<String>,
-        observer: Box<dyn VerificationObserver>,
-    ) -> bool {
-        let obs: Arc<dyn VerificationObserver> = Arc::from(observer);
-        let verifs = self.verifs.clone();
-        let client = self.inner_clone();
-
-        RT.block_on(async {
-            info!(
-                "accept_sas: flow_id={:?}, other_user_id={:?}",
-                flow_id, other_user_id
-            );
-
-            let Some(user) = self.resolve_other_user_for_flow(&flow_id, other_user_id) else {
-                warn!("accept_sas: could not resolve user for flow_id={}", flow_id);
-                return false;
-            };
-
-            // Fast path: we already cached the SasVerification and have a running stream.
-            if let Some(f) = self.verifs.lock().unwrap().get(&flow_id) {
-                info!("accept_sas: found cached SAS, calling sas.accept()");
-                return f.sas.accept().await.is_ok();
-            }
-
-            // Slow path: fetch Verification and wait for sas() to appear.
-            let Some(verification) = client.encryption().get_verification(&user, &flow_id).await
-            else {
-                warn!(
-                    "accept_sas: no Verification found for user={} flow_id={}",
-                    user, flow_id
-                );
-                return false;
-            };
-
-            for _ in 0..25 {
-                if let Some(sas) = verification.clone().sas() {
-                    info!("accept_sas: sas() available, attaching stream and accepting");
-
-                    // Attach stream if we weren't already doing so (don’t block this call on it).
-                    let sas_for_stream = sas.clone();
-                    let flow_for_stream = flow_id.clone();
-                    let obs_for_stream = obs.clone();
-                    let verifs_for_stream = verifs.clone();
-
-                    spawn_detached!(async move {
-                        attach_sas_stream(
-                            verifs_for_stream,
-                            flow_for_stream,
-                            sas_for_stream,
-                            obs_for_stream,
-                        )
-                        .await;
-                    });
-
-                    return sas.accept().await.is_ok();
-                }
-
-                sleep(Duration::from_millis(120)).await;
-            }
-
-            warn!("accept_sas: timed out waiting for sas() to become available");
-            false
-        })
-    }
-
-    pub fn confirm_verification(&self, flow_id: String) -> bool {
-        RT.block_on(async {
-            let sas = {
-                self.verifs
-                    .lock()
-                    .unwrap()
-                    .get(&flow_id)
-                    .map(|f| f.sas.clone())
-            };
-
-            match sas {
-                Some(sas) => sas.confirm().await.is_ok(),
-                None => false,
-            }
-        })
-    }
-
-    pub fn cancel_verification(&self, flow_id: String) -> bool {
-        RT.block_on(async {
-            let sas = {
-                self.verifs
-                    .lock()
-                    .unwrap()
-                    .get(&flow_id)
-                    .map(|f| f.sas.clone())
-            };
-
-            if let Some(sas) = sas {
-                return sas.cancel().await.is_ok();
-            }
-
-            let user = self
-                .inbox
-                .lock()
-                .unwrap()
-                .get(&flow_id)
-                .map(|p| p.0.clone())
-                .or_else(|| self.inner.user_id().map(|u| u.to_owned()));
-
-            let Some(user) = user else { return false };
-
-            if let Some(v) = self
-                .inner
-                .encryption()
-                .get_verification(&user, &flow_id)
-                .await
-            {
-                if let Some(sas) = v.sas() {
-                    return sas.cancel().await.is_ok();
-                }
-            }
-            false
-        })
-    }
-
-    pub fn cancel_verification_request(
-        &self,
-        flow_id: String,
-        other_user_id: Option<String>,
-    ) -> bool {
-        RT.block_on(async {
-            let user = if let Some(uid) = other_user_id {
-                match uid.parse::<OwnedUserId>() {
-                    Ok(u) => u,
-                    Err(_) => return false,
-                }
-            } else if let Some((u, _)) = self.inbox.lock().unwrap().get(&flow_id).cloned() {
-                u
-            } else {
-                return false;
-            };
-
-            if let Some(req) = self
-                .inner
-                .encryption()
-                .get_verification_request(&user, &flow_id)
-                .await
-            {
-                return req.cancel().await.is_ok();
-            }
-
-            if let Some(verification) = self
-                .inner
-                .encryption()
-                .get_verification(&user, &flow_id)
-                .await
-            {
-                if let Some(sas) = verification.sas() {
-                    return sas.cancel().await.is_ok();
-                }
-            }
-
-            false
-        })
-    }
-
-    pub fn is_logged_in(&self) -> bool {
-        self.inner.session_meta().is_some()
-    }
-
-    pub fn enqueue_text(&self, room_id: String, body: String, txn_id: Option<String>) -> String {
-        let client_txn = txn_id.unwrap_or_else(|| format!("mages-{}", now_ms()));
-
-        let mgr = self.timeline_mgr.clone();
-        let tx = self.send_tx.clone();
-        let txn_id = client_txn.clone();
-        let send_handles = self.send_handles_by_txn.clone();
-
-        spawn_detached!(async move {
-            use matrix_sdk::ruma::events::room::message::RoomMessageEventContent as Msg;
-
-            let _ = tx.send(SendUpdate {
-                room_id: room_id.clone(),
-                txn_id: txn_id.clone(),
-                attempts: 0,
-                state: SendState::Sending,
-                event_id: None,
-                error: None,
-            });
-
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                let _ = tx.send(SendUpdate {
-                    room_id,
-                    txn_id,
-                    attempts: 0,
-                    state: SendState::Failed,
-                    event_id: None,
-                    error: Some("bad room id".into()),
-                });
-                return;
-            };
-
-            let Some(timeline) = mgr.timeline_for(&rid).await else {
-                let _ = tx.send(SendUpdate {
-                    room_id: rid.to_string(),
-                    txn_id,
-                    attempts: 0,
-                    state: SendState::Failed,
-                    event_id: None,
-                    error: Some("room/timeline not found".into()),
-                });
-                return;
-            };
-
-            match timeline.send(Msg::text_plain(body).into()).await {
-                Ok(handle) => {
-                    let items = timeline.items().await;
-                    if let Some(last_item) = items.last() {
-                        if let Some(ev) = last_item.as_event() {
-                            if ev.event_id().is_none() {
-                                if let Some(txn) = ev.transaction_id() {
-                                    send_handles
-                                        .lock()
-                                        .unwrap()
-                                        .insert(txn.to_string(), handle.clone());
+                    maybe = ir_sub.next() => {
+                        if let Some((ev, _room)) = maybe {
+                            if let SyncRoomMessageEvent::Original(o) = ev {
+                                if let MessageType::VerificationRequest(_) = &o.content.msgtype {
+                                    let flow_id   = o.event_id.to_string();
+                                    let from_user = o.sender.to_string();
+                                    inbox.lock().unwrap().insert(flow_id.clone(), (o.sender.clone(), owned_device_id!("inroom")));
+                                    let _ = catch_unwind(AssertUnwindSafe(|| obs.on_request(flow_id, from_user, String::new())));
                                 }
                             }
-                        }
+                        } else { break; }
                     }
+                }
+            }
+        })
+    }
 
-                    let _ = tx.send(SendUpdate {
-                        room_id: rid.to_string(),
-                        txn_id,
-                        attempts: 0,
-                        state: SendState::Sent,
-                        event_id: None,
-                        error: None,
-                    });
-                }
-                Err(e) => {
-                    let _ = tx.send(SendUpdate {
-                        room_id: rid.to_string(),
-                        txn_id,
-                        attempts: 0,
-                        state: SendState::Failed,
-                        event_id: None,
-                        error: Some(e.to_string()),
-                    });
-                }
+    pub fn unobserve_verification_inbox(&self, sub_id: u64) -> bool {
+        unsub!(self, inbox_subs, sub_id)
+    }
+
+    pub fn load_room_list_cache(&self) -> Vec<RoomListEntry> {
+        RT.block_on(async { platform::load_room_list_cache(&self.store_dir).await })
+    }
+
+    pub fn enter_foreground(&self) {
+        self.app_in_foreground
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = RT.block_on(async {
+            self.core.ensure_sync_service().await;
+            if let Err(e) = self.core.sdk.event_cache().subscribe() {
+                warn!("event_cache.subscribe() failed: {e:?}");
+            }
+            if let Some(svc) = self.core.sync_service.lock().unwrap().as_ref().cloned() {
+                let _ = svc.start().await;
             }
         });
-
-        client_txn
     }
 
-    pub fn retry_by_txn(&self, _room_id: String, txn_id: String) -> bool {
-        RT.block_on(async {
-            if let Some(handle) = self
-                .send_handles_by_txn
-                .lock()
-                .unwrap()
-                .get(&txn_id)
-                .cloned()
-            {
-                handle.unwedge().await.is_ok()
-            } else {
-                false
+    pub fn enter_background(&self) {
+        self.app_in_foreground
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let _ = RT.block_on(async {
+            if let Some(svc) = self.core.sync_service.lock().unwrap().as_ref().cloned() {
+                let _ = svc.stop().await;
             }
-        })
+        });
     }
 
-    pub fn list_invited(&self) -> Result<Vec<RoomProfile>, FfiError> {
-        RT.block_on(async {
-            let rooms = self.inner.invited_rooms();
-
-            let mut out = Vec::with_capacity(rooms.len());
-            for room in rooms {
-                let rid = room.room_id().to_owned();
-
-                let name = room
-                    .display_name()
-                    .await
-                    .map(|d| d.to_string())
-                    .unwrap_or_else(|_| rid.to_string());
-
-                let topic = room.topic();
-                let member_count = room.active_members_count();
-
-                let is_dm = room.is_direct().await.unwrap_or(false);
-                let is_encrypted = room
-                    .latest_encryption_state()
-                    .await
-                    .map(|s| s.is_encrypted())
-                    .unwrap_or(false);
-
-                let mut avatar_url = room.avatar_url().map(|mxc| mxc.to_string());
-
-                let canonical_alias = room.canonical_alias().map(|a| a.to_string());
-
-                let alt_aliases: Vec<String> =
-                    room.alt_aliases().iter().map(|a| a.to_string()).collect();
-
-                let room_version = room.version().map(|v| v.to_string());
-
-                //If no room avatar, and it's a DM → use the other user's avatar
-                if avatar_url.is_none() && is_dm {
-                    if let Some(me) = self.inner.user_id() {
-                        let members = room
-                            .members(RoomMemberships::ACTIVE)
-                            .await
-                            .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-                        // Find a "peer" (first joined member that is not me)
-                        if let Some(peer) = members.into_iter().find(|m| m.user_id() != me) {
-                            avatar_url = peer.avatar_url().map(|mxc| mxc.to_string());
-                        }
-                    }
-                }
-
-                out.push(RoomProfile {
-                    room_id: rid.to_string(),
-                    name,
-                    topic,
-                    member_count,
-                    is_encrypted,
-                    is_dm,
-                    avatar_url,
-                    canonical_alias,
-                    alt_aliases,
-                    room_version,
-                });
-            }
-            Ok(out)
-        })
-    }
-
-    // Accept an invite by room ID
-    pub fn accept_invite(&self, room_id: String) -> bool {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                return false;
-            };
-            // Join-by-id is the canonical accept for invites
-            self.inner.join_room_by_id(&rid).await.is_ok()
-        })
-    }
-
-    // Decline an invite (leave)
-    pub fn leave_room(&self, room_id: String) -> Result<(), FfiError> {
-        RT.block_on(async {
-            let rid =
-                ruma::OwnedRoomId::try_from(room_id).map_err(|e| FfiError::Msg(e.to_string()))?;
-            let room = self
-                .inner
-                .get_room(&rid)
-                .ok_or_else(|| FfiError::Msg("room not found".into()))?;
-
-            room.leave().await.map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    // Create a private room; optional name/topic; optional invitees.
-    // Returns the new roomId on success.
-    pub fn create_room(
-        &self,
-        name: Option<String>,
-        topic: Option<String>,
-        invitees: Vec<String>,
-        is_public: bool,
-        room_alias: Option<String>,
-    ) -> Result<String, FfiError> {
-        RT.block_on(async move {
-            use ruma::{
-                api::client::room::Visibility, api::client::room::create_room::v3 as create_room_v3,
-            };
-
-            let mut req = create_room_v3::Request::new();
-            req.visibility = if is_public {
-                Visibility::Public
-            } else {
-                Visibility::Private
-            };
-            req.preset = Some(if is_public {
-                create_room_v3::RoomPreset::PublicChat
-            } else {
-                create_room_v3::RoomPreset::PrivateChat
+    pub fn start_supervised_sync(&self, observer: Box<dyn SyncObserver>) {
+        let obs: Arc<dyn SyncObserver> = Arc::from(observer);
+        let svc_slot = self.core.sync_service.clone();
+        let in_foreground = self.app_in_foreground.clone();
+        let h = spawn_task!(async move {
+            obs.on_state(SyncStatus {
+                phase: SyncPhase::Idle,
+                message: None,
             });
-            if let Some(n) = &name {
-                req.name = Some(n.clone());
-            }
-            if let Some(t) = &topic {
-                req.topic = Some(t.clone());
-            }
-            if let Some(alias) = &room_alias {
-                let normalized = if alias.starts_with('#') {
-                    alias.trim_start_matches('#')
-                } else {
-                    alias
-                }
-                .split(':')
-                .next()
-                .unwrap_or(alias)
-                .to_string();
-                if !normalized.is_empty() {
-                    req.room_alias_name = Some(normalized);
-                }
-            }
-            if !invitees.is_empty() {
-                let parsed = invitees
-                    .into_iter()
-                    .map(|u| u.parse())
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e: ruma::IdParseError| FfiError::Msg(e.to_string()))?;
-                req.invite = parsed;
-            }
-
-            let resp = self
-                .inner
-                .send(req)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            Ok(resp.room_id.to_string())
-        })
-    }
-
-    // Set room name (state event)
-    pub fn set_room_name(&self, room_id: String, name: String) -> bool {
-        with_room_async!(self, room_id, |room: Room, _rid| async move {
-            room.send_state_event(RoomNameEventContent::new(name))
-                .await
-                .is_ok()
-        })
-    }
-
-    // Set room topic
-    pub fn set_room_topic(&self, room_id: String, topic: String) -> bool {
-        with_room_async!(self, room_id, |room: Room, _rid| async move {
-            room.send_state_event(RoomTopicEventContent::new(topic))
-                .await
-                .is_ok()
-        })
-    }
-
-    // Get list of pinned event IDs in a room
-    pub fn get_pinned_events(&self, room_id: String) -> Vec<String> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                return Vec::new();
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Vec::new();
-            };
-            room.pinned_event_ids()
-                .map(|ids| ids.iter().map(|id| id.to_string()).collect())
-                .unwrap_or_default()
-        })
-    }
-
-    // note: replaces entire list
-    pub fn set_pinned_events(&self, room_id: String, event_ids: Vec<String>) -> bool {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                return false;
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return false;
-            };
-            let parsed_ids: Vec<_> = event_ids
-                .iter()
-                .filter_map(|id| EventId::parse(id).ok())
-                .collect();
-            let content = RoomPinnedEventsEventContent::new(parsed_ids);
-            room.send_state_event(content).await.is_ok()
-        })
-    }
-
-    pub fn room_profile(&self, room_id: String) -> Result<Option<RoomProfile>, FfiError> {
-        RT.block_on(async {
-            use matrix_sdk::RoomMemberships;
-
-            let rid =
-                ruma::OwnedRoomId::try_from(room_id).map_err(|e| FfiError::Msg(e.to_string()))?;
-            let room = self
-                .inner
-                .get_room(&rid)
-                .ok_or_else(|| FfiError::Msg("room not found".into()))?;
-
-            let name = room
-                .display_name()
-                .await
-                .map(|d| d.to_string())
-                .unwrap_or_else(|_| rid.to_string());
-
-            let topic = room.topic();
-
-            let member_count = room.joined_members_count();
-
-            let is_encrypted = matches!(room.encryption_state(), EncryptionState::Encrypted);
-
-            let is_dm = room.is_direct().await.unwrap_or(false);
-
-            let mut avatar_url = room.avatar_url().map(|mxc| mxc.to_string());
-
-            let canonical_alias = room.canonical_alias().map(|a| a.to_string());
-
-            let alt_aliases: Vec<String> =
-                room.alt_aliases().iter().map(|a| a.to_string()).collect();
-
-            let room_version = room.version().map(|v| v.to_string());
-
-            //If no room avatar, and it's a DM → use the other user's avatar
-            if avatar_url.is_none() && is_dm {
-                if let Some(me) = self.inner.user_id() {
-                    let members = room
-                        .members(RoomMemberships::ACTIVE)
-                        .await
-                        .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-                    // Find a "peer" (first joined member that is not me)
-                    if let Some(peer) = members.into_iter().find(|m| m.user_id() != me) {
-                        avatar_url = peer.avatar_url().map(|mxc| mxc.to_string());
-                    }
-                }
-            }
-
-            Ok(Some(RoomProfile {
-                room_id: rid.to_string(),
-                name,
-                topic,
-                member_count,
-                is_encrypted,
-                is_dm,
-                avatar_url,
-                canonical_alias,
-                alt_aliases,
-                room_version,
-            }))
-        })
-    }
-
-    pub fn room_notification_mode(&self, room_id: String) -> Option<FfiRoomNotificationMode> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                return None;
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return None;
-            };
-
-            let mode = room.notification_mode().await?;
-
-            Some(match mode {
-                RsMode::AllMessages => FfiRoomNotificationMode::AllMessages,
-                RsMode::MentionsAndKeywordsOnly => FfiRoomNotificationMode::MentionsAndKeywordsOnly,
-                RsMode::Mute => FfiRoomNotificationMode::Mute,
-            })
-        })
-    }
-
-    pub fn set_room_notification_mode(
-        &self,
-        room_id: String,
-        mode: FfiRoomNotificationMode,
-    ) -> Result<(), FfiError> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-
-            let sdk_mode = match mode {
-                FfiRoomNotificationMode::AllMessages => RsMode::AllMessages,
-                FfiRoomNotificationMode::MentionsAndKeywordsOnly => RsMode::MentionsAndKeywordsOnly,
-                FfiRoomNotificationMode::Mute => RsMode::Mute,
-            };
-
-            self.inner
-                .notification_settings()
-                .await
-                .set_room_notification_mode(rid.as_ref(), sdk_mode)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    pub fn list_members(&self, room_id: String) -> Result<Vec<MemberSummary>, FfiError> {
-        RT.block_on(async {
-            use matrix_sdk::RoomMemberships;
-
-            let rid =
-                ruma::OwnedRoomId::try_from(room_id).map_err(|e| FfiError::Msg(e.to_string()))?;
-            let room = self
-                .inner
-                .get_room(&rid)
-                .ok_or_else(|| FfiError::Msg("room not found".into()))?;
-
-            let me = self.inner.user_id();
-
-            let members = room
-                .members(RoomMemberships::ACTIVE)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            Ok(members
-                .into_iter()
-                .map(|m| MemberSummary {
-                    user_id: m.user_id().to_string(),
-                    display_name: m.display_name().map(|n| n.to_string()),
-                    avatar_url: m.avatar_url().map(|u| u.to_string()),
-                    is_me: me.map(|u| u == m.user_id()).unwrap_or(false),
-                    membership: m.membership().to_string(),
-                })
-                .collect())
-        })
-    }
-
-    pub fn list_knock_requests(
-        &self,
-        room_id: String,
-    ) -> Result<Vec<KnockRequestSummary>, FfiError> {
-        RT.block_on(async {
-            let rid =
-                ruma::OwnedRoomId::try_from(room_id).map_err(|e| FfiError::Msg(e.to_string()))?;
-            let room = self
-                .inner
-                .get_room(&rid)
-                .ok_or_else(|| FfiError::Msg("room not found".into()))?;
-
-            let members = room
-                .members(RoomMemberships::KNOCK)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            Ok(members
-                .into_iter()
-                .filter_map(|member| {
-                    let event = member.event();
-                    let event_id = event.event_id()?;
-                    Some(KnockRequestSummary {
-                        event_id: event_id.to_string(),
-                        user_id: member.user_id().to_string(),
-                        display_name: member.display_name().map(|n| n.to_string()),
-                        avatar_url: member.avatar_url().map(|u| u.to_string()),
-                        reason: event.reason().map(|r| r.to_string()),
-                        ts_ms: event.timestamp().map(u64::from),
-                        is_seen: false,
-                    })
-                })
-                .collect())
-        })
-    }
-
-    pub fn accept_knock_request(&self, room_id: String, user_id: String) -> Result<(), FfiError> {
-        RT.block_on(async {
-            let rid =
-                ruma::OwnedRoomId::try_from(room_id).map_err(|e| FfiError::Msg(e.to_string()))?;
-            let uid =
-                ruma::OwnedUserId::try_from(user_id).map_err(|e| FfiError::Msg(e.to_string()))?;
-            let room = self
-                .inner
-                .get_room(&rid)
-                .ok_or_else(|| FfiError::Msg("room not found".into()))?;
-
-            room.invite_user_by_id(&uid)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    pub fn decline_knock_request(
-        &self,
-        room_id: String,
-        user_id: String,
-        reason: Option<String>,
-    ) -> Result<(), FfiError> {
-        RT.block_on(async {
-            let rid =
-                ruma::OwnedRoomId::try_from(room_id).map_err(|e| FfiError::Msg(e.to_string()))?;
-            let uid =
-                ruma::OwnedUserId::try_from(user_id).map_err(|e| FfiError::Msg(e.to_string()))?;
-            let room = self
-                .inner
-                .get_room(&rid)
-                .ok_or_else(|| FfiError::Msg("room not found".into()))?;
-
-            room.kick_user(&uid, reason.as_deref())
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    /// Register/Update HTTP pusher for UnifiedPush/Matrix gateway (e.g. ntfy)
-    pub fn register_unifiedpush(
-        &self,
-        app_id: String,
-        pushkey: String,
-        gateway_url: String,
-        device_display_name: String,
-        lang: String,
-        profile_tag: Option<String>,
-    ) -> bool {
-        RT.block_on(async {
-            // Test with a cs secret (like the json output)
-            let client_secret = self
-                .inner
-                .user_id()
-                .map(|u| {
-                    use std::collections::hash_map::DefaultHasher;
-                    use std::hash::{Hash, Hasher};
-                    let mut hasher = DefaultHasher::new();
-                    u.as_str().hash(&mut hasher);
-                    format!("{:x}", hasher.finish())
-                })
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
-            let mut http_data = HttpPusherData::new(gateway_url.clone());
-            http_data.format = Some(ruma::push::PushFormat::EventIdOnly);
-
-            http_data.data.insert(
-                "default_payload".to_owned(),
-                serde_json::json!({ "cs": client_secret }).into(),
-            );
-
-            let init = PusherInit {
-                ids: PusherIds::new(pushkey.clone(), app_id.clone()),
-                kind: PusherKind::Http(http_data),
-                app_display_name: "Mages".into(),
-                device_display_name,
-                profile_tag,
-                lang,
-            };
-
-            let pusher: Pusher = init.into();
-
-            info!(
-                "Registering pusher: app_id={}, gateway={}, secret={}",
-                app_id, gateway_url, client_secret
-            );
-
-            self.inner.pusher().set(pusher).await.is_ok()
-        })
-    }
-
-    /// Unregister HTTP pusher by ids
-    pub fn unregister_unifiedpush(&self, app_id: String, pushkey: String) -> bool {
-        RT.block_on(async {
-            let ids = PusherIds::new(app_id.into(), pushkey.into());
-            self.inner.pusher().delete(ids).await.is_ok()
-        })
-    }
-
-    /// Deprecated, remove after fixing push notifs for android (causes older parts to be used (legacy sync, which causes errors on the current synapse server))
-    #[warn(deprecated)]
-    pub fn wake_sync_once(&self, timeout_ms: u32) -> bool {
-        RT.block_on(async {
-            let settings =
-                SyncSettings::default().timeout(Duration::from_millis(timeout_ms as u64));
-            self.inner.sync_once(settings).await.is_ok()
-        })
-    }
-
-    pub fn room_unread_stats(&self, room_id: String) -> Option<UnreadStats> {
-        RT.block_on(async {
-            let Ok(rid) = ruma::OwnedRoomId::try_from(room_id) else {
-                return None;
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return None;
-            };
-            Some(UnreadStats {
-                messages: room.num_unread_messages(),
-                notifications: room.num_unread_notifications(),
-                mentions: room.num_unread_mentions(),
-            })
-        })
-    }
-
-    pub fn own_last_read(&self, room_id: String) -> OwnReceipt {
-        RT.block_on(async {
-            let Ok(rid) = ruma::OwnedRoomId::try_from(room_id) else {
-                return OwnReceipt {
-                    event_id: None,
-                    ts_ms: None,
-                };
-            };
-
-            let Some(tl) = self.timeline_mgr.timeline_for(&rid).await else {
-                return OwnReceipt {
-                    event_id: None,
-                    ts_ms: None,
-                };
-            };
-
-            let Some(me) = self.inner.user_id() else {
-                return OwnReceipt {
-                    event_id: None,
-                    ts_ms: None,
-                };
-            };
-
-            if let Some((eid, receipt)) = tl.latest_user_read_receipt(me).await {
-                let ts = receipt.ts.map(|t| t.0.into());
-                OwnReceipt {
-                    event_id: Some(eid.to_string()),
-                    ts_ms: ts,
-                }
-            } else {
-                OwnReceipt {
-                    event_id: None,
-                    ts_ms: None,
-                }
-            }
-        })
-    }
-
-    pub fn observe_own_receipt(&self, room_id: String, observer: Box<dyn ReceiptsObserver>) -> u64 {
-        // Reuse the existing callback interface to notify "changed";
-        // when it fires, Kotlin can call own_last_read() to pull details.
-        let client = self.inner_clone();
-        let Ok(rid) = ruma::OwnedRoomId::try_from(room_id) else {
-            return 0;
-        };
-        let obs: Arc<dyn ReceiptsObserver> = Arc::from(observer);
-        let id = self.next_sub_id();
-
-        let h = spawn_task!(async move {
-            let stream =
-                client.observe_room_events::<SyncReceiptEvent, matrix_sdk::room::Room>(&rid);
-            let mut sub = stream.subscribe();
-            while let Some((_ev, _room)) = sub.next().await {
-                let _ = catch_unwind(AssertUnwindSafe(|| obs.on_changed()));
-            }
-        });
-        self.receipts_subs.lock().unwrap().insert(id, h);
-        id
-    }
-
-    pub fn mark_fully_read_at(&self, room_id: String, event_id: String) -> bool {
-        RT.block_on(async {
-            let Ok(rid) = ruma::OwnedRoomId::try_from(room_id) else {
-                return false;
-            };
-            let Ok(eid) = ruma::OwnedEventId::try_from(event_id) else {
-                return false;
-            };
-            if let Some(room) = self.inner.get_room(&rid) {
-                let receipts = matrix_sdk::room::Receipts::new()
-                    .private_read_receipt(eid.clone())
-                    .fully_read_marker(eid);
-                room.send_multiple_receipts(receipts).await.is_ok()
-            } else {
-                false
-            }
-        })
-    }
-
-    /// Run a short encryption sync if a permit is available (used on push).
-    pub fn encryption_catchup_once(&self) -> bool {
-        RT.block_on(async {
-            let svc_opt = { self.sync_service.lock().unwrap().as_ref().cloned() };
-            let Some(svc) = svc_opt else {
-                return false;
-            };
-            let Some(permit) = svc.try_get_encryption_sync_permit() else {
-                return false;
-            };
-            match EncryptionSyncService::new(self.inner_clone(), None).await {
-                Ok(enc) => enc.run_fixed_iterations(100, permit).await.is_ok(),
-                Err(_) => false,
-            }
-        })
-    }
-
-    pub fn observe_room_list(&self, observer: Box<dyn RoomListObserver>) -> u64 {
-        let obs: std::sync::Arc<dyn RoomListObserver> = std::sync::Arc::from(observer);
-        let svc_slot = self.sync_service.clone();
-        let client = self.inner_clone();
-        let mgr = self.timeline_mgr.clone();
-
-        let store_dir = self.store_dir.clone();
-        let id = self.next_sub_id();
-
-        let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<RoomListCmd>();
-        self.room_list_cmds.lock().unwrap().insert(id, cmd_tx);
-
-        let h = spawn_task!(async move {
-            // Wait until SyncService is ready
             let svc = loop {
-                if let Some(s) = { svc_slot.lock().unwrap().as_ref().cloned() } {
+                if let Some(s) = svc_slot.lock().unwrap().as_ref().cloned() {
                     break s;
                 }
                 sleep(Duration::from_millis(200)).await;
             };
-
-            let rls = svc.room_list_service();
-            let all = match rls.all_rooms().await {
-                Ok(list) => list,
-                Err(e) => {
-                    eprintln!("observe_room_list: failed to get all_rooms: {e}");
-                    return;
-                }
-            };
-
-            let (stream, controller) = all.entries_with_dynamic_adapters(50);
-            tokio::pin!(stream);
-
-            controller.set_filter(Box::new(filters::new_filter_non_left()));
-
-            use matrix_sdk_ui::room_list_service::RoomListItem;
-            let mut items = Vector::<RoomListItem>::new();
-
-            loop {
-                tokio::select! {
-                    Some(cmd) = cmd_rx.recv() => {
-                        match cmd {
-                            RoomListCmd::SetUnreadOnly(unread_only) => {
-                                if unread_only {
-                                    controller.set_filter(Box::new(filters::new_filter_all(vec![
-                                        Box::new(filters::new_filter_non_left()),
-                                        Box::new(filters::new_filter_unread()),
-                                    ])));
-                                } else {
-                                    controller.set_filter(Box::new(filters::new_filter_non_left()));
-                                }
-                            }
+            let mut st = svc.state();
+            svc.start().await;
+            while let Some(state) = st.next().await {
+                match state {
+                    State::Idle => obs.on_state(SyncStatus {
+                        phase: SyncPhase::Idle,
+                        message: None,
+                    }),
+                    State::Running => obs.on_state(SyncStatus {
+                        phase: SyncPhase::Running,
+                        message: None,
+                    }),
+                    State::Offline => obs.on_state(SyncStatus {
+                        phase: SyncPhase::BackingOff,
+                        message: Some("Offline (auto-retrying)".into()),
+                    }),
+                    State::Terminated => {
+                        obs.on_state(SyncStatus {
+                            phase: SyncPhase::Idle,
+                            message: Some("Sync stopped".into()),
+                        });
+                        if in_foreground.load(std::sync::atomic::Ordering::SeqCst) {
+                            sleep(Duration::from_millis(500)).await;
+                            svc.start().await;
                         }
                     }
-
-                    Some(diffs) = stream.next() => {
-                        let mut changed = false;
-
-                        for diff in diffs {
-                            match diff {
-                                VectorDiff::Reset { values } => { items = values; changed = true; }
-                                VectorDiff::Clear => { items.clear(); changed = true; }
-                                VectorDiff::PushFront { value } => { items.insert(0, value); changed = true; }
-                                VectorDiff::PushBack { value } => { items.push_back(value); changed = true; }
-                                VectorDiff::PopFront => { if !items.is_empty() { items.remove(0); changed = true; } }
-                                VectorDiff::PopBack => { items.pop_back(); changed = true; }
-                                VectorDiff::Insert { index, value } => { if index <= items.len() { items.insert(index, value); changed = true; } }
-                                VectorDiff::Set { index, value } => { if index < items.len() { items[index] = value; changed = true; } }
-                                VectorDiff::Remove { index } => { if index < items.len() { items.remove(index); changed = true; } }
-                                VectorDiff::Truncate { length } => { items.truncate(length); changed = true; }
-                                VectorDiff::Append { values } => { items.append(values); changed = true; }
-                            }
-                        }
-
-                        if changed {
-                            let mut snapshot: Vec<RoomListEntry> = Vec::with_capacity(items.len());
-
-                            for item in items.iter() {
-                                let room = &**item;
-
-                                let notifications = room.num_unread_notifications();
-                                let messages      = room.num_unread_messages();
-                                let mentions      = room.num_unread_mentions();
-                                let marked_unread = room.is_marked_unread();
-
-                                let is_favourite   = room.is_favourite();
-                                let is_low_priority= room.is_low_priority();
-
-                                let last_ts        = room.recency_stamp().map_or(0, |s| s.into());
-
-                                let is_dm = room.is_direct().await.unwrap_or(false);
-
-                                let mut avatar_url = room.avatar_url().map(|mxc| mxc.to_string());
-                                if avatar_url.is_none() && is_dm {
-                                    avatar_url = Client::dm_peer_avatar_url(room, client.user_id()).await;
-                                }
-                                let is_encrypted = matches!(
-                                    room.encryption_state(),
-                                    matrix_sdk::EncryptionState::Encrypted
-                                );
-                                let member_count_u64 = room.joined_members_count();
-                                let member_count = member_count_u64.min(u32::MAX as u64) as u32;
-                                let topic = room.topic();
-                                let is_invited = matches!(room.state(), RoomState::Invited);
-
-                                let latest_event: Option<LatestRoomEvent> = latest_room_event_for(&mgr, room).await;
-
-                                snapshot.push(RoomListEntry {
-                                    room_id: room.room_id().to_string(),
-                                    name: item.cached_display_name()
-                                        .clone().unwrap_or(RoomDisplayName::Named(room.room_id().to_string())).to_string(),
-                                    last_ts,
-                                    notifications,
-                                    messages,
-                                    mentions,
-                                    marked_unread,
-                                    is_favourite,
-                                    is_low_priority,
-                                    is_invited,
-                                    avatar_url,
-                                    is_dm,
-                                    is_encrypted,
-                                    member_count,
-                                    topic,
-                                    latest_event,
-                                });
-                            }
-
-                            let _ = platform::write_room_list_cache(&store_dir, &snapshot).await;
-
-                            let obs_clone = obs.clone();
-                            let _ = catch_unwind(AssertUnwindSafe(move || {
-                                obs_clone.on_reset(snapshot);
-                            }));
+                    State::Error(err) => {
+                        obs.on_state(SyncStatus {
+                            phase: SyncPhase::Error,
+                            message: Some(format!("Sync error: {err}")),
+                        });
+                        sleep(Duration::from_secs(2)).await;
+                        if in_foreground.load(std::sync::atomic::Ordering::SeqCst) {
+                            svc.start().await;
                         }
                     }
-
-                    else => break,
                 }
             }
         });
-
-        self.room_list_subs.lock().unwrap().insert(id, h);
-        id
+        self.guards.lock().unwrap().push(h);
     }
 
-    pub fn unobserve_room_list(&self, token: u64) -> bool {
-        self.room_list_cmds.lock().unwrap().remove(&token);
-        unsub!(self, room_list_subs, token)
-    }
-
-    pub fn search_users(
-        &self,
-        search_term: String,
-        limit: u64,
-    ) -> Result<Vec<DirectoryUser>, FfiError> {
-        RT.block_on(async {
-            let resp = self
-                .inner
-                .search_users(&search_term, limit)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?; // matrix-sdk 0.14's helper
-            let out = resp
-                .results
-                .into_iter()
-                .map(|u| DirectoryUser {
-                    user_id: u.user_id.to_string(),
-                    display_name: u.display_name,
-                    avatar_url: u.avatar_url.map(|mxc| mxc.to_string()),
-                })
-                .collect();
-            Ok(out)
-        })
-    }
-
-    pub fn get_user_profile(&self, user_id: String) -> Result<DirectoryUser, FfiError> {
-        RT.block_on(async {
-            let uid = user_id
-                .parse::<OwnedUserId>()
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let profile = self
-                .inner
-                .account()
-                .fetch_user_profile_of(&uid)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let display_name = profile
-                .get_static::<DisplayName>()
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            let avatar_url = profile
-                .get_static::<AvatarUrl>()
-                .map_err(|e| FfiError::Msg(e.to_string()))?
-                .map(|mxc| mxc.to_string());
-
-            Ok(DirectoryUser {
-                user_id,
-                display_name,
-                avatar_url,
-            })
-        })
-    }
-
-    pub fn public_rooms(
-        &self,
-        server: Option<String>,
-        search: Option<String>,
-        limit: u32,
-        since: Option<String>,
-    ) -> Result<PublicRoomsPage, FfiError> {
-        RT.block_on(async {
-            // Parse server name if provided
-            let server_name: Option<OwnedServerName> = match server {
-                Some(s) => {
-                    Some(OwnedServerName::try_from(s).map_err(|e| FfiError::Msg(e.to_string()))?)
-                }
-                None => None,
-            };
-
-            // If a search term exists, use get_public_rooms_filtered; else use get_public_rooms.
-            if let Some(term) = search.filter(|s| !s.trim().is_empty()) {
-                let mut req = get_public_rooms_filtered::v3::Request::new();
-                let mut f = Filter::new();
-                f.generic_search_term = Some(term);
-                req.filter = f;
-                if let Some(s) = since.as_deref() {
-                    req.since = Some(s.to_owned());
-                }
-                if limit > 0 {
-                    req.limit = Some(limit.into());
-                }
-                if let Some(ref sn) = server_name {
-                    req.server = Some(sn.clone());
-                }
-
-                let resp = self
-                    .inner
-                    .public_rooms_filtered(req)
-                    .await
-                    .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-                let rooms = resp
-                    .chunk
-                    .into_iter()
-                    .map(|r| PublicRoom {
-                        room_id: r.room_id.to_string(),
-                        name: r.name,
-                        topic: r.topic,
-                        alias: r.canonical_alias.map(|a| a.to_string()),
-                        avatar_url: r.avatar_url.map(|mxc| mxc.to_string()),
-                        member_count: r.num_joined_members.into(),
-                        world_readable: r.world_readable,
-                        guest_can_join: r.guest_can_join,
-                    })
-                    .collect();
-
-                Ok(PublicRoomsPage {
-                    rooms,
-                    next_batch: resp.next_batch,
-                    prev_batch: resp.prev_batch,
-                })
-            } else {
-                // Simple directory (no server-side filter)
-                let resp = self
-                    .inner
-                    .public_rooms(Some(limit), since.as_deref(), server_name.as_deref())
-                    .await
-                    .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-                let rooms = resp
-                    .chunk
-                    .into_iter()
-                    .map(|r| PublicRoom {
-                        room_id: r.room_id.to_string(),
-                        name: r.name,
-                        topic: r.topic,
-                        alias: r.canonical_alias.map(|a| a.to_string()),
-                        avatar_url: r.avatar_url.map(|mxc| mxc.to_string()),
-                        member_count: r.num_joined_members.into(),
-                        world_readable: r.world_readable,
-                        guest_can_join: r.guest_can_join,
-                    })
-                    .collect();
-
-                Ok(PublicRoomsPage {
-                    rooms,
-                    next_batch: resp.next_batch,
-                    prev_batch: resp.prev_batch,
-                })
-            }
-        })
-    }
-
-    pub fn join_by_id_or_alias(&self, id_or_alias: String) -> Result<(), FfiError> {
-        RT.block_on(async {
-            let target = OwnedRoomOrAliasId::try_from(id_or_alias)
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            self.inner
-                .join_room_by_id_or_alias(&target, &[])
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            Ok(())
-        })
-    }
-
-    pub fn room_preview(&self, id_or_alias: String) -> Result<RoomPreview, FfiError> {
-        RT.block_on(async {
-            let target = OwnedRoomOrAliasId::try_from(id_or_alias)
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            let preview = self
-                .inner
-                .get_room_preview(&target, vec![])
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let join_rule = preview.join_rule.map(|rule| match rule {
-                JoinRuleSummary::Public => RoomJoinRule::Public,
-                JoinRuleSummary::Invite => RoomJoinRule::Invite,
-                JoinRuleSummary::Knock => RoomJoinRule::Knock,
-                JoinRuleSummary::Restricted(_) => RoomJoinRule::Restricted,
-                JoinRuleSummary::KnockRestricted(_) => RoomJoinRule::KnockRestricted,
-                JoinRuleSummary::Private => RoomJoinRule::Invite,
-                JoinRuleSummary::_Custom(_) | _ => RoomJoinRule::Invite,
-            });
-
-            let membership = preview.state.map(|state| match state {
-                RoomState::Joined => RoomPreviewMembership::Joined,
-                RoomState::Invited => RoomPreviewMembership::Invited,
-                RoomState::Knocked => RoomPreviewMembership::Knocked,
-                RoomState::Left => RoomPreviewMembership::Left,
-                RoomState::Banned => RoomPreviewMembership::Banned,
-            });
-
-            Ok(RoomPreview {
-                room_id: preview.room_id.to_string(),
-                canonical_alias: preview.canonical_alias.map(|a| a.to_string()),
-                name: preview.name,
-                topic: preview.topic,
-                avatar_url: preview.avatar_url.map(|m| m.to_string()),
-                member_count: preview.num_joined_members,
-                world_readable: preview.is_world_readable,
-                join_rule,
-                membership,
-            })
-        })
-    }
-
-    /// Knock on a room to request access (for rooms with knock join rule).
-    pub fn knock(&self, id_or_alias: String) -> bool {
-        RT.block_on(async {
-            let Ok(target) = OwnedRoomOrAliasId::try_from(id_or_alias) else {
-                return false;
-            };
-            self.inner.knock(target, None, vec![]).await.is_ok()
-        })
-    }
-
-    pub fn resolve_room_id(&self, id_or_alias: String) -> Result<String, FfiError> {
-        RT.block_on(async {
-            if id_or_alias.starts_with('!') {
-                return Ok(id_or_alias);
-            }
-            if id_or_alias.starts_with('#') {
-                let alias = OwnedRoomAliasId::try_from(id_or_alias)
-                    .map_err(|e| FfiError::Msg(e.to_string()))?;
-                let resp = self
-                    .inner
-                    .resolve_room_alias(&alias)
-                    .await
-                    .map_err(|e| FfiError::Msg(e.to_string()))?;
-                return Ok(resp.room_id.to_string());
-            }
-            Err(FfiError::Msg("not a room id or alias".into()))
-        })
-    }
-
-    // Ensure a DM exists with a user: reuse if present, else create one.
-    pub fn ensure_dm(&self, user_id: String) -> Result<String, FfiError> {
-        RT.block_on(async {
-            let uid = user_id
-                .parse::<OwnedUserId>()
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            if let Some(room) = self.inner.get_dm_room(&uid) {
-                return Ok(room.room_id().to_string());
-            }
-            let room = self
-                .inner
-                .create_dm(&uid)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            Ok(room.room_id().to_string())
-        })
-    }
-
-    /// Download full media described by AttachmentInfo into the SDK's cache dir.
-    /// `filename_hint` is used to derive a friendly name/extension.
-    pub fn download_attachment_to_cache_file(
-        &self,
-        att: AttachmentInfo,
-        filename_hint: Option<String>,
-    ) -> Result<DownloadResult, FfiError> {
-        #[cfg(target_family = "wasm")]
-        return Err(FfiError::Msg("file downloads not supported on web".into()));
-
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let dir = cache_dir(&self.store_dir);
-            platform::ensure_dir(&dir);
-
-            fn sanitize(name: &str) -> String {
-                let mut s = String::with_capacity(name.len());
-                for ch in name.chars() {
-                    if ch.is_ascii_alphanumeric() || "-_.".contains(ch) {
-                        s.push(ch);
-                    } else {
-                        s.push('_');
-                    }
-                }
-                s.trim_matches('_').to_string()
-            }
-
-            let hint = filename_hint
-                .as_deref()
-                .map(sanitize)
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "file.bin".into());
-            let out = dir.join(format!("dl_{}_{}", now_ms(), hint));
-
-            RT.block_on(async {
-                use mime::APPLICATION_OCTET_STREAM;
-
-                // IMPORTANT: use encryption info when available
-                let source = if let Some(enc) = att.encrypted.as_ref() {
-                    let ef: EncryptedFile = serde_json::from_str(&enc.json)
-                        .map_err(|e| FfiError::Msg(format!("file enc parse: {e}")))?;
-                    MediaSource::Encrypted(Box::new(ef))
-                } else {
-                    MediaSource::Plain(att.mxc_uri.clone().into())
-                };
-
-                let req = MediaRequestParameters {
-                    source,
-                    format: MediaFormat::File,
-                };
-
-                let handle = self
-                    .inner
-                    .media()
-                    .get_media_file(&req, None, &APPLICATION_OCTET_STREAM, true, None)
-                    .await
-                    .map_err(|e| FfiError::Msg(format!("download: {e}")))?;
-
-                // Try persist then copy (cross-device link fallback)
-                match handle.persist(&out) {
-                    Ok(_) => {}
-                    Err(persist_error) => {
-                        let src_path = persist_error.file.path();
-                        std::fs::copy(src_path, &out)
-                            .map_err(|e| FfiError::Msg(format!("copy fallback failed: {e}")))?;
-                    }
-                }
-
-                let bytes = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
-                Ok(DownloadResult {
-                    path: out.to_string_lossy().to_string(),
-                    bytes,
-                })
-            })
-        } // end cfg(not(wasm))
-    }
-
-    /// Download full media described by AttachmentInfo directly to `save_path`.
-    pub fn download_attachment_to_path(
-        &self,
-        att: AttachmentInfo,
-        save_path: String,
-        progress: Option<Box<dyn ProgressObserver>>,
-    ) -> Result<DownloadResult, FfiError> {
-        #[cfg(target_family = "wasm")]
-        return Err(FfiError::Msg("file downloads not supported on web".into()));
-
-        #[cfg(not(target_family = "wasm"))]
-        RT.block_on(async {
-            use mime::APPLICATION_OCTET_STREAM;
-
-            let source = if let Some(enc) = att.encrypted.as_ref() {
-                let ef: EncryptedFile = serde_json::from_str(&enc.json)
-                    .map_err(|e| FfiError::Msg(format!("file enc parse: {e}")))?;
-                MediaSource::Encrypted(Box::new(ef))
-            } else {
-                MediaSource::Plain(att.mxc_uri.clone().into())
-            };
-
-            let req = MediaRequestParameters {
-                source,
-                format: MediaFormat::File,
-            };
-
-            let handle = self
-                .inner
-                .media()
-                .get_media_file(&req, None, &APPLICATION_OCTET_STREAM, true, None)
-                .await
-                .map_err(|e| FfiError::Msg(format!("download: {e}")))?;
-
-            // simple progress callback using temp file size
-            if let Some(p) = progress.as_ref() {
-                if let Ok(md) = std::fs::metadata(handle.path()) {
-                    p.on_progress(md.len(), Some(md.len()));
-                }
-            }
-
-            handle
-                .persist(Path::new(&save_path))
-                .map_err(|e| FfiError::Msg(format!("persist: {e}")))?;
-
-            let bytes = std::fs::metadata(&save_path).map(|m| m.len()).unwrap_or(0);
-            Ok(DownloadResult {
-                path: save_path,
-                bytes,
-            })
-        })
-    }
-
-    pub fn room_list_set_unread_only(&self, token: u64, unread_only: bool) -> bool {
-        if let Some(tx) = self.room_list_cmds.lock().unwrap().get(&token).cloned() {
-            tx.send(RoomListCmd::SetUnreadOnly(unread_only)).is_ok()
-        } else {
-            false
+    fn ensure_send_queue_supervision(&self) {
+        if self.send_queue_supervised.swap(true, Ordering::SeqCst) {
+            return;
         }
+        let sdk = self.core.sdk.clone();
+        let tx = self.send_tx.clone();
+
+        let h = spawn_task!(async move {
+            let mut rx = sdk.send_queue().subscribe();
+            let mut attempts: HashMap<String, u32> = HashMap::new();
+            loop {
+                let upd = match rx.recv().await {
+                    Ok(u) => u,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                };
+                let room_id_str = upd.room_id.to_string();
+                use matrix_sdk::send_queue::RoomSendQueueUpdate as U;
+                let mapped = match upd.update {
+                    U::NewLocalEvent(local) => Some(SendUpdate {
+                        room_id: room_id_str,
+                        txn_id: local.transaction_id.to_string(),
+                        attempts: 0,
+                        state: SendState::Enqueued,
+                        event_id: None,
+                        error: None,
+                    }),
+                    U::RetryEvent { transaction_id } => {
+                        let k = format!("{room_id_str}|{transaction_id}");
+                        let n = attempts.entry(k).and_modify(|v| *v += 1).or_insert(1);
+                        Some(SendUpdate {
+                            room_id: room_id_str,
+                            txn_id: transaction_id.to_string(),
+                            attempts: *n,
+                            state: SendState::Retrying,
+                            event_id: None,
+                            error: None,
+                        })
+                    }
+                    U::SentEvent {
+                        transaction_id,
+                        event_id,
+                    } => {
+                        attempts.remove(&format!("{room_id_str}|{transaction_id}"));
+                        Some(SendUpdate {
+                            room_id: room_id_str,
+                            txn_id: transaction_id.to_string(),
+                            attempts: 0,
+                            state: SendState::Sent,
+                            event_id: Some(event_id.to_string()),
+                            error: None,
+                        })
+                    }
+                    U::SendError {
+                        transaction_id,
+                        error,
+                        is_recoverable,
+                    } => {
+                        let k = format!("{room_id_str}|{transaction_id}");
+                        let n = attempts.entry(k).and_modify(|v| *v += 1).or_insert(1);
+                        Some(SendUpdate {
+                            room_id: room_id_str,
+                            txn_id: transaction_id.to_string(),
+                            attempts: *n,
+                            state: SendState::Failed,
+                            event_id: None,
+                            error: Some(format!("{error:?} (recoverable={is_recoverable})")),
+                        })
+                    }
+                    U::CancelledLocalEvent { transaction_id } => {
+                        attempts.remove(&format!("{room_id_str}|{transaction_id}"));
+                        Some(SendUpdate {
+                            room_id: room_id_str,
+                            txn_id: transaction_id.to_string(),
+                            attempts: 0,
+                            state: SendState::Failed,
+                            event_id: None,
+                            error: Some("Cancelled".into()),
+                        })
+                    }
+                    _ => None,
+                };
+                if let Some(u) = mapped {
+                    let _ = tx.send(u);
+                }
+            }
+        });
+        self.guards.lock().unwrap().push(h);
     }
 
-    pub fn fetch_notification(
-        &self,
-        room_id: String,
-        event_id: String,
-    ) -> Result<Option<RenderedNotification>, FfiError> {
+    pub fn login_password(&self, username: String, password: String) -> Result<String, FfiError> {
         RT.block_on(async {
-            let rid = ruma::OwnedRoomId::try_from(room_id)
-                .map_err(|e| FfiError::Msg(format!("bad room id: {e}")))?;
-            let eid = ruma::OwnedEventId::try_from(event_id)
-                .map_err(|e| FfiError::Msg(format!("bad event id: {e}")))?;
+            self.core
+                .sdk
+                .matrix_auth()
+                .login_username(&username, &password)
+                .send()
+                .await
+                .map_err(|e| FfiError::Msg(format!("login failed: {e}")))?;
 
-            self.ensure_sync_service().await;
+            self.core
+                .sdk
+                .encryption()
+                .wait_for_e2ee_initialization_tasks()
+                .await;
+            self.core.ensure_sync_service().await;
 
-            let process_setup = {
-                let g = self.sync_service.lock().unwrap();
-                if let Some(sync) = g.as_ref().cloned() {
-                    NotificationProcessSetup::SingleProcess { sync_service: sync }
-                } else {
-                    NotificationProcessSetup::MultipleProcesses
-                }
-            };
+            if let Err(e) = self.core.sdk.event_cache().subscribe() {
+                warn!("event_cache.subscribe() failed after login: {e:?}");
+            }
+            self.ensure_send_queue_supervision();
 
-            let nc = match NotificationClient::new(self.inner_clone(), process_setup).await {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("NotificationClient::new failed: {e:?}");
-                    return Ok(None);
-                }
-            };
+            if let Some(sess) = self.core.sdk.matrix_auth().session() {
+                let info = SessionInfo {
+                    user_id: sess.meta.user_id.to_string(),
+                    device_id: sess.meta.device_id.to_string(),
+                    access_token: sess.tokens.access_token.clone(),
+                    refresh_token: sess.tokens.refresh_token.clone(),
+                    homeserver: self.core.sdk.homeserver().to_string(),
+                    recovery_state: None,
+                };
+                let _ = platform::persist_session(&self.store_dir, &info).await;
+            }
 
-            let status = match nc.get_notification(&rid, &eid).await {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!("get_notification failed: {e:?}");
-                    return Ok(None);
-                }
-            };
+            Ok(self.core.user_id_str())
+        })
+    }
 
-            match status {
-                NotificationStatus::Event(item) => {
-                    Ok(map_notification_item_to_rendered(&rid, &eid, &item))
-                }
-                NotificationStatus::EventFilteredOut
-                | NotificationStatus::EventNotFound
-                | NotificationStatus::EventRedacted => Ok(None),
+    pub fn homeserver_login_details(&self) -> HomeserverLoginDetails {
+        RT.block_on(async {
+            let supports_oauth = self.core.sdk.oauth().server_metadata().await.is_ok();
+            let (supports_sso, supports_password) =
+                match self.core.sdk.matrix_auth().get_login_types().await {
+                    Ok(resp) => {
+                        use matrix_sdk::ruma::api::client::session::get_login_types::v3::LoginType;
+                        (
+                            resp.flows.iter().any(|f| matches!(f, LoginType::Sso(_))),
+                            resp.flows
+                                .iter()
+                                .any(|f| matches!(f, LoginType::Password(_))),
+                        )
+                    }
+                    Err(_) => (false, false),
+                };
+            HomeserverLoginDetails {
+                supports_oauth,
+                supports_sso,
+                supports_password,
             }
         })
     }
 
-    pub fn fetch_notifications_since(
-        &self,
-        since_ts_ms: u64,
-        max_rooms: u32,
-        max_events: u32,
-    ) -> Result<Vec<RenderedNotification>, FfiError> {
+    pub fn login_oauth(&self, redirect_uri: String) -> Result<String, FfiError> {
+        #[cfg(target_family = "wasm")]
+        return Err(FfiError::Msg(
+            "login_oauth: use async version on web".into(),
+        ));
+
+        #[cfg(not(target_family = "wasm"))]
         RT.block_on(async {
-            self.ensure_sync_service().await;
+            let redirect = Url::parse(&redirect_uri).map_err(|e| FfiError::Msg(e.to_string()))?;
+            let metadata = mages_client_metadata(&redirect);
+            let auth_data = self
+                .core
+                .sdk
+                .oauth()
+                .login(redirect, None, Some(metadata.into()), None)
+                .build()
+                .await
+                .map_err(|e| FfiError::Msg(format!("oauth: {e}")))?;
+            Ok(auth_data.url.to_string())
+        })
+    }
 
-            let process_setup = {
-                let g = self.sync_service.lock().unwrap();
-                if let Some(sync) = g.as_ref().cloned() {
-                    NotificationProcessSetup::SingleProcess { sync_service: sync }
-                } else {
-                    NotificationProcessSetup::MultipleProcesses
-                }
-            };
+    pub fn complete_oauth_login(&self, callback_url: String) -> Result<String, FfiError> {
+        #[cfg(target_family = "wasm")]
+        return Err(FfiError::Msg(
+            "complete_oauth_login: use async version on web".into(),
+        ));
 
-            let nc = match NotificationClient::new(self.inner_clone(), process_setup).await {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("NotificationClient::new failed in fetch_notifications_since: {e:?}");
-                    return Ok(vec![]);
-                }
-            };
+        #[cfg(not(target_family = "wasm"))]
+        RT.block_on(async {
+            let url = Url::parse(&callback_url).map_err(|e| FfiError::Msg(e.to_string()))?;
+            self.core
+                .sdk
+                .oauth()
+                .finish_login(UrlOrQuery::Url(url))
+                .await
+                .map_err(|e| FfiError::Msg(format!("oauth finish failed: {e}")))?;
 
-            let mut out = Vec::new();
+            self.core
+                .sdk
+                .encryption()
+                .wait_for_e2ee_initialization_tasks()
+                .await;
+            self.core.ensure_sync_service().await;
 
-            for room in self
-                .inner
-                .joined_rooms()
-                .into_iter()
-                .take(max_rooms as usize)
-            {
-                let rid = room.room_id().to_owned();
+            if let Err(e) = self.core.sdk.event_cache().subscribe() {
+                warn!("event_cache.subscribe() failed after OAuth login: {e:?}");
+            }
+            self.ensure_send_queue_supervision();
 
-                let Ok(tl) = room.timeline().await else {
-                    continue;
+            if let Some(sess) = self.core.sdk.matrix_auth().session() {
+                let info = SessionInfo {
+                    user_id: sess.meta.user_id.to_string(),
+                    device_id: sess.meta.device_id.to_string(),
+                    access_token: sess.tokens.access_token.clone(),
+                    refresh_token: sess.tokens.refresh_token.clone(),
+                    homeserver: self.core.sdk.homeserver().to_string(),
+                    recovery_state: None,
                 };
-                let (items, _stream) = tl.subscribe().await;
-
-                for it in items.iter().rev() {
-                    let Some(ev) = it.as_event() else { continue };
-
-                    let ts: u64 = ev.timestamp().0.into();
-                    if ts <= since_ts_ms {
-                        break;
-                    }
-
-                    let Some(eid_ref) = ev.event_id() else {
-                        continue;
-                    };
-
-                    let status = match nc.get_notification(&rid, eid_ref).await {
-                        Ok(s) => s,
-                        Err(_) => continue,
-                    };
-
-                    let NotificationStatus::Event(item) = status else {
-                        continue;
-                    };
-
-                    // `eid_ref` is &EventId; convert to OwnedEventId for our helper
-                    let eid = eid_ref.to_owned();
-
-                    if let Some(rendered) = map_notification_item_to_rendered(&rid, &eid, &item) {
-                        out.push(rendered);
-                        if out.len() as u32 >= max_events {
-                            return Ok(out);
-                        }
-                    }
-                }
+                let _ = platform::persist_session(&self.store_dir, &info).await;
             }
 
-            Ok(out)
+            Ok(self.core.user_id_str())
         })
     }
 
@@ -4544,7 +2471,8 @@ impl Client {
         ));
         #[cfg(not(target_family = "wasm"))]
         RT.block_on(async {
-            self.inner
+            self.core
+                .sdk
                 .matrix_auth()
                 .login_sso(move |sso_url: String| async move {
                     let _ = opener.open(sso_url);
@@ -4558,19 +2486,19 @@ impl Client {
                 .await
                 .map_err(|e| FfiError::Msg(e.to_string()))?;
 
-            if let Some(sess) = self.inner.matrix_auth().session() {
+            if let Some(sess) = self.core.sdk.matrix_auth().session() {
                 let info = SessionInfo {
                     user_id: sess.meta.user_id.to_string(),
                     device_id: sess.meta.device_id.to_string(),
                     access_token: sess.tokens.access_token.clone(),
                     refresh_token: sess.tokens.refresh_token.clone(),
-                    homeserver: self.inner.homeserver().to_string(),
+                    homeserver: self.core.sdk.homeserver().to_string(),
                     recovery_state: None,
                 };
                 platform::persist_session(&self.store_dir, &info).await?;
             }
 
-            self.ensure_sync_service().await;
+            self.core.ensure_sync_service().await;
 
             Ok(())
         })
@@ -4587,7 +2515,7 @@ impl Client {
         ));
         #[cfg(not(target_family = "wasm"))]
         RT.block_on(async {
-            let oauth = self.inner.oauth();
+            let oauth = self.core.sdk.oauth();
 
             let (redirect_uri, server_handle) = LocalServerBuilder::new()
                 .ip_address(LocalServerIpAddress::Localhostv4)
@@ -4615,12 +2543,12 @@ impl Client {
                 .map_err(|e| FfiError::Msg(e.to_string()))?;
 
             if let Some(name) = device_name {
-                if let Some(device_id) = self.inner.device_id() {
+                if let Some(device_id) = self.core.sdk.device_id() {
                     use matrix_sdk::ruma::api::client::device::update_device;
                     let mut req = update_device::v3::Request::new(device_id.to_owned());
                     req.display_name = Some(name);
                     // Don't fail
-                    let _ = self.inner.send(req).await;
+                    let _ = self.core.sdk.send(req).await;
                 }
             }
 
@@ -4630,13 +2558,13 @@ impl Client {
                     device_id: sess.meta.device_id.to_string(),
                     access_token: sess.tokens.access_token.clone(),
                     refresh_token: sess.tokens.refresh_token.clone(),
-                    homeserver: self.inner.homeserver().to_string(),
+                    homeserver: self.core.sdk.homeserver().to_string(),
                     recovery_state: None,
                 };
                 platform::persist_session(&self.store_dir, &info).await?;
             }
 
-            self.ensure_sync_service().await;
+            self.core.ensure_sync_service().await;
 
             Ok(())
         })
@@ -4645,7 +2573,7 @@ impl Client {
     /// Start OAuth login - returns the authorization URL for Android to open in browser
     pub fn start_oauth_login(&self, redirect_uri: String) -> Result<String, FfiError> {
         RT.block_on(async {
-            let oauth = self.inner.oauth();
+            let oauth = self.core.sdk.oauth();
             let redirect_uri =
                 Url::parse(&redirect_uri).map_err(|e| FfiError::Msg(e.to_string()))?;
             let registration_data = mages_client_metadata(&redirect_uri).into();
@@ -4667,7 +2595,7 @@ impl Client {
         device_name: Option<String>,
     ) -> Result<(), FfiError> {
         RT.block_on(async {
-            let oauth = self.inner.oauth();
+            let oauth = self.core.sdk.oauth();
             let callback = Url::parse(&callback_data)
                 .map(UrlOrQuery::Url)
                 .unwrap_or_else(|_| UrlOrQuery::Query(callback_data));
@@ -4679,7 +2607,7 @@ impl Client {
 
             Self::maybe_update_device_name(self, device_name).await;
             Self::persist_oauth_session(self).await?;
-            self.ensure_sync_service().await;
+            self.core.ensure_sync_service().await;
             Ok(())
         })
     }
@@ -4691,7 +2619,7 @@ impl Client {
         idp_id: Option<String>,
     ) -> Result<String, FfiError> {
         RT.block_on(async {
-            let auth = self.inner.matrix_auth();
+            let auth = self.core.sdk.matrix_auth();
             let url = auth
                 .get_sso_login_url(&redirect_uri, idp_id.as_deref())
                 .await
@@ -4707,7 +2635,7 @@ impl Client {
         device_name: Option<String>,
     ) -> Result<(), FfiError> {
         RT.block_on(async {
-            let auth = self.inner.matrix_auth();
+            let auth = self.core.sdk.matrix_auth();
             let callback_url =
                 Url::parse(&callback_url).map_err(|e| FfiError::Msg(e.to_string()))?;
 
@@ -4722,1763 +2650,73 @@ impl Client {
             let response = builder.await.map_err(|e| FfiError::Msg(e.to_string()))?;
 
             Self::persist_matrix_login_response(self, &response).await?;
-            self.ensure_sync_service().await;
+            self.core.ensure_sync_service().await;
             Ok(())
         })
     }
 
-    pub fn homeserver_login_details(&self) -> HomeserverLoginDetails {
+    pub fn logout(&self) -> Result<(), FfiError> {
         RT.block_on(async {
-            let supports_oauth = self.inner.oauth().server_metadata().await.is_ok();
-
-            let (supports_sso, supports_password) =
-                match self.inner.matrix_auth().get_login_types().await {
-                    Ok(response) => {
-                        use matrix_sdk::ruma::api::client::session::get_login_types::v3::LoginType;
-
-                        let supports_sso = response
-                            .flows
-                            .iter()
-                            .any(|f| matches!(f, LoginType::Sso(_)));
-                        let supports_password = response
-                            .flows
-                            .iter()
-                            .any(|f| matches!(f, LoginType::Password(_)));
-
-                        (supports_sso, supports_password)
-                    }
-                    Err(_) => (false, false),
-                };
-
-            HomeserverLoginDetails {
-                supports_oauth,
-                supports_sso,
-                supports_password,
-            }
-        })
-    }
-
-    /// Return reactions (emoji -> count, me).
-    pub fn reactions_for_event(&self, room_id: String, event_id: String) -> Vec<ReactionSummary> {
-        RT.block_on(async {
-            let rid = match ruma::OwnedRoomId::try_from(room_id) {
-                Ok(v) => v,
-                Err(_) => return vec![],
-            };
-            let eid = match ruma::OwnedEventId::try_from(event_id) {
-                Ok(v) => v,
-                Err(_) => return vec![],
-            };
-
-            let Some(tl) = self.timeline_mgr.timeline_for(&rid).await else {
-                return vec![];
-            };
-            let Some(item) = tl.item_by_event_id(&eid).await else {
-                return vec![];
-            };
-
-            let me = self.inner.user_id();
-            let mut out = Vec::new();
-
-            if let Some(reactions) = item.content().reactions() {
-                for (key, by_sender) in reactions.iter() {
-                    let count = by_sender.len() as u32;
-                    let me_reacted = me.map(|u| by_sender.contains_key(u)).unwrap_or(false);
-                    out.push(ReactionSummary {
-                        key: key.to_string(),
-                        count,
-                        mine: me_reacted,
-                    });
-                }
+            // Stop sync first
+            if let Some(svc) = self.core.sync_service.lock().unwrap().take() {
+                let _ = svc.stop().await;
             }
 
-            out
-        })
-    }
-
-    pub fn reactions_batch(
-        &self,
-        room_id: String,
-        event_ids: Vec<String>,
-    ) -> HashMap<String, Vec<ReactionSummary>> {
-        RT.block_on(async {
-            let mut results: HashMap<String, Vec<ReactionSummary>> = HashMap::new();
-
-            let mgr = self.timeline_mgr.clone();
-            let client = self.inner_clone();
-
-            let semaphore = Arc::new(tokio::sync::Semaphore::new(5));
-            let mut joins = Vec::new();
-
-            for eid in event_ids {
-                if eid.is_empty() {
-                    continue;
-                }
-
-                let rid_str = room_id.clone();
-                let sem = semaphore.clone();
-                let mgr2 = mgr.clone();
-                let client2 = client.clone();
-
-                joins.push(spawn_task!(async move {
-                    let _permit = sem.acquire().await.ok()?;
-
-                    let rid = OwnedRoomId::try_from(rid_str).ok()?;
-                    let tl = mgr2.timeline_for(&rid).await?;
-
-                    let eid_parsed = ruma::OwnedEventId::try_from(eid.clone()).ok()?;
-
-                    // Best-effort: ensure details are fetched
-                    let _ = tl.fetch_details_for_event(eid_parsed.as_ref()).await;
-
-                    let item = tl.item_by_event_id(&eid_parsed).await?;
-                    let my_user_id = client2.user_id();
-
-                    let mut summaries = Vec::new();
-                    if let Some(reactions) = item.content().reactions() {
-                        for (key, senders) in reactions.iter() {
-                            let count = senders.len() as u32;
-                            let mine = my_user_id
-                                .map(|me| senders.keys().any(|sender| sender == me))
-                                .unwrap_or(false);
-                            summaries.push(ReactionSummary {
-                                key: key.clone(),
-                                count,
-                                mine,
-                            });
-                        }
-                    }
-
-                    if summaries.is_empty() {
-                        None
-                    } else {
-                        Some((eid, summaries))
-                    }
-                }));
+            // Abort all subscription tasks
+            for h in self.guards.lock().unwrap().drain(..) {
+                h.abort();
             }
-
-            for j in joins {
-                if let Ok(Some((eid, sums))) = j.await {
-                    results.insert(eid, sums);
-                }
+            for (_, h) in self.timeline_subs.lock().unwrap().drain() {
+                h.abort();
             }
-
-            results
-        })
-    }
-
-    pub fn room_tags(&self, room_id: String) -> Option<RoomTags> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                return None;
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return None;
-            };
-            Some(RoomTags {
-                is_favourite: room.is_favourite(),
-                is_low_priority: room.is_low_priority(),
-            })
-        })
-    }
-
-    pub fn set_room_favourite(&self, room_id: String, fav: bool) -> bool {
-        with_room_async!(self, room_id, |room: Room, _rid| async move {
-            room.set_is_favourite(fav, None).await.is_ok()
-        })
-    }
-
-    pub fn set_room_low_priority(&self, room_id: String, low: bool) -> bool {
-        with_room_async!(self, room_id, |room: Room, _rid| async move {
-            room.set_is_low_priority(low, None).await.is_ok()
-        })
-    }
-
-    fn ensure_send_queue_supervision(&self) {
-        use std::sync::atomic::Ordering;
-
-        if self.send_queue_supervised.swap(true, Ordering::SeqCst) {
-            return; // already running
-        }
-
-        let client_updates = self.inner_clone();
-        let tx_updates = self.send_tx.clone();
-
-        let h_updates = spawn_task!(async move {
-            let mut rx = client_updates.send_queue().subscribe();
-
-            let mut attempts: HashMap<String, u32> = HashMap::new();
-
-            loop {
-                let upd = match rx.recv().await {
-                    Ok(u) => u,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                };
-
-                let room_id_str = upd.room_id.to_string();
-
-                use matrix_sdk::send_queue::RoomSendQueueUpdate as U;
-                match upd.update {
-                    U::NewLocalEvent(local) => {
-                        let key = format!("{room_id_str}|{}", local.transaction_id);
-                        attempts.entry(key).or_insert(0);
-
-                        let _ = tx_updates.send(SendUpdate {
-                            room_id: room_id_str,
-                            txn_id: local.transaction_id.to_string(),
-                            attempts: 0,
-                            state: SendState::Enqueued,
-                            event_id: None,
-                            error: None,
-                        });
-                    }
-
-                    U::RetryEvent { transaction_id } => {
-                        let key = format!("{room_id_str}|{transaction_id}");
-                        let n = attempts.entry(key).and_modify(|v| *v += 1).or_insert(1);
-
-                        let _ = tx_updates.send(SendUpdate {
-                            room_id: room_id_str,
-                            txn_id: transaction_id.to_string(),
-                            attempts: *n,
-                            state: SendState::Retrying,
-                            event_id: None,
-                            error: None,
-                        });
-                    }
-
-                    U::SentEvent {
-                        transaction_id,
-                        event_id,
-                    } => {
-                        let key = format!("{room_id_str}|{transaction_id}");
-                        let n = attempts.remove(&key).unwrap_or(0); // Prune on success
-
-                        let _ = tx_updates.send(SendUpdate {
-                            room_id: room_id_str,
-                            txn_id: transaction_id.to_string(),
-                            attempts: n,
-                            state: SendState::Sent,
-                            event_id: Some(event_id.to_string()),
-                            error: None,
-                        });
-                    }
-
-                    U::SendError {
-                        transaction_id,
-                        error,
-                        is_recoverable,
-                    } => {
-                        let key = format!("{room_id_str}|{transaction_id}");
-                        let n = attempts.entry(key).and_modify(|v| *v += 1).or_insert(1);
-
-                        let msg = format!("{:?} (recoverable={})", error, is_recoverable);
-
-                        let _ = tx_updates.send(SendUpdate {
-                            room_id: room_id_str,
-                            txn_id: transaction_id.to_string(),
-                            attempts: *n,
-                            state: SendState::Failed,
-                            event_id: None,
-                            error: Some(msg),
-                        });
-                    }
-
-                    U::CancelledLocalEvent { transaction_id } => {
-                        let key = format!("{room_id_str}|{transaction_id}");
-                        attempts.remove(&key); // Prune on cancel
-
-                        let _ = tx_updates.send(SendUpdate {
-                            room_id: room_id_str,
-                            txn_id: transaction_id.to_string(),
-                            attempts: 0,
-                            state: SendState::Failed,
-                            event_id: None,
-                            error: Some("Cancelled before sending".into()),
-                        });
-                    }
-
-                    U::ReplacedLocalEvent { .. } => {}
-
-                    U::MediaUpload { .. } => {
-                        // TODO: wire progress into ProgressObserver.
-                    }
-                }
+            for (_, h) in self.typing_subs.lock().unwrap().drain() {
+                h.abort();
             }
-        });
-
-        self.guards.lock().unwrap().push(h_updates);
-
-        let client_errs = self.inner_clone();
-        let tx_errs = self.send_tx.clone();
-
-        let h_errs = spawn_task!(async move {
-            let mut rx = client_errs.send_queue().subscribe_errors();
-
-            loop {
-                let err = match rx.recv().await {
-                    Ok(e) => e,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                };
-
-                let _ = tx_errs.send(SendUpdate {
-                    room_id: err.room_id.to_string(),
-                    txn_id: "".into(),
-                    attempts: 0,
-                    state: SendState::Failed,
-                    event_id: None,
-                    error: Some(format!(
-                        "Room send queue disabled (recoverable={}): {:?}",
-                        err.is_recoverable, err.error
-                    )),
-                });
+            for (_, h) in self.connection_subs.lock().unwrap().drain() {
+                h.abort();
             }
-        });
-
-        self.guards.lock().unwrap().push(h_errs);
-    }
-
-    pub fn send_queue_set_enabled(&self, enabled: bool) -> bool {
-        RT.block_on(async {
-            self.inner.send_queue().set_enabled(enabled).await;
-            true
-        })
-    }
-
-    pub fn room_send_queue_set_enabled(&self, room_id: String, enabled: bool) -> bool {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                return false;
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return false;
-            };
-            room.send_queue().set_enabled(enabled);
-            true
-        })
-    }
-
-    /// MSC3440
-    pub fn send_thread_text(
-        &self,
-        room_id: String,
-        root_event_id: String,
-        body: String,
-        reply_to_event_id: Option<String>,
-        latest_event_id: Option<String>,
-        formatted_body: Option<String>,
-    ) -> bool {
-        RT.block_on(async {
-            let Ok(rid) = ruma::OwnedRoomId::try_from(room_id) else {
-                return false;
-            };
-            let Ok(root) = ruma::OwnedEventId::try_from(root_event_id) else {
-                return false;
-            };
-            let Some(tl) = self.timeline_mgr.timeline_for(&rid).await else {
-                return false;
-            };
-
-            let mut content: RoomMessageEventContent = if let Some(formatted) = formatted_body {
-                RoomMessageEventContent::text_html(body, formatted)
-            } else {
-                RoomMessageEventContent::text_plain(body)
-            };
-
-            let relation = if let Some(reply_to) = reply_to_event_id {
-                if let Ok(eid) = ruma::OwnedEventId::try_from(reply_to) {
-                    MsgRelation::Thread(ThreadRel::reply(root, eid))
-                } else {
-                    MsgRelation::Thread(ThreadRel::without_fallback(root))
-                }
-            } else if let Some(latest) = latest_event_id {
-                if let Ok(eid) = ruma::OwnedEventId::try_from(latest) {
-                    MsgRelation::Thread(ThreadRel::plain(root, eid))
-                } else {
-                    MsgRelation::Thread(ThreadRel::without_fallback(root))
-                }
-            } else {
-                MsgRelation::Thread(ThreadRel::without_fallback(root))
-            };
-
-            content.relates_to = Some(relation);
-            tl.send(content.into()).await.is_ok()
-        })
-    }
-
-    pub fn thread_replies(
-        &self,
-        room_id: String,
-        root_event_id: String,
-        from: Option<String>,
-        limit: u32,
-        direction_forward: bool,
-    ) -> Result<ThreadPage, FfiError> {
-        RT.block_on(async {
-            let rid = ruma::OwnedRoomId::try_from(room_id.clone())
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            let root = ruma::OwnedEventId::try_from(root_event_id.clone())
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let mut req = get_relating::v1::Request::new(
-                rid.clone(),
-                root.clone(),
-                RelationType::Thread,
-                TimelineEventType::RoomMessage,
-            );
-            if let Some(f) = from.as_deref() {
-                req.from = Some(f.to_owned());
+            for (_, h) in self.inbox_subs.lock().unwrap().drain() {
+                h.abort();
             }
-            if limit > 0 {
-                req.limit = Some(limit.into());
+            for (_, h) in self.receipts_subs.lock().unwrap().drain() {
+                h.abort();
             }
-            req.dir = if direction_forward {
-                Direction::Forward
-            } else {
-                Direction::Backward
-            };
-
-            let resp = self
-                .inner
-                .send(req)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let mut out: Vec<MessageEvent> = Vec::new();
-
-            // Include the root first (mapped via timeline for consistent formatting)
-            if let Some(root_ev) =
-                map_event_id_via_timeline(&self.timeline_mgr, &self.inner, &rid, &root).await
-            {
-                out.push(root_ev);
+            for (_, h) in self.room_list_subs.lock().unwrap().drain() {
+                h.abort();
             }
-
-            // Each chunk item is Raw<AnyMessageLikeEvent>; deserialize, take event_id, then map via timeline
-            for raw in resp.chunk.iter() {
-                if let Ok(ml) = raw.deserialize() {
-                    let eid = ml.event_id().to_owned();
-                    if let Some(mev) =
-                        map_event_id_via_timeline(&self.timeline_mgr, &self.inner, &rid, &eid).await
-                    {
-                        out.push(mev);
-                    }
-                }
+            for (_, h) in self.call_subs.lock().unwrap().drain() {
+                h.abort();
             }
-
-            // Chronological order (ascending by timestamp)
-            out.sort_by_key(|e| e.timestamp_ms);
-
-            Ok(ThreadPage {
-                root_event_id: root_event_id,
-                room_id: room_id,
-                messages: out,
-                next_batch: resp.next_batch.clone(),
-                prev_batch: resp.prev_batch.clone(),
-            })
-        })
-    }
-
-    /// Approximate thread summary: count + latest timestamp by paging relations.
-    pub fn thread_summary(
-        &self,
-        room_id: String,
-        root_event_id: String,
-        per_page: u32,
-        max_pages: u32,
-    ) -> Result<ThreadSummary, FfiError> {
-        RT.block_on(async {
-            let rid = ruma::OwnedRoomId::try_from(room_id.clone())
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            let root = ruma::OwnedEventId::try_from(root_event_id.clone())
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let mut from: Option<String> = None;
-            let mut pages = 0u32;
-            let mut count: u64 = 0;
-            let mut latest: Option<u64> = None;
-
-            loop {
-                pages += 1;
-                if pages > max_pages.max(1) {
-                    break;
-                }
-
-                let mut req = get_relating::v1::Request::new(
-                    rid.clone(),
-                    root.clone(),
-                    RelationType::Thread,
-                    TimelineEventType::RoomMessage,
-                );
-                req.dir = Direction::Backward; // newer first
-                if let Some(f) = &from {
-                    req.from = Some(f.clone());
-                }
-                if per_page > 0 {
-                    req.limit = Some(per_page.into());
-                }
-
-                let resp = self
-                    .inner
-                    .send(req)
-                    .await
-                    .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-                for raw in resp.chunk.iter() {
-                    if let Ok(ml) = raw.deserialize() {
-                        let eid = ml.event_id().to_owned();
-                        count += 1;
-                        if let Some(mev) =
-                            map_event_id_via_timeline(&self.timeline_mgr, &self.inner, &rid, &eid)
-                                .await
-                        {
-                            if latest.map_or(true, |l| mev.timestamp_ms > l) {
-                                latest = Some(mev.timestamp_ms);
-                            }
-                        }
-                    }
-                }
-
-                if resp.next_batch.is_none() {
-                    break;
-                }
-                from = resp.next_batch;
+            for (_, h) in self.live_location_subs.lock().unwrap().drain() {
+                h.abort();
             }
-
-            Ok(ThreadSummary {
-                root_event_id,
-                room_id,
-                count,
-                latest_ts_ms: latest,
-            })
-        })
-    }
-
-    /// Return true if the room is a Space (m.space).
-    pub fn is_space(&self, room_id: String) -> bool {
-        RT.block_on(async {
-            let Ok(rid) = ruma::OwnedRoomId::try_from(room_id) else {
-                return false;
-            };
-            self.inner
-                .get_room(&rid)
-                .map(|r| r.is_space())
-                .unwrap_or(false)
-        })
-    }
-
-    /// List all joined spaces with basic profile info.
-    pub fn my_spaces(&self) -> Vec<SpaceInfo> {
-        RT.block_on(async {
-            let mut out = Vec::new();
-
-            for room in self.inner.joined_space_rooms() {
-                let rid = room.room_id().to_owned();
-
-                let name = room
-                    .display_name()
-                    .await
-                    .map(|d| d.to_string())
-                    .unwrap_or_else(|_| rid.to_string());
-
-                let topic = room.topic();
-                let member_count = room.joined_members_count();
-
-                let is_encrypted = matches!(
-                    room.encryption_state(),
-                    matrix_sdk::EncryptionState::Encrypted
-                );
-
-                // Heuristic/publicity helper the SDK provides (may be None if state missing)
-                let is_public = room.is_public().unwrap_or(false);
-
-                out.push(SpaceInfo {
-                    room_id: rid.to_string(),
-                    name,
-                    topic,
-                    member_count,
-                    is_encrypted,
-                    is_public,
-                    avatar_url: room.avatar_url().map(|mxc| mxc.to_string()),
-                });
+            for (_, h) in self.recovery_state_subs.lock().unwrap().drain() {
+                h.abort();
             }
-
-            out
-        })
-    }
-
-    /// Create a space (m.space). Returns the new space room_id on success.
-    pub fn create_space(
-        &self,
-        name: String,
-        topic: Option<String>,
-        is_public: bool,
-        invitees: Vec<String>,
-    ) -> Result<String, FfiError> {
-        RT.block_on(async {
-            use ruma::{
-                api::client::room::{Visibility, create_room::v3 as create_room_v3},
-                serde::Raw,
-            };
-
-            let mut req = create_room_v3::Request::new();
-
-            // Set m.space via CreationContent.room_type
-            let mut cc = create_room_v3::CreationContent::new();
-            cc.room_type = Some(RoomType::Space);
-            req.creation_content = Some(Raw::new(&cc).map_err(|e| FfiError::Msg(e.to_string()))?);
-
-            req.name = Some(name);
-            req.topic = topic;
-            req.visibility = if is_public {
-                Visibility::Public
-            } else {
-                Visibility::Private
-            };
-            req.preset = Some(if is_public {
-                create_room_v3::RoomPreset::PublicChat
-            } else {
-                create_room_v3::RoomPreset::PrivateChat
-            });
-
-            if !invitees.is_empty() {
-                let parsed = invitees
-                    .into_iter()
-                    .map(|u| u.parse())
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e: ruma::IdParseError| FfiError::Msg(e.to_string()))?;
-                req.invite = parsed;
+            for (_, h) in self.backup_state_subs.lock().unwrap().drain() {
+                h.abort();
             }
-
-            // Using Client::send so we can return the room_id from the response
-            let resp = self
-                .inner
-                .send(req)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            Ok(resp.room_id.to_string())
-        })
-    }
-
-    /// Add a child (room or subspace) to a space via m.space.child.
-    pub fn space_add_child(
-        &self,
-        space_id: String,
-        child_room_id: String,
-        order: Option<String>,
-        suggested: Option<bool>,
-    ) -> Result<(), FfiError> {
-        RT.block_on(async {
-            use ruma::{
-                OwnedRoomId, OwnedServerName, events::space::child::SpaceChildEventContent,
-            };
-
-            // Parse room IDs
-            let rid_space = OwnedRoomId::try_from(space_id.as_str())
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            let rid_child = OwnedRoomId::try_from(child_room_id.as_str())
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let room = self
-                .inner
-                .get_room(&rid_space)
-                .ok_or_else(|| FfiError::Msg("space not found".into()))?;
-
-            // Build via list from child's server
-            let via: Vec<OwnedServerName> = rid_child
-                .server_name()
-                .map(|s| s.to_owned())
-                .into_iter()
-                .collect();
-
-            let mut content = SpaceChildEventContent::new(via);
-
-            if let Some(o) = order {
-                let ord = <&SpaceChildOrder>::try_from(o.as_str())
-                    .map_err(|e| FfiError::Msg(format!("Invalid order string: {}", e)))?
-                    .to_owned();
-                content.order = Some(ord);
+            for (_, h) in self.widget_driver_tasks.lock().unwrap().drain() {
+                h.abort();
             }
+            for (_, h) in self.widget_recv_tasks.lock().unwrap().drain() {
+                h.abort();
+            }
+            self.room_list_cmds.lock().unwrap().clear();
+            self.widget_handles.lock().unwrap().clear();
+            self.send_handles_by_txn.lock().unwrap().clear();
+            self.send_observers.lock().unwrap().clear();
+            self.send_queue_supervised.store(false, Ordering::SeqCst);
 
-            content.suggested = suggested.unwrap_or(false);
+            self.core.timeline_mgr.clear();
 
-            room.send_state_event_for_key(&rid_child, content)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
+            // Perform server-side logout
+            let _ = self.core.sdk.matrix_auth().logout().await;
+
+            platform::remove_session_file(&self.store_dir);
+            platform::reset_store_dir(&self.store_dir);
 
             Ok(())
-        })
-    }
-
-    /// Remove a child from a space by sending an empty content state for that key.
-    pub fn space_remove_child(
-        &self,
-        space_id: String,
-        child_room_id: String,
-    ) -> Result<(), FfiError> {
-        RT.block_on(async {
-            use ruma::OwnedRoomId;
-            use serde_json::json;
-
-            let rid_space = OwnedRoomId::try_from(space_id.as_str())
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            let room = self
-                .inner
-                .get_room(&rid_space)
-                .ok_or_else(|| FfiError::Msg("space not found".into()))?;
-
-            // Return type here is Response; we ignore it and return ()
-            room.send_state_event_raw("m.space.child", child_room_id.as_str(), json!({}))
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            Ok(())
-        })
-    }
-
-    /// Traverse a space with the server-side hierarchy API (MSC2946).
-    pub fn space_hierarchy(
-        &self,
-        space_id: String,
-        from: Option<String>,
-        limit: u32,
-        max_depth: Option<u32>,
-        suggested_only: bool,
-    ) -> Result<SpaceHierarchyPage, FfiError> {
-        RT.block_on(async {
-            use ruma::{OwnedRoomId, api::client::space::get_hierarchy::v1 as space_hierarchy_v1};
-
-            let rid_space = OwnedRoomId::try_from(space_id.as_str())
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let mut req = space_hierarchy_v1::Request::new(rid_space);
-            req.from = from;
-            if limit > 0 {
-                req.limit = Some(limit.into());
-            }
-            req.max_depth = max_depth.map(Into::into);
-            req.suggested_only = suggested_only; // bool
-
-            let resp = self
-                .inner
-                .send(req)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            // Fields are on chunk.summary (not on the chunk itself)
-            let children = resp
-                .rooms
-                .into_iter()
-                .map(|chunk| {
-                    let s = chunk.summary;
-                    let is_space = matches!(s.room_type, Some(RoomType::Space));
-                    SpaceChildInfo {
-                        room_id: s.room_id.to_string(),
-                        name: s.name,
-                        topic: s.topic,
-                        alias: s.canonical_alias.map(|a| a.to_string()),
-                        avatar_url: s.avatar_url.map(|m| m.to_string()),
-                        is_space,
-                        member_count: s.num_joined_members.into(),
-                        world_readable: s.world_readable,
-                        guest_can_join: s.guest_can_join,
-                        // Not present on summary; use false by default
-                        suggested: false,
-                    }
-                })
-                .collect();
-
-            Ok(SpaceHierarchyPage {
-                children,
-                next_batch: resp.next_batch,
-            })
-        })
-    }
-
-    /// Invite a user to a space.
-    pub fn space_invite_user(&self, space_id: String, user_id: String) -> bool {
-        with_room_async!(self, space_id, |room: Room, _rid| async move {
-            let Ok(uid) = ruma::OwnedUserId::try_from(user_id) else {
-                return false;
-            };
-            room.invite_user_by_id(&uid).await.is_ok()
-        })
-    }
-
-    /// Send a new poll (MSC3381, unstable `m.poll.start`).
-    /// Returns the event ID if sending succeeds.
-    pub fn send_poll_start(
-        &self,
-        room_id: String,
-        def: PollDefinition,
-    ) -> Result<String, FfiError> {
-        use matrix_sdk::ruma::events::AnyMessageLikeEventContent;
-
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let content = build_unstable_poll_content(&def)?;
-            let any = AnyMessageLikeEventContent::UnstablePollStart(content.into());
-
-            let send_res = room
-                .send(any)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            Ok(send_res.response.event_id.to_string())
-        })
-    }
-
-    /// Send a poll response for a given poll event.
-    /// `answers` are the answer IDs ("a", "b", "c"...), not the labels.
-    pub fn send_poll_response(
-        &self,
-        room_id: String,
-        poll_event_id: String,
-        answers: Vec<String>,
-    ) -> Result<(), FfiError> {
-        use matrix_sdk::ruma::events::AnyMessageLikeEventContent;
-
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Ok(eid) = EventId::parse(&poll_event_id) else {
-                return Err(FfiError::Msg("bad poll event id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let content = UnstablePollResponseEventContent::new(answers, eid.to_owned());
-            let any = AnyMessageLikeEventContent::UnstablePollResponse(content);
-
-            room.send(any)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            Ok(())
-        })
-    }
-
-    /// End a poll (MSC3381, unstable `org.matrix.msc3381.poll.end`).
-    ///
-    /// This just sends an `m.poll.end` (unstable) event linked to the given poll
-    /// start event. It does *not* compute or embed per‑option results.
-    pub fn send_poll_end(&self, room_id: String, poll_event_id: String) -> Result<(), FfiError> {
-        use matrix_sdk::ruma::{EventId, events::AnyMessageLikeEventContent};
-
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Ok(poll_eid) = EventId::parse(&poll_event_id) else {
-                return Err(FfiError::Msg("bad poll event id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            // Minimal end, only fallback string.
-            let end_content = UnstablePollEndEventContent::new("Poll ended", poll_eid);
-
-            let any = AnyMessageLikeEventContent::UnstablePollEnd(end_content);
-
-            room.send(any)
-                .await
-                .map(|_| ())
-                .map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    /// Start sharing live location in a room for `duration_ms` milliseconds.
-    pub fn start_live_location(
-        &self,
-        room_id: String,
-        duration_ms: u64,
-        description: Option<String>,
-    ) -> Result<(), FfiError> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let response = room
-                .start_live_location_share(duration_ms, description.clone())
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            self.live_location_beacons.lock().unwrap().insert(
-                room_id,
-                LiveLocationBeaconState {
-                    event_id: response.event_id.to_string(),
-                    duration_ms,
-                    description,
-                },
-            );
-
-            Ok(())
-        })
-    }
-
-    /// Stop our live location share (if any) in the room.
-    pub fn stop_live_location(&self, room_id: String) -> Result<(), FfiError> {
-        RT.block_on(async {
-            use matrix_sdk::ruma::events::beacon_info::BeaconInfoEventContent;
-
-            let Ok(rid) = OwnedRoomId::try_from(room_id.clone()) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let cached = self
-                .live_location_beacons
-                .lock()
-                .unwrap()
-                .get(&room_id)
-                .cloned();
-
-            let result = if let Some(cached) = cached {
-                room.send_state_event_for_key(
-                    room.own_user_id(),
-                    BeaconInfoEventContent::new(
-                        cached.description,
-                        Duration::from_millis(cached.duration_ms),
-                        false,
-                        None,
-                    ),
-                )
-                .await
-                .map(|_| ())
-                .map_err(|e| FfiError::Msg(e.to_string()))
-            } else {
-                room.stop_live_location_share()
-                    .await
-                    .map(|_| ())
-                    .map_err(|e| FfiError::Msg(e.to_string()))
-            };
-
-            if result.is_ok() {
-                self.live_location_beacons.lock().unwrap().remove(&room_id);
-            }
-
-            result
-        })
-    }
-
-    /// Send a single live location beacon update (geo:`geo:` URI) in the room.
-    pub fn send_live_location(&self, room_id: String, geo_uri: String) -> Result<(), FfiError> {
-        RT.block_on(async {
-            use matrix_sdk::ruma::{EventId, events::beacon::BeaconEventContent};
-
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let beacon_event_id = self
-                .live_location_beacons
-                .lock()
-                .unwrap()
-                .get(room.room_id().as_str())
-                .cloned();
-
-            if let Some(beacon_event_id) = beacon_event_id {
-                let beacon_event_id = EventId::parse(&beacon_event_id.event_id)
-                    .map_err(|e| FfiError::Msg(e.to_string()))?;
-                let content = BeaconEventContent::new(beacon_event_id, geo_uri, None);
-
-                room.send(content)
-                    .await
-                    .map(|_| ())
-                    .map_err(|e| FfiError::Msg(e.to_string()))
-            } else {
-                room.send_location_beacon(geo_uri)
-                    .await
-                    .map(|_| ())
-                    .map_err(|e| FfiError::Msg(e.to_string()))
-            }
-        })
-    }
-
-    /// Subscribe to other users' live location shares in a room.
-    pub fn observe_live_location(
-        &self,
-        room_id: String,
-        observer: Box<dyn LiveLocationObserver>,
-    ) -> u64 {
-        let client = self.inner_clone();
-        let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-            return 0;
-        };
-        let obs: Arc<dyn LiveLocationObserver> = Arc::from(observer);
-
-        sub_manager!(self, live_location_subs, async move {
-            let mut latest_shares: HashMap<String, LiveLocationShareInfo> = HashMap::new();
-
-            let Some(room) = client.get_room(&rid) else {
-                return;
-            };
-            let observable = room.observe_live_location_shares();
-            let stream = observable.subscribe();
-
-            use futures_util::{StreamExt, pin_mut};
-
-            pin_mut!(stream);
-
-            while let Some(event) = stream.next().await {
-                let info = LiveLocationShareInfo {
-                    user_id: event.user_id.to_string(),
-                    geo_uri: event.last_location.location.uri.to_string(),
-                    ts_ms: event.last_location.ts.0.into(),
-                    is_live: event
-                        .beacon_info
-                        .as_ref()
-                        .map(|info| info.is_live())
-                        .unwrap_or(true),
-                };
-
-                latest_shares.insert(info.user_id.clone(), info);
-
-                let snapshot = latest_shares.values().cloned().collect();
-                let _ = catch_unwind(AssertUnwindSafe(|| obs.on_update(snapshot)));
-            }
-        })
-    }
-
-    pub fn unobserve_live_location(&self, sub_id: u64) -> bool {
-        unsub!(self, live_location_subs, sub_id)
-    }
-
-    pub fn publish_room_alias(&self, room_id: String, alias: String) -> Result<bool, FfiError> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.as_str()) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let alias_id =
-                OwnedRoomAliasId::try_from(alias).map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            room.privacy_settings()
-                .publish_room_alias_in_room_directory(alias_id.as_ref())
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    pub fn unpublish_room_alias(&self, room_id: String, alias: String) -> Result<bool, FfiError> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.as_str()) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let alias_id =
-                OwnedRoomAliasId::try_from(alias).map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            room.privacy_settings()
-                .remove_room_alias_from_room_directory(alias_id.as_ref())
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    pub fn set_room_canonical_alias(
-        &self,
-        room_id: String,
-        alias: Option<String>,
-        alt_aliases: Vec<String>,
-    ) -> Result<(), FfiError> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.as_str()) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let alias_opt = if let Some(a) = alias {
-                Some(OwnedRoomAliasId::try_from(a).map_err(|e| FfiError::Msg(e.to_string()))?)
-            } else {
-                None
-            };
-
-            let mut alts = Vec::new();
-            for s in alt_aliases {
-                alts.push(OwnedRoomAliasId::try_from(s).map_err(|e| FfiError::Msg(e.to_string()))?);
-            }
-
-            room.privacy_settings()
-                .update_canonical_alias(alias_opt, alts)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    pub fn room_aliases(&self, room_id: String) -> Vec<String> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id.as_str()) else {
-                return Vec::new();
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Vec::new();
-            };
-
-            let mut aliases = Vec::new();
-
-            if let Some(canonical) = room.canonical_alias() {
-                aliases.push(canonical.to_string());
-            }
-
-            for alt in room.alt_aliases() {
-                let alt_str = alt.to_string();
-                if !aliases.contains(&alt_str) {
-                    aliases.push(alt_str);
-                }
-            }
-
-            aliases
-        })
-    }
-
-    pub fn set_room_directory_visibility(
-        &self,
-        room_id: String,
-        visibility: RoomDirectoryVisibility,
-    ) -> Result<(), FfiError> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let vs = match visibility {
-                RoomDirectoryVisibility::Public => Visibility::Public,
-                RoomDirectoryVisibility::Private => Visibility::Private,
-            };
-
-            room.privacy_settings()
-                .update_room_visibility(vs)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    pub fn room_directory_visibility(
-        &self,
-        room_id: String,
-    ) -> Result<RoomDirectoryVisibility, FfiError> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let vis = room
-                .privacy_settings()
-                .get_room_visibility()
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            Ok(match vis {
-                Visibility::Public => RoomDirectoryVisibility::Public,
-                Visibility::Private => RoomDirectoryVisibility::Private,
-                _ => RoomDirectoryVisibility::Private,
-            })
-        })
-    }
-
-    pub fn room_join_rule(&self, room_id: String) -> Result<RoomJoinRule, FfiError> {
-        RT.block_on(async {
-            use ruma::events::room::join_rules::JoinRule;
-
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let join_rule = room.join_rule();
-
-            Ok(match join_rule {
-                Some(JoinRule::Public) => RoomJoinRule::Public,
-                Some(JoinRule::Invite) => RoomJoinRule::Invite,
-                Some(JoinRule::Knock) => RoomJoinRule::Knock,
-                Some(JoinRule::Restricted(_)) => RoomJoinRule::Restricted,
-                Some(JoinRule::KnockRestricted(_)) => RoomJoinRule::KnockRestricted,
-                _ => RoomJoinRule::Invite,
-            })
-        })
-    }
-
-    pub fn set_room_join_rule(&self, room_id: String, rule: RoomJoinRule) -> Result<(), FfiError> {
-        RT.block_on(async {
-            use ruma::events::room::join_rules::{JoinRule, Restricted};
-
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let join_rule = match rule {
-                RoomJoinRule::Public => JoinRule::Public,
-                RoomJoinRule::Invite => JoinRule::Invite,
-                RoomJoinRule::Knock => JoinRule::Knock,
-                RoomJoinRule::Restricted => JoinRule::Restricted(Restricted::new(vec![])),
-                RoomJoinRule::KnockRestricted => JoinRule::KnockRestricted(Restricted::new(vec![])),
-            };
-
-            room.privacy_settings()
-                .update_join_rule(join_rule)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    pub fn room_history_visibility(
-        &self,
-        room_id: String,
-    ) -> Result<RoomHistoryVisibility, FfiError> {
-        RT.block_on(async {
-            use ruma::events::room::history_visibility::HistoryVisibility;
-
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let visibility = room.history_visibility_or_default();
-
-            Ok(match visibility {
-                HistoryVisibility::Invited => RoomHistoryVisibility::Invited,
-                HistoryVisibility::Joined => RoomHistoryVisibility::Joined,
-                HistoryVisibility::Shared => RoomHistoryVisibility::Shared,
-                HistoryVisibility::WorldReadable => RoomHistoryVisibility::WorldReadable,
-                _ => RoomHistoryVisibility::Joined,
-            })
-        })
-    }
-
-    pub fn set_room_history_visibility(
-        &self,
-        room_id: String,
-        visibility: RoomHistoryVisibility,
-    ) -> Result<(), FfiError> {
-        RT.block_on(async {
-            use ruma::events::room::history_visibility::HistoryVisibility;
-
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let vis = match visibility {
-                RoomHistoryVisibility::Invited => HistoryVisibility::Invited,
-                RoomHistoryVisibility::Joined => HistoryVisibility::Joined,
-                RoomHistoryVisibility::Shared => HistoryVisibility::Shared,
-                RoomHistoryVisibility::WorldReadable => HistoryVisibility::WorldReadable,
-            };
-
-            room.privacy_settings()
-                .update_room_history_visibility(vis)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    pub fn room_power_levels(&self, room_id: String) -> Result<RoomPowerLevels, FfiError> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let levels = room
-                .power_levels()
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let mut users = HashMap::new();
-            for (user_id, level) in levels.users.iter() {
-                users.insert(user_id.to_string(), (*level).into());
-            }
-
-            let mut events = HashMap::new();
-            for (event_type, level) in levels.events.iter() {
-                events.insert(event_type.to_string(), (*level).into());
-            }
-
-            let state_default: i64 = levels.state_default.into();
-
-            Ok(RoomPowerLevels {
-                users,
-                users_default: levels.users_default.into(),
-                events,
-                events_default: levels.events_default.into(),
-                state_default,
-                ban: levels.ban.into(),
-                kick: levels.kick.into(),
-                redact: levels.redact.into(),
-                invite: levels.invite.into(),
-                // State event permissions
-                room_name: get_event_level(&levels, "m.room.name", state_default),
-                room_avatar: get_event_level(&levels, "m.room.avatar", state_default),
-                room_topic: get_event_level(&levels, "m.room.topic", state_default),
-                room_canonical_alias: get_event_level(
-                    &levels,
-                    "m.room.canonical_alias",
-                    state_default,
-                ),
-                room_history_visibility: get_event_level(
-                    &levels,
-                    "m.room.history_visibility",
-                    state_default,
-                ),
-                room_join_rules: get_event_level(&levels, "m.room.join_rules", state_default),
-                room_power_levels: get_event_level(&levels, "m.room.power_levels", state_default),
-                space_child: get_event_level(&levels, "m.space.child", state_default),
-            })
-        })
-    }
-
-    pub fn can_user_ban(&self, room_id: String, user_id: String) -> Result<bool, FfiError> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let Ok(uid) = OwnedUserId::try_from(user_id) else {
-                return Err(FfiError::Msg("bad user id".into()));
-            };
-
-            let levels = room
-                .power_levels()
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            Ok(levels.user_can_ban(&uid))
-        })
-    }
-
-    pub fn can_user_invite(&self, room_id: String, user_id: String) -> Result<bool, FfiError> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let Ok(uid) = OwnedUserId::try_from(user_id) else {
-                return Err(FfiError::Msg("bad user id".into()));
-            };
-
-            let levels = room
-                .power_levels()
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            Ok(levels.user_can_invite(&uid))
-        })
-    }
-
-    pub fn can_user_redact_other(
-        &self,
-        room_id: String,
-        user_id: String,
-    ) -> Result<bool, FfiError> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let Ok(uid) = OwnedUserId::try_from(user_id) else {
-                return Err(FfiError::Msg("bad user id".into()));
-            };
-
-            let levels = room
-                .power_levels()
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            Ok(levels.user_can_redact_event_of_other(&uid))
-        })
-    }
-
-    pub fn update_power_level_for_user(
-        &self,
-        room_id: String,
-        user_id: String,
-        power_level: i64,
-    ) -> Result<(), FfiError> {
-        RT.block_on(async {
-            use ruma::Int;
-
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let uid = UserId::parse(&user_id).map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let level =
-                Int::new(power_level).ok_or_else(|| FfiError::Msg("invalid power level".into()))?;
-
-            let updates: Vec<(&UserId, Int)> = vec![(&uid, level)];
-
-            room.update_power_levels(updates)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            Ok(())
-        })
-    }
-
-    pub fn report_content(
-        &self,
-        room_id: String,
-        event_id: String,
-        score: Option<i32>,
-        reason: Option<String>,
-    ) -> Result<(), FfiError> {
-        RT.block_on(async {
-            use matrix_sdk::room::ReportedContentScore;
-
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let Ok(eid) = EventId::parse(event_id) else {
-                return Err(FfiError::Msg("bad event id".into()));
-            };
-
-            let score = score.and_then(|s| ReportedContentScore::try_from(s).ok());
-
-            room.report_content(eid, score, reason)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            Ok(())
-        })
-    }
-
-    pub fn report_room(&self, room_id: String, reason: Option<String>) -> Result<(), FfiError> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let reason = reason.unwrap_or_default();
-            room.report_room(reason)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            Ok(())
-        })
-    }
-
-    pub fn apply_power_level_changes(
-        &self,
-        room_id: String,
-        changes: RoomPowerLevelChanges,
-    ) -> Result<(), FfiError> {
-        RT.block_on(async {
-            use matrix_sdk::room::power_levels::RoomPowerLevelChanges as SdkRoomPowerLevelChanges;
-
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return Err(FfiError::Msg("bad room id".into()));
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Err(FfiError::Msg("room not found".into()));
-            };
-
-            let sdk_changes = SdkRoomPowerLevelChanges {
-                users_default: changes.users_default,
-                events_default: changes.events_default,
-                state_default: changes.state_default,
-                ban: changes.ban,
-                kick: changes.kick,
-                redact: changes.redact,
-                invite: changes.invite,
-                room_name: changes.room_name,
-                room_avatar: changes.room_avatar,
-                room_topic: changes.room_topic,
-                space_child: changes.space_child,
-            };
-
-            room.apply_power_level_changes(sdk_changes)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    /// Add a user to the ignore list (muting them across all rooms).
-    pub fn ignore_user(&self, user_id: String) -> Result<(), FfiError> {
-        RT.block_on(async {
-            let uid = user_id
-                .parse::<OwnedUserId>()
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            self.inner
-                .account()
-                .ignore_user(uid.as_ref())
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    /// Remove a user from the ignore list.
-    pub fn unignore_user(&self, user_id: String) -> Result<(), FfiError> {
-        RT.block_on(async {
-            let uid = user_id
-                .parse::<OwnedUserId>()
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            self.inner
-                .account()
-                .unignore_user(uid.as_ref())
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    pub fn ignored_users(&self) -> Result<Vec<String>, FfiError> {
-        RT.block_on(async {
-            let account = self.inner.account();
-
-            let raw_opt = account
-                .account_data::<IgnoredUserListEventContent>()
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let Some(raw) = raw_opt else {
-                return Ok(Vec::new());
-            };
-
-            let content = raw
-                .deserialize()
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let users = content
-                .ignored_users
-                .keys()
-                .map(|u| u.to_string())
-                .collect();
-
-            Ok(users)
-        })
-    }
-
-    /// Check whether a user is currently ignored.
-    pub fn is_user_ignored(&self, user_id: String) -> bool {
-        RT.block_on(async {
-            match user_id.parse::<OwnedUserId>() {
-                Ok(uid) => self.inner.is_user_ignored(uid.as_ref()).await,
-                Err(_) => false,
-            }
-        })
-    }
-
-    pub fn enable_room_encryption(&self, room_id: String) -> bool {
-        with_room_async!(self, room_id, |room: Room, _rid| async move {
-            room.enable_encryption().await.is_ok()
-        })
-    }
-
-    /// Set this account's presence and optional status message.
-    pub fn set_presence(
-        &self,
-        state: Presence,
-        status_msg: Option<String>,
-    ) -> Result<(), FfiError> {
-        RT.block_on(async {
-            let Some(me) = self.inner.user_id() else {
-                return Err(FfiError::Msg("No logged-in user".into()));
-            };
-
-            let presence = match state {
-                Presence::Online => PresenceState::Online,
-                Presence::Offline => PresenceState::Offline,
-                Presence::Unavailable => PresenceState::Unavailable,
-            };
-
-            let mut req = set_presence_v3::Request::new(me.to_owned(), presence);
-            req.status_msg = status_msg;
-
-            self.inner
-                .send(req)
-                .await
-                .map(|_: set_presence_v3::Response| ())
-                .map_err(|e| FfiError::Msg(e.to_string()))
-        })
-    }
-
-    pub fn get_presence(&self, user_id: String) -> Result<PresenceInfo, FfiError> {
-        RT.block_on(async {
-            let uid = user_id
-                .parse::<OwnedUserId>()
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let req = get_presence_v3::Request::new(uid);
-            let resp = self
-                .inner
-                .send(req)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let presence = match resp.presence {
-                PresenceState::Online => Presence::Online,
-                PresenceState::Offline => Presence::Offline,
-                PresenceState::Unavailable => Presence::Unavailable,
-                _ => Presence::Offline,
-            };
-
-            Ok(PresenceInfo {
-                presence,
-                status_msg: resp.status_msg,
-            })
-        })
-    }
-
-    /// Upgrade a room to a new room version.
-    /// `new_version` is e.g. "9", "10", "11".
-    /// Returns the new room ID on success.
-    pub fn upgrade_room(&self, room_id: String, new_version: String) -> Result<String, FfiError> {
-        RT.block_on(async {
-            let rid = OwnedRoomId::try_from(room_id).map_err(|e| FfiError::Msg(e.to_string()))?;
-            let version = RoomVersionId::try_from(new_version.as_str())
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let req = upgrade_room_v3::Request::new(rid.clone(), version);
-            let resp = self
-                .inner
-                .send(req)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            Ok(resp.replacement_room.to_string())
-        })
-    }
-
-    /// Get tombstone / predecessor / successor info for a room, if available.
-    pub fn room_upgrade_links(&self, room_id: String) -> Option<RoomUpgradeLinks> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return None;
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return None;
-            };
-
-            let is_tombstoned = room.is_tombstoned();
-            let successor = room.successor_room().map(Into::into);
-            let predecessor = room.predecessor_room().map(Into::into);
-
-            Some(RoomUpgradeLinks {
-                is_tombstoned,
-                successor,
-                predecessor,
-            })
-        })
-    }
-
-    pub fn ban_user(&self, room_id: String, user_id: String, reason: Option<String>) -> bool {
-        with_room_async!(self, room_id, |room: Room, _rid| async move {
-            let Ok(uid) = OwnedUserId::try_from(user_id) else {
-                return false;
-            };
-            room.ban_user(uid.as_ref(), reason.as_deref()).await.is_ok()
-        })
-    }
-
-    pub fn unban_user(&self, room_id: String, user_id: String, reason: Option<String>) -> bool {
-        with_room_async!(self, room_id, |room: Room, _rid| async move {
-            let Ok(uid) = OwnedUserId::try_from(user_id) else {
-                return false;
-            };
-            room.unban_user(uid.as_ref(), reason.as_deref())
-                .await
-                .is_ok()
-        })
-    }
-
-    pub fn kick_user(&self, room_id: String, user_id: String, reason: Option<String>) -> bool {
-        with_room_async!(self, room_id, |room: Room, _rid| async move {
-            let Ok(uid) = OwnedUserId::try_from(user_id) else {
-                return false;
-            };
-            room.kick_user(uid.as_ref(), reason.as_deref())
-                .await
-                .is_ok()
-        })
-    }
-
-    pub fn invite_user(&self, room_id: String, user_id: String) -> bool {
-        with_room_async!(self, room_id, |room: Room, _rid| async move {
-            let Ok(uid) = OwnedUserId::try_from(user_id) else {
-                return false;
-            };
-            room.invite_user_by_id(uid.as_ref()).await.is_ok()
-        })
-    }
-
-    /// If this room is tombstoned, return its successor room details.
-    pub fn room_successor(&self, room_id: String) -> Option<SuccessorRoomInfo> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return None;
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return None;
-            };
-            room.successor_room().map(Into::into)
-        })
-    }
-
-    /// Return the predecessor room if this room replaced an earlier room.
-    pub fn room_predecessor(&self, room_id: String) -> Option<PredecessorRoomInfo> {
-        RT.block_on(async {
-            let Ok(rid) = OwnedRoomId::try_from(room_id) else {
-                return None;
-            };
-            let Some(room) = self.inner.get_room(&rid) else {
-                return None;
-            };
-            room.predecessor_room().map(Into::into)
         })
     }
 
@@ -6493,7 +2731,7 @@ impl Client {
             let Ok(rid) = OwnedRoomId::try_from(room_id) else {
                 return false;
             };
-            let Some(room) = self.inner.get_room(&rid) else {
+            let Some(room) = self.core.sdk.get_room(&rid) else {
                 return false;
             };
 
@@ -6575,259 +2813,454 @@ impl Client {
         })
     }
 
-    pub fn seen_by_for_event(
+    pub fn download_media(
         &self,
-        room_id: String,
-        event_id: String,
-        limit: u32,
-    ) -> Result<Vec<SeenByEntry>, FfiError> {
+        mxc_uri: String,
+        dest_path: String,
+        encrypted_json: Option<String>,
+    ) -> Result<DownloadResult, FfiError> {
         RT.block_on(async {
-            use matrix_sdk::RoomMemberships;
-
-            let rid = ruma::OwnedRoomId::try_from(room_id.as_str())
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-            let eid = ruma::OwnedEventId::try_from(event_id.as_str())
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let room = self
-                .inner
-                .get_room(&rid)
-                .ok_or_else(|| FfiError::Msg("room not found".into()))?;
-
-            let tl = self
-                .timeline_mgr
-                .timeline_for(&rid)
-                .await
-                .ok_or_else(|| FfiError::Msg("timeline not available".into()))?;
-
-            let _ = tl.fetch_members().await;
-
-            let members = room
-                .members(RoomMemberships::ACTIVE)
-                .await
-                .map_err(|e| FfiError::Msg(e.to_string()))?;
-
-            let mut member_map: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
-
-            for m in members {
-                member_map.insert(
-                    m.user_id().to_string(),
-                    (
-                        m.display_name().map(|s| s.to_string()),
-                        m.avatar_url().map(|u| u.to_string()),
-                    ),
-                );
-            }
-
-            let me = self.inner.user_id().map(|u| u.to_string());
-
-            let (items, _stream) = tl.subscribe().await;
-
-            let mut target_idx: Option<usize> = None;
-            for (idx, item) in items.iter().enumerate() {
-                if let Some(ev) = item.as_event() {
-                    if ev.event_id() == Some(eid.as_ref()) {
-                        target_idx = Some(idx);
-                        break;
-                    }
-                }
-            }
-            let Some(target_idx) = target_idx else {
-                return Ok(vec![]);
+            let source = if let Some(json) = encrypted_json {
+                let enc_file: EncryptedFile =
+                    serde_json::from_str(&json).map_err(|e| FfiError::Msg(e.to_string()))?;
+                MediaSource::Encrypted(Box::new(enc_file))
+            } else {
+                let uri = matrix_sdk::ruma::OwnedMxcUri::from(mxc_uri);
+                MediaSource::Plain(uri)
             };
 
-            let mut best_ts: HashMap<String, u64> = HashMap::new();
+            let request = MediaRequestParameters {
+                source,
+                format: MediaFormat::File,
+            };
 
-            for item in items.iter().skip(target_idx) {
-                let Some(ev) = item.as_event() else { continue };
+            let data = self
+                .core
+                .sdk
+                .media()
+                .get_media_content(&request, true)
+                .await
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
 
-                for (uid, receipt) in ev.read_receipts().iter() {
-                    let uid_str = uid.to_string();
-                    if me.as_deref() == Some(uid_str.as_str()) {
-                        continue;
-                    }
-
-                    let ts = receipt
-                        .ts
-                        .map(|t| t.0.into())
-                        .unwrap_or_else(|| ev.timestamp().0.into());
-
-                    best_ts
-                        .entry(uid_str)
-                        .and_modify(|old| *old = (*old).max(ts))
-                        .or_insert(ts);
-                }
+            #[cfg(not(target_family = "wasm"))]
+            {
+                std::fs::write(&dest_path, &data).map_err(|e| FfiError::Msg(e.to_string()))?;
             }
 
-            // Sort by ts desc, return up to limit
-            let mut out: Vec<SeenByEntry> = best_ts
-                .into_iter()
-                .map(|(user_id, ts)| {
-                    let (dn, au) = member_map.get(&user_id).cloned().unwrap_or((None, None));
-                    SeenByEntry {
-                        user_id,
-                        display_name: dn,
-                        avatar_url: au,
-                        ts_ms: Some(ts),
-                    }
-                })
-                .collect();
-
-            // fetch global profile as fallback
-            for entry in out.iter_mut() {
-                if entry.avatar_url.is_none() {
-                    if let Ok(uid) = entry.user_id.parse::<OwnedUserId>() {
-                        if let Ok(profile) = self.inner.account().fetch_user_profile_of(&uid).await
-                        {
-                            entry.avatar_url = profile
-                                .get_static::<AvatarUrl>()
-                                .ok()
-                                .flatten()
-                                .map(|mxc| mxc.to_string());
-                            if entry.display_name.is_none() {
-                                entry.display_name = profile
-                                    .get_static::<DisplayName>()
-                                    .ok()
-                                    .flatten()
-                                    .map(|s| s.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-
-            out.sort_by_key(|e| std::cmp::Reverse(e.ts_ms.unwrap_or(0)));
-            out.truncate(limit.max(1) as usize);
-            Ok(out)
+            Ok(DownloadResult {
+                path: dest_path,
+                bytes: data.len() as u64,
+            })
         })
     }
 
-    pub fn mxc_thumbnail_to_cache(
+    pub fn download_thumbnail(
         &self,
         mxc_uri: String,
+        dest_path: String,
         width: u32,
         height: u32,
-        crop: bool,
-    ) -> Result<String, FfiError> {
-        #[cfg(target_family = "wasm")]
-        return Err(FfiError::Msg(
-            "mxc_thumbnail_to_cache: not supported on wasm".into(),
-        ));
-        #[cfg(not(target_family = "wasm"))]
+    ) -> Result<DownloadResult, FfiError> {
         RT.block_on(async {
-            use js_int::UInt;
-            use matrix_sdk::media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings};
-            use matrix_sdk::ruma::api::client::media::get_content_thumbnail::v3::Method;
-            use matrix_sdk::ruma::events::room::MediaSource;
-
-            let dir = cache_dir(&self.store_dir);
-            platform::ensure_dir(&dir);
-
-            let method = if crop { Method::Crop } else { Method::Scale };
-            let settings = MediaThumbnailSettings::with_method(
-                method,
-                UInt::from(width.max(1)),
-                UInt::from(height.max(1)),
+            let uri = matrix_sdk::ruma::OwnedMxcUri::from(mxc_uri);
+            let settings = matrix_sdk::media::MediaThumbnailSettings::with_method(
+                matrix_sdk::ruma::api::client::media::get_content_thumbnail::v3::Method::Scale,
+                UInt::try_from(width).unwrap_or(UInt::MIN),
+                UInt::try_from(height).unwrap_or(UInt::MIN),
             );
-
-            let req = MediaRequestParameters {
-                source: MediaSource::Plain(mxc_uri.clone().into()),
+            let request = MediaRequestParameters {
+                source: MediaSource::Plain(uri),
                 format: MediaFormat::Thumbnail(settings),
             };
 
-            let bytes = self
-                .inner
+            let data = self
+                .core
+                .sdk
                 .media()
-                .get_media_content(&req, true)
+                .get_media_content(&request, true)
                 .await
-                .map_err(|e| FfiError::Msg(format!("get_media_content: {e}")))?;
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
 
-            let ext = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
-                "png"
-            } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-                "jpg"
-            } else if bytes.starts_with(b"GIF8") {
-                "gif"
-            } else {
-                "img"
-            };
+            #[cfg(not(target_family = "wasm"))]
+            {
+                std::fs::write(&dest_path, &data).map_err(|e| FfiError::Msg(e.to_string()))?;
+            }
 
-            let key = blake3::hash(format!("{mxc_uri}|{width}x{height}|{crop}").as_bytes())
-                .to_hex()
-                .to_string();
-
-            let out = dir.join(format!("mxc_thumb_{key}.{ext}"));
-            std::fs::write(&out, bytes).map_err(|e| FfiError::Msg(format!("write avatar: {e}")))?;
-
-            Ok(out.to_string_lossy().to_string())
+            Ok(DownloadResult {
+                path: dest_path,
+                bytes: data.len() as u64,
+            })
         })
     }
 
-    pub fn search_room(
+    pub fn set_avatar(&self, mime_type: String, data: Vec<u8>) -> Result<(), FfiError> {
+        RT.block_on(async {
+            let mime: Mime = mime_type.parse().unwrap_or(mime::IMAGE_PNG);
+            self.core
+                .sdk
+                .account()
+                .upload_avatar(&mime, data)
+                .await
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+            Ok(())
+        })
+    }
+
+    pub fn set_display_name(&self, name: String) -> Result<(), FfiError> {
+        RT.block_on(async {
+            self.core
+                .sdk
+                .account()
+                .set_display_name(Some(name.as_str()))
+                .await
+                .map_err(|e| FfiError::Msg(e.to_string()))
+        })
+    }
+
+    pub fn set_room_avatar(
         &self,
         room_id: String,
-        query: String,
-        limit: u32,
-        offset: Option<u32>,
-    ) -> Result<SearchPage, FfiError> {
-        #[cfg(target_family = "wasm")]
-        return Ok(SearchPage {
-            hits: vec![],
-            next_offset: None,
-        });
-
-        #[cfg(not(target_family = "wasm"))]
+        mime_type: String,
+        data: Vec<u8>,
+    ) -> Result<(), FfiError> {
         RT.block_on(async {
-            let limit_usize = (limit.max(1)).min(200) as usize;
-            let offset_usize = offset.map(|o| o as usize);
-
-            let rid = OwnedRoomId::try_from(room_id.clone())
-                .map_err(|e| FfiError::Msg(format!("bad room id: {e}")))?;
-
-            let Some(room) = self.inner.get_room(&rid) else {
-                return Ok(SearchPage {
-                    hits: vec![],
-                    next_offset: None,
-                });
+            let Some(room) = self.core.room(&room_id) else {
+                return Err(FfiError::Msg("room not found".into()));
             };
-
-            let event_ids = room
-                .search(query.trim(), limit_usize, offset_usize)
+            let mime: Mime = mime_type.parse().unwrap_or(mime::IMAGE_PNG);
+            room.upload_avatar(&mime, data, todo!())
                 .await
-                .map_err(|e| FfiError::Msg(format!("room.search failed: {e:?}")))?;
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+            Ok(())
+        })
+    }
 
-            let mut hits = Vec::with_capacity(event_ids.len());
+    pub fn remove_room_avatar(&self, room_id: String) -> Result<(), FfiError> {
+        RT.block_on(async {
+            let Some(room) = self.core.room(&room_id) else {
+                return Err(FfiError::Msg("room not found".into()));
+            };
+            room.remove_avatar()
+                .await
+                .map(|_| ())
+                .map_err(|e| FfiError::Msg(e.to_string()))
+        })
+    }
 
-            for eid in event_ids.iter() {
-                if let Some(mev) =
-                    map_event_id_via_timeline(&self.timeline_mgr, &self.inner, &rid, eid).await
-                {
-                    hits.push(SearchHit {
-                        room_id: rid.to_string(),
-                        event_id: mev.event_id.clone(),
-                        sender: mev.sender.clone(),
-                        body: mev.body.clone(),
-                        timestamp_ms: mev.timestamp_ms,
-                    });
-                } else {
-                    hits.push(SearchHit {
-                        room_id: rid.to_string(),
-                        event_id: eid.to_string(),
-                        sender: "".into(),
-                        body: "".into(),
-                        timestamp_ms: 0,
-                    });
+    pub fn own_avatar_url(&self) -> Option<String> {
+        RT.block_on(async {
+            self.core
+                .sdk
+                .account()
+                .get_cached_avatar_url()
+                .await
+                .ok()
+                .flatten()
+                .map(|u| u.to_string())
+        })
+    }
+
+    pub fn own_display_name(&self) -> Option<String> {
+        RT.block_on(async {
+            self.core
+                .sdk
+                .account()
+                .get_display_name()
+                .await
+                .ok()
+                .flatten()
+        })
+    }
+
+    pub fn observe_verification(
+        &self,
+        flow_id: String,
+        other_user_id: Option<String>,
+        observer: Box<dyn VerificationObserver>,
+    ) -> bool {
+        let sdk = self.core.sdk.clone();
+        let verifs = self.verifs.clone();
+        let inbox = self.inbox.clone();
+        let obs: Arc<dyn VerificationObserver> = Arc::from(observer);
+
+        let resolved_user = self.core.resolve_other_user(&flow_id, other_user_id);
+        let Some(other_user) = resolved_user else {
+            obs.on_error(flow_id.clone(), "Cannot resolve other user".into());
+            return false;
+        };
+
+        let h = spawn_task!(async move {
+            sdk.encryption().wait_for_e2ee_initialization_tasks().await;
+
+            let encryption = sdk.encryption();
+            let request = encryption
+                .get_verification_request(&other_user, &flow_id)
+                .await;
+
+            if let Some(req) = request {
+                obs.on_phase(flow_id.clone(), SasPhase::Requested);
+
+                req.accept().await.ok();
+                obs.on_phase(flow_id.clone(), SasPhase::Ready);
+
+                match req.start_sas().await {
+                    Ok(Some(sas)) => {
+                        obs.on_phase(flow_id.clone(), SasPhase::Started);
+                        run_sas_loop(sas, &flow_id, &verifs, &obs).await;
+                    }
+                    Ok(None) => {
+                        obs.on_error(flow_id.clone(), "SAS not started (None)".into());
+                    }
+                    Err(e) => {
+                        obs.on_error(flow_id.clone(), format!("start_sas error: {e}"));
+                    }
+                }
+            } else {
+                obs.on_error(flow_id.clone(), "Verification request not found".into());
+            }
+        });
+        self.guards.lock().unwrap().push(h);
+        true
+    }
+
+    pub fn start_verification(&self, user_id: String) -> Result<String, FfiError> {
+        RT.block_on(async {
+            let uid = user_id
+                .parse::<OwnedUserId>()
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+
+            let encryption = self.core.sdk.encryption();
+            let identity = encryption
+                .get_user_identity(&uid)
+                .await
+                .map_err(|e| FfiError::Msg(e.to_string()))?
+                .ok_or_else(|| FfiError::Msg("User identity not found".into()))?;
+
+            let request = identity
+                .request_verification()
+                .await
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+
+            Ok(request.flow_id().to_string())
+        })
+    }
+
+    pub fn confirm_verification(&self, flow_id: String) -> bool {
+        let verifs = self.verifs.clone();
+        RT.block_on(async {
+            let sas = {
+                let guard = verifs.lock().unwrap();
+                guard.get(&flow_id).map(|v| v.sas.clone())
+            };
+            if let Some(sas) = sas {
+                sas.confirm().await.is_ok()
+            } else {
+                false
+            }
+        })
+    }
+
+    pub fn cancel_verification(&self, flow_id: String) -> bool {
+        let verifs = self.verifs.clone();
+        RT.block_on(async {
+            let sas = {
+                let guard = verifs.lock().unwrap();
+                guard.get(&flow_id).map(|v| v.sas.clone())
+            };
+            if let Some(sas) = sas {
+                sas.cancel().await.is_ok()
+            } else {
+                false
+            }
+        })
+    }
+
+    pub fn mismatch_verification(&self, flow_id: String) -> bool {
+        let verifs = self.verifs.clone();
+        RT.block_on(async {
+            let sas = {
+                let guard = verifs.lock().unwrap();
+                guard.get(&flow_id).map(|v| v.sas.clone())
+            };
+            if let Some(sas) = sas {
+                sas.mismatch().await.is_ok()
+            } else {
+                false
+            }
+        })
+    }
+
+    pub fn fetch_notification(
+        &self,
+        room_id: String,
+        event_id: String,
+    ) -> Result<Option<RenderedNotification>, FfiError> {
+        RT.block_on(async {
+            let rid = OwnedRoomId::try_from(room_id).map_err(|e| FfiError::Msg(e.to_string()))?;
+            let eid = matrix_sdk::ruma::OwnedEventId::try_from(event_id)
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+
+            let nc = NotificationClient::new(
+                self.core.sdk.clone(),
+                NotificationProcessSetup::MultipleProcesses,
+            )
+            .await?;
+
+            let item = nc
+                .get_notification(&rid, &eid)
+                .await
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+
+            match item {
+                NotificationStatus::Event(notif) => {
+                    Ok(map_notification_item_to_rendered(&rid, &eid, &notif))
+                }
+                _ => Ok(None),
+            }
+        })
+    }
+
+    pub fn enable_recovery(&self, observer: Box<dyn RecoveryObserver>) -> bool {
+        let sdk = self.core.sdk.clone();
+        let store = self.store_dir.clone();
+        let obs: Arc<dyn RecoveryObserver> = Arc::from(observer);
+
+        let h = spawn_task!(async move {
+            obs.on_progress("Starting recovery setup…".into());
+            match sdk.encryption().recovery().enable().await {
+                Ok(key) => {
+                    // Persist recovery state
+                    if let Some(mut info) = platform::load_session(&store).await {
+                        info.recovery_state = Some(RecoveryState::Enabled.to_string());
+                        let _ = platform::persist_session(&store, &info).await;
+                    }
+                    obs.on_done(key);
+                }
+                Err(e) => {
+                    obs.on_error(format!("Recovery setup failed: {e}"));
                 }
             }
+        });
+        self.guards.lock().unwrap().push(h);
+        true
+    }
 
-            let next_offset = if hits.len() == limit_usize {
-                Some(offset.unwrap_or(0).saturating_add(hits.len() as u32))
-            } else {
-                None
-            };
-
-            Ok(SearchPage { hits, next_offset })
+    pub fn recover_with_key(&self, recovery_key: String) -> Result<(), FfiError> {
+        RT.block_on(async {
+            self.core
+                .sdk
+                .encryption()
+                .recovery()
+                .recover(&recovery_key)
+                .await
+                .map_err(|e| FfiError::Msg(format!("recovery failed: {e}")))
         })
+    }
+
+    pub fn disable_recovery(&self) -> Result<(), FfiError> {
+        RT.block_on(async {
+            self.core
+                .sdk
+                .encryption()
+                .recovery()
+                .disable()
+                .await
+                .map_err(|e| FfiError::Msg(format!("disable recovery failed: {e}")))?;
+
+            if let Some(mut info) = platform::load_session(&self.store_dir).await {
+                info.recovery_state = Some(RecoveryState::Disabled.to_string());
+                let _ = platform::persist_session(&self.store_dir, &info).await;
+            }
+            Ok(())
+        })
+    }
+
+    pub fn recovery_state(&self) -> RecoveryState {
+        RT.block_on(async {
+            let state = self.core.sdk.encryption().recovery().state();
+            match state {
+                matrix_sdk::encryption::recovery::RecoveryState::Disabled => {
+                    RecoveryState::Disabled
+                }
+                matrix_sdk::encryption::recovery::RecoveryState::Enabled => RecoveryState::Enabled,
+                matrix_sdk::encryption::recovery::RecoveryState::Incomplete => {
+                    RecoveryState::Incomplete
+                }
+                _ => RecoveryState::Unknown,
+            }
+        })
+    }
+
+    pub fn backup_state(&self) -> BackupState {
+        RT.block_on(async {
+            match self.core.sdk.encryption().backups().state() {
+                matrix_sdk::encryption::backups::BackupState::Unknown => BackupState::Unknown,
+                matrix_sdk::encryption::backups::BackupState::Creating => BackupState::Creating,
+                matrix_sdk::encryption::backups::BackupState::Enabling => BackupState::Enabling,
+                matrix_sdk::encryption::backups::BackupState::Resuming => BackupState::Resuming,
+                matrix_sdk::encryption::backups::BackupState::Enabled => BackupState::Enabled,
+                matrix_sdk::encryption::backups::BackupState::Downloading => {
+                    BackupState::Downloading
+                }
+                matrix_sdk::encryption::backups::BackupState::Disabling => BackupState::Disabling,
+                _ => BackupState::Unknown,
+            }
+        })
+    }
+
+    pub fn reset_recovery_key(&self) -> Result<String, FfiError> {
+        RT.block_on(async {
+            self.core
+                .sdk
+                .encryption()
+                .recovery()
+                .reset_key()
+                .await
+                .map_err(|e| FfiError::Msg(format!("reset key failed: {e}")))
+        })
+    }
+
+    pub fn devices(&self) -> Result<Vec<DeviceSummary>, FfiError> {
+        RT.block_on(async {
+            let encryption = self.core.sdk.encryption();
+            let own_device_id = self
+                .core
+                .sdk
+                .session_meta()
+                .map(|m| m.device_id.to_string())
+                .unwrap_or_default();
+
+            let devices = encryption
+                .get_user_devices(
+                    self.core
+                        .sdk
+                        .user_id()
+                        .ok_or_else(|| FfiError::Msg("no user".into()))?,
+                )
+                .await
+                .map_err(|e| FfiError::Msg(e.to_string()))?;
+
+            Ok(devices
+                .devices()
+                .map(|d| DeviceSummary {
+                    device_id: d.device_id().to_string(),
+                    display_name: d
+                        .display_name()
+                        .unwrap_or(d.device_id().as_str())
+                        .to_string(),
+                    ed25519: d.ed25519_key().map(|k| k.to_base64()).unwrap_or_default(),
+                    is_own: d.device_id().to_string() == own_device_id,
+                    verified: d.is_verified(),
+                })
+                .collect())
+        })
+    }
+
+    pub fn device_id(&self) -> Option<String> {
+        self.core
+            .sdk
+            .session_meta()
+            .map(|m| m.device_id.to_string())
     }
 
     /// Start or join an Element Call session for a room.
@@ -6841,7 +3274,7 @@ impl Client {
         language_tag: Option<String>,
         theme: Option<String>,
     ) -> Result<CallSessionInfo, FfiError> {
-        let inner = self.inner.clone();
+        let inner = self.core.sdk.clone();
         let obs: Arc<dyn CallWidgetObserver> = Arc::from(observer);
         let session_id = self.next_sub_id();
 
@@ -6933,7 +3366,7 @@ impl Client {
             .unwrap()
             .insert(session_id, recv_task);
 
-        let inner2 = self.inner.clone();
+        let inner2 = self.core.sdk.clone();
         let room_str = room_id.clone();
         let driver_task = spawn_task!(async move {
             if let Ok(rid) = OwnedRoomId::try_from(room_str.as_str()) {
@@ -6990,224 +3423,185 @@ impl Client {
         self.widget_handles.lock().unwrap().remove(&session_id);
         any
     }
-}
 
-// Helper function to get power level for specific event types
-fn get_event_level(
-    levels: &ruma::events::room::power_levels::RoomPowerLevels,
-    event_type: &str,
-    default: i64,
-) -> i64 {
-    use ruma::events::TimelineEventType;
-    let timeline_type = TimelineEventType::from(event_type);
-    levels
-        .events
-        .get(&timeline_type)
-        .map(|&l| l.into())
-        .unwrap_or(default)
+    /// Register/Update HTTP pusher for UnifiedPush/Matrix gateway (e.g. ntfy)
+    pub fn register_unifiedpush(
+        &self,
+        app_id: String,
+        pushkey: String,
+        gateway_url: String,
+        device_display_name: String,
+        lang: String,
+        profile_tag: Option<String>,
+    ) -> bool {
+        #[cfg(target_family = "wasm")]
+        return false;
+
+        #[cfg(not(target_family = "wasm"))]
+        RT.block_on(async {
+            // Test with a cs secret (like the json output)
+            let client_secret = self
+                .core
+                .sdk
+                .user_id()
+                .map(|u| {
+                    use std::collections::hash_map::DefaultHasher;
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = DefaultHasher::new();
+                    u.as_str().hash(&mut hasher);
+                    format!("{:x}", hasher.finish())
+                })
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+            let mut http_data = HttpPusherData::new(gateway_url.clone());
+            http_data.format = Some(ruma::push::PushFormat::EventIdOnly);
+
+            http_data.data.insert(
+                "default_payload".to_owned(),
+                serde_json::json!({ "cs": client_secret }).into(),
+            );
+
+            let init = PusherInit {
+                ids: PusherIds::new(pushkey.clone(), app_id.clone()),
+                kind: PusherKind::Http(http_data),
+                app_display_name: "Mages".into(),
+                device_display_name,
+                profile_tag,
+                lang,
+            };
+
+            let pusher: Pusher = init.into();
+
+            info!(
+                "Registering pusher: app_id={}, gateway={}, secret={}",
+                app_id, gateway_url, client_secret
+            );
+
+            self.core.sdk.pusher().set(pusher).await.is_ok()
+        })
+    }
+
+    /// Unregister HTTP pusher by ids
+    pub fn unregister_unifiedpush(&self, app_id: String, pushkey: String) -> bool {
+        #[cfg(target_family = "wasm")]
+        return false;
+
+        #[cfg(not(target_family = "wasm"))]
+        RT.block_on(async {
+            let ids = PusherIds::new(app_id.into(), pushkey.into());
+            self.core.sdk.pusher().delete(ids).await.is_ok()
+        })
+    }
+
+    pub fn homeserver_url(&self) -> String {
+        self.core.sdk.homeserver().to_string()
+    }
+
+    pub fn server_name(&self) -> Option<String> {
+        self.core
+            .sdk
+            .session_meta()
+            .map(|m| m.user_id.server_name().to_string())
+    }
+
+    pub fn cross_signing_status(&self) -> Result<HashMap<String, bool>, FfiError> {
+        RT.block_on(async {
+            let status = self
+                .core
+                .sdk
+                .encryption()
+                .cross_signing_status()
+                .await
+                .ok_or_else(|| FfiError::Msg("cross-signing unavailable".into()))?;
+            let mut map = HashMap::new();
+            map.insert("has_master".into(), status.has_master);
+            map.insert("has_self_signing".into(), status.has_self_signing);
+            map.insert("has_user_signing".into(), status.has_user_signing);
+            Ok(map)
+        })
+    }
+
+    pub fn is_user_verified(&self, user_id: String) -> bool {
+        RT.block_on(async {
+            let Ok(uid) = user_id.parse::<OwnedUserId>() else {
+                return false;
+            };
+            let Ok(Some(identity)) = self.core.sdk.encryption().get_user_identity(&uid).await
+            else {
+                return false;
+            };
+            identity.is_verified()
+        })
+    }
+
+    pub fn shutdown(&self) {
+        self.shutdown_inner();
+    }
 }
 
 impl Client {
-    fn wait_and_start_sas(
-        &self,
-        flow_id: String,
-        req: VerificationRequest,
-        obs: Arc<dyn VerificationObserver>,
-    ) {
-        let verifs = self.verifs.clone();
-
-        let h = spawn_task!(async move {
-            use matrix_sdk::encryption::verification::{Verification, VerificationRequestState};
-
-            let deadline = Instant::now() + Duration::from_secs(120);
-
-            obs.on_phase(flow_id.clone(), SasPhase::Requested);
-
-            let we_started = req.we_started();
-            let mut started_sas = false;
-
-            let mut changes = req.changes();
-            let mut next_state: Option<VerificationRequestState> = Some(req.state());
-
-            loop {
-                if Instant::now() >= deadline {
-                    obs.on_error(
-                        flow_id.clone(),
-                        "Verification timed out waiting for SAS".into(),
-                    );
-                    break;
-                }
-
-                let state = match next_state.take() {
-                    Some(s) => s,
-                    None => {
-                        let remaining = deadline.saturating_duration_since(Instant::now());
-                        match tokio::time::timeout(remaining, changes.next()).await {
-                            Ok(Some(s)) => s,
-                            Ok(None) => {
-                                obs.on_error(
-                                    flow_id.clone(),
-                                    "Verification request stream ended".into(),
-                                );
-                                break;
-                            }
-                            Err(_) => {
-                                obs.on_error(
-                                    flow_id.clone(),
-                                    "Verification timed out waiting for state change".into(),
-                                );
-                                break;
-                            }
-                        }
-                    }
-                };
-
-                match state {
-                    VerificationRequestState::Cancelled(info) => {
-                        obs.on_phase(flow_id.clone(), SasPhase::Cancelled);
-                        obs.on_error(flow_id.clone(), info.reason().to_owned());
-                        break;
-                    }
-
-                    VerificationRequestState::Done => {
-                        obs.on_phase(flow_id.clone(), SasPhase::Done);
-                        break;
-                    }
-
-                    VerificationRequestState::Created { .. }
-                    | VerificationRequestState::Requested { .. } => {}
-
-                    VerificationRequestState::Ready { .. } => {
-                        if we_started && !started_sas {
-                            // started_sas = true;
-
-                            match req.start_sas().await {
-                                Ok(Some(sas)) => {
-                                    attach_sas_stream(
-                                        verifs.clone(),
-                                        flow_id.clone(),
-                                        sas,
-                                        obs.clone(),
-                                    )
-                                    .await;
-                                    break;
-                                }
-                                Ok(None) => {
-                                    started_sas = false; // allow a future Ready transition to retry once
-                                }
-                                Err(e) => {
-                                    obs.on_error(flow_id.clone(), format!("start_sas failed: {e}"));
-                                    started_sas = false;
-                                }
-                            }
-                        }
-                    }
-
-                    VerificationRequestState::Transitioned { verification, .. } => {
-                        match verification {
-                            Verification::SasV1(sas) => {
-                                // SAS exists (likely on the acceptor side).
-                                attach_sas_stream(
-                                    verifs.clone(),
-                                    flow_id.clone(),
-                                    sas,
-                                    obs.clone(),
-                                )
-                                .await;
-                                break;
-                            }
-                            _ => {
-                                obs.on_error(
-                                    flow_id.clone(),
-                                    "Verification transitioned to a non-SAS method (unsupported in this UI)".into(),
-                                );
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        self.guards.lock().unwrap().push(h);
-    }
-
-    async fn ensure_sync_service(&self) {
-        if self.sync_service.lock().unwrap().is_some() {
-            return;
+    fn shutdown_inner(&self) {
+        for h in self.guards.lock().unwrap().drain(..) {
+            h.abort();
         }
-
-        if self.inner.session_meta().is_none() {
-            return;
+        for (_, h) in self.timeline_subs.lock().unwrap().drain() {
+            h.abort();
         }
-
-        let builder = SyncService::builder(self.inner_clone()).with_offline_mode();
-
-        match builder.build().await {
-            Ok(service) => {
-                let mut guard = self.sync_service.lock().unwrap();
-                if guard.is_none() {
-                    guard.replace(service.into());
-                }
-            }
-            Err(e) => {
-                tracing::warn!("ensure_sync_service: failed to build SyncService: {e:?}");
-            }
+        for (_, h) in self.typing_subs.lock().unwrap().drain() {
+            h.abort();
         }
-    }
-
-    fn inner_clone(&self) -> SdkClient {
-        (*self.inner).clone()
-    }
-
-    pub(crate) async fn dm_peer_avatar_url(room: &Room, me: Option<&UserId>) -> Option<String> {
-        let peer: Option<OwnedUserId> = room
-            .direct_targets()
-            .iter()
-            .filter_map(|t| t.as_user_id()) // Option<&UserId>
-            .find(|uid| me.map_or(true, |me| *uid != me))
-            .map(|uid| uid.to_owned());
-
-        let peer = peer?;
-
-        let peer_ref: &UserId = <OwnedUserId as AsRef<UserId>>::as_ref(&peer);
-
-        let member = room.get_member_no_sync(peer_ref).await.ok().flatten()?;
-        member.avatar_url().map(|mxc| mxc.to_string())
-    }
-
-    fn resolve_other_user_for_flow(
-        &self,
-        flow_id: &str,
-        other_user_id: Option<String>,
-    ) -> Option<OwnedUserId> {
-        if let Some(uid) = other_user_id {
-            uid.parse::<OwnedUserId>().ok()
-        } else {
-            self.inbox.lock().unwrap().get(flow_id).map(|p| p.0.clone())
+        for (_, h) in self.connection_subs.lock().unwrap().drain() {
+            h.abort();
+        }
+        for (_, h) in self.inbox_subs.lock().unwrap().drain() {
+            h.abort();
+        }
+        for (_, h) in self.receipts_subs.lock().unwrap().drain() {
+            h.abort();
+        }
+        for (_, h) in self.room_list_subs.lock().unwrap().drain() {
+            h.abort();
+        }
+        for (_, h) in self.call_subs.lock().unwrap().drain() {
+            h.abort();
+        }
+        for (_, h) in self.live_location_subs.lock().unwrap().drain() {
+            h.abort();
+        }
+        for (_, h) in self.recovery_state_subs.lock().unwrap().drain() {
+            h.abort();
+        }
+        for (_, h) in self.backup_state_subs.lock().unwrap().drain() {
+            h.abort();
+        }
+        for (_, h) in self.widget_driver_tasks.lock().unwrap().drain() {
+            h.abort();
+        }
+        for (_, h) in self.widget_recv_tasks.lock().unwrap().drain() {
+            h.abort();
         }
     }
 
     async fn maybe_update_device_name(client: &Client, device_name: Option<String>) {
         if let Some(name) = device_name
-            && let Some(device_id) = client.inner.device_id()
+            && let Some(device_id) = client.core.sdk.device_id()
         {
             use matrix_sdk::ruma::api::client::device::update_device;
 
             let mut req = update_device::v3::Request::new(device_id.to_owned());
             req.display_name = Some(name);
-            let _ = client.inner.send(req).await;
+            let _ = client.core.sdk.send(req).await;
         }
     }
 
     async fn persist_oauth_session(client: &Client) -> Result<(), FfiError> {
-        if let Some(sess) = client.inner.oauth().user_session() {
+        if let Some(sess) = client.core.sdk.oauth().user_session() {
             let info = SessionInfo {
                 user_id: sess.meta.user_id.to_string(),
                 device_id: sess.meta.device_id.to_string(),
                 access_token: sess.tokens.access_token.clone(),
                 refresh_token: sess.tokens.refresh_token.clone(),
-                homeserver: client.inner.homeserver().to_string(),
+                homeserver: client.core.sdk.homeserver().to_string(),
                 recovery_state: None,
             };
             platform::persist_session(&client.store_dir, &info).await?;
@@ -7224,7 +3618,7 @@ impl Client {
             device_id: response.device_id.clone().to_string(),
             access_token: response.access_token.clone(),
             refresh_token: response.refresh_token.clone(),
-            homeserver: client.inner.homeserver().to_string(),
+            homeserver: client.core.sdk.homeserver().to_string(),
             recovery_state: None,
         };
         platform::persist_session(&client.store_dir, &info).await?;
@@ -7232,108 +3626,89 @@ impl Client {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct TimelineManager {
-    client: SdkClient,
-    timelines: Arc<Mutex<HashMap<OwnedRoomId, Arc<Timeline>>>>,
-    members_fetched: Arc<Mutex<HashSet<OwnedRoomId>>>,
-}
+async fn run_sas_loop(
+    sas: SasVerification,
+    flow_id: &str,
+    verifs: &VerifMap,
+    obs: &Arc<dyn VerificationObserver>,
+) {
+    let other_user = sas.other_user_id().to_owned();
+    let other_device = sas.other_device().device_id().to_owned();
 
-impl TimelineManager {
-    pub(crate) fn new(client: SdkClient) -> Self {
-        Self {
-            client,
-            timelines: Arc::new(Mutex::new(HashMap::new())),
-            members_fetched: Arc::new(Mutex::new(HashSet::new())),
-        }
-    }
-
-    pub(crate) fn clear(&self) {
-        self.timelines.lock().unwrap().clear();
-        self.members_fetched.lock().unwrap().clear();
-    }
-
-    pub(crate) async fn timeline_for(&self, room_id: &OwnedRoomId) -> Option<Arc<Timeline>> {
-        // Fast path: reuse existing timeline for this room (for THIS account/client).
-        if let Some(tl) = self.timelines.lock().unwrap().get(room_id).cloned() {
-            let should_fetch = {
-                let mut s = self.members_fetched.lock().unwrap();
-                if s.contains(room_id) {
-                    false
-                } else {
-                    s.insert(room_id.clone());
-                    true
-                }
-            };
-            if should_fetch {
-                let tlc = tl.clone();
-                spawn_detached!(async move {
-                    let _ = tlc.fetch_members().await;
-                });
-            }
-            return Some(tl);
-        }
-
-        // Slow path: create timeline
-        let room = self.client.get_room(room_id)?;
-        let tl = Arc::new(
-            room.timeline_builder()
-                .event_filter(timeline_event_filter)
-                .build()
-                .await
-                .ok()?,
+    {
+        let mut guard = verifs.lock().unwrap();
+        guard.insert(
+            flow_id.to_string(),
+            VerifFlow {
+                sas: sas.clone(),
+                _other_user: other_user.clone(),
+                _other_device: other_device.clone(),
+            },
         );
-
-        let _ = tl.paginate_backwards(INITIAL_BACK_PAGINATION).await;
-
-        {
-            let mut s = self.members_fetched.lock().unwrap();
-            if !s.contains(room_id) {
-                s.insert(room_id.clone());
-                let tlc = tl.clone();
-                spawn_detached!(async move {
-                    let _ = tlc.fetch_members().await;
-                });
-            }
-        }
-
-        self.timelines
-            .lock()
-            .unwrap()
-            .insert(room_id.clone(), tl.clone());
-
-        Some(tl)
     }
+
+    obs.on_phase(flow_id.to_string(), SasPhase::Started);
+
+    let mut stream = sas.changes();
+    while let Some(state) = stream.next().await {
+        match state {
+            SdkSasState::KeysExchanged { emojis, .. } => {
+                if let Some(emoji_slice) = emojis {
+                    let emoji_strings: Vec<String> = emoji_slice
+                        .emojis
+                        .iter()
+                        .map(|e| e.symbol.to_string())
+                        .collect();
+                    obs.on_emojis(SasEmojis {
+                        flow_id: flow_id.to_string(),
+                        other_user: other_user.to_string(),
+                        other_device: other_device.to_string(),
+                        emojis: emoji_strings,
+                    });
+                    obs.on_phase(flow_id.to_string(), SasPhase::Emojis);
+                }
+            }
+            SdkSasState::Confirmed => {
+                obs.on_phase(flow_id.to_string(), SasPhase::Confirmed);
+            }
+            SdkSasState::Done { .. } => {
+                obs.on_phase(flow_id.to_string(), SasPhase::Done);
+                break;
+            }
+            SdkSasState::Cancelled(_) => {
+                obs.on_phase(flow_id.to_string(), SasPhase::Cancelled);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    verifs.lock().unwrap().remove(flow_id);
 }
 
-// Helpers
-
-fn build_unstable_poll_content(
+pub(crate) fn build_unstable_poll_content(
     def: &PollDefinition,
 ) -> Result<NewUnstablePollStartEventContent, FfiError> {
-    // Build answers with simple stable IDs: "a", "b", "c", ...
-    let mut answers = Vec::with_capacity(def.answers.len());
-    for (idx, text) in def.answers.iter().enumerate() {
-        let id = ((b'a' + (idx as u8)) as char).to_string();
-        answers.push(UnstablePollAnswer::new(id, text.clone()));
-    }
-
-    let unstable_answers =
-        UnstablePollAnswers::try_from(answers).map_err(|e| FfiError::Msg(e.to_string()))?;
-
-    let mut block = UnstablePollStartContentBlock::new(def.question.clone(), unstable_answers);
-
-    // Map kind + max_selections
-    block.kind = match def.kind {
+    let kind = match def.kind {
         PollKind::Disclosed => RumaPollKind::Disclosed,
         PollKind::Undisclosed => RumaPollKind::Undisclosed,
     };
-    block.max_selections = js_int::UInt::from(def.max_selections.max(1));
 
-    Ok(NewUnstablePollStartEventContent::plain_text(
-        def.question.clone(),
-        block,
-    ))
+    let answers: Vec<UnstablePollAnswer> = def
+        .answers
+        .iter()
+        .enumerate()
+        .map(|(i, text)| UnstablePollAnswer::new(format!("{i}"), text))
+        .collect();
+
+    let poll_answers = UnstablePollAnswers::try_from(answers)
+        .map_err(|e| FfiError::Msg(format!("invalid poll answers: {e}")))?;
+
+    let mut block = UnstablePollStartContentBlock::new(&def.question, poll_answers);
+    block.kind = kind;
+    block.max_selections = UInt::try_from(def.max_selections as u64).unwrap_or(UInt::from(1u32));
+
+    Ok(NewUnstablePollStartEventContent::new(block))
 }
 
 fn map_sender_profile(
@@ -8547,17 +4922,18 @@ pub trait UrlOpener: Send + Sync {
 
 impl Drop for Client {
     fn drop(&mut self) {
-        self.shutdown();
-        let _guard = RT.enter();
-        unsafe {
-            ManuallyDrop::drop(&mut self.inner);
-        }
+        self.shutdown_inner();
     }
 }
 
-#[derive(Clone)]
-struct ElementCallCapabilitiesProvider {}
+fn notification_event_ts_ms(ev: &NotificationEvent) -> u64 {
+    match ev {
+        NotificationEvent::Timeline(timeline_ev) => timeline_ev.origin_server_ts().get().into(),
+        NotificationEvent::Invite(_) => now_ms(),
+    }
+}
 
+pub struct ElementCallCapabilitiesProvider {}
 impl CapabilitiesProvider for ElementCallCapabilitiesProvider {
     fn acquire_capabilities(
         &self,

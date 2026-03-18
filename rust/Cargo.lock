@@ -2082,6 +2082,7 @@ dependencies = [
 name = "mages_ffi"
 version = "0.1.0"
 dependencies = [
+ "async-stream",
  "blake3",
  "futures-util",
  "getrandom 0.2.17",

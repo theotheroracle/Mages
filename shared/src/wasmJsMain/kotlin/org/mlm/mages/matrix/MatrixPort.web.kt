@@ -24,7 +24,7 @@ import org.w3c.dom.events.Event
 import kotlin.js.JsAny
 import kotlin.js.toJsArray
 
-// -- Kotlin/Wasm cannot pass lambdas as JsAny? --
+// -- Callback fns since Kotlin/Wasm cannot pass lambdas as JsAny? --
 
 @JsFun("(fn) => function() { fn(); }")
 private external fun jsCallback0(fn: () -> Unit): JsAny
