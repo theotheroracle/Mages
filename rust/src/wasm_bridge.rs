@@ -383,6 +383,7 @@ struct WasmAsyncState {
     widget_handles: RefCell<HashMap<u64, WidgetDriverHandle>>,
     widget_driver_subs: RefCell<HashMap<u64, AbortHandle>>,
     widget_recv_subs: RefCell<HashMap<u64, AbortHandle>>,
+    verification_subs: RefCell<HashMap<u64, AbortHandle>>,
 }
 
 impl WasmAsyncState {
@@ -562,6 +563,7 @@ wasm_unobserve! {
     "unobserveRecoveryState"     => unobserve_recovery_state(recovery_state_subs);
     "unobserveBackupState"       => unobserve_backup_state(backup_state_subs);
     "unobserveRoomList"          => unobserve_room_list(room_list_subs);
+    "unobserveVerification"     => unobserve_verification(verification_subs);
 }
 
 #[wasm_bindgen]
@@ -645,6 +647,7 @@ impl WasmClient {
             widget_handles: RefCell::new(HashMap::new()),
             widget_driver_subs: RefCell::new(HashMap::new()),
             widget_recv_subs: RefCell::new(HashMap::new()),
+            verification_subs: RefCell::new(HashMap::new()),
         });
         Ok(WasmClient {
             async_state: Rc::new(RefCell::new(Some(state))),
@@ -1334,6 +1337,90 @@ impl WasmClient {
                     }
                 }
             }
+        })
+    }
+
+    #[wasm_bindgen(js_name = observeVerification)]
+    pub fn observe_verification(
+        &self,
+        flow_id: String,
+        other_user_id: Option<String>,
+        on_phase: Function,
+        on_emojis: Function,
+        on_error: Function,
+    ) -> f64 {
+        let Some(state) = self.state() else {
+            return 0.0;
+        };
+        let verifs = state.core.verifs.clone();
+        let inbox = state.core.inbox.clone();
+        let client = state.client().clone();
+        let s = state.clone();
+
+        wasm_subscribe!(state, verification_subs, async move {
+            let obs: Arc<dyn VerificationObserver> =
+                Arc::new(JsVerificationObserver(on_phase, on_emojis, on_error));
+
+            let user = match s.core.resolve_other_user(&flow_id, other_user_id) {
+                Some(u) => u,
+                None => {
+                    let mut resolved = None;
+                    for _ in 0..25 {
+                        if let Some((u, _)) = inbox.lock().unwrap().get(&flow_id).cloned() {
+                            resolved = Some(u);
+                            break;
+                        }
+                        sleep(Duration::from_millis(200)).await;
+                    }
+                    match resolved {
+                        Some(u) => u,
+                        None => {
+                            obs.on_error(flow_id.clone(), "Cannot resolve other user".into());
+                            return;
+                        }
+                    }
+                }
+            };
+
+            let mut tried_start_sas = false;
+
+            for _ in 0..600 {
+                if let Some(verification) = client.encryption().get_verification(&user, &flow_id).await
+                {
+                    if let Some(sas) = verification.sas() {
+                        obs.on_phase(flow_id.clone(), SasPhase::Started);
+                        crate::run_sas_loop(sas, &flow_id, &verifs, &obs).await;
+                        return;
+                    }
+                }
+
+                if !tried_start_sas {
+                    if let Some(req) =
+                        client.encryption().get_verification_request(&user, &flow_id).await
+                    {
+                        if req.is_ready() {
+                            tried_start_sas = true;
+                            match req.start_sas().await {
+                                Ok(Some(sas)) => {
+                                    obs.on_phase(flow_id.clone(), SasPhase::Started);
+                                    crate::run_sas_loop(sas, &flow_id, &verifs, &obs).await;
+                                    return;
+                                }
+                                Ok(None) => {
+                                    tried_start_sas = false;
+                                }
+                                Err(_) => {
+                                    tried_start_sas = false;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                sleep(Duration::from_millis(200)).await;
+            }
+
+            obs.on_error(flow_id.clone(), "Verification timed out waiting for SAS".into());
         })
     }
 
