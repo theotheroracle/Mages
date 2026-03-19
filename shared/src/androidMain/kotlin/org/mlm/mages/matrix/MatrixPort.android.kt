@@ -459,7 +459,7 @@ class RustMatrixPort : MatrixPort {
         withContext(Dispatchers.IO) {
             runCatching {
                 withClient {
-                    it.listMyDevices().map { d ->
+                    it.devices().map { d ->
                         DeviceSummary(
                             deviceId = d.deviceId,
                             displayName = d.displayName,
@@ -637,7 +637,7 @@ class RustMatrixPort : MatrixPort {
 
     override suspend fun recoverWithKey(recoveryKey: String): Result<Unit> =
         withContext(Dispatchers.IO) {
-            runCatching { withClient { it.recoverWithKey(recoveryKey) } }.getOrDefault(false)
+            runCatching { withClient { it.recoverWithKey(recoveryKey) } }
         }
 
     override suspend fun registerUnifiedPush(
