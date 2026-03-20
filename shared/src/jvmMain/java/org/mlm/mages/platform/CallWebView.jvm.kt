@@ -184,10 +184,7 @@ private class JcefCallWebViewController(
             val json = JSONObject(message)
             val action = json.optString("action")
 
-            println("[JcefCallWebView] Widget → Native: action=$action")
-
             if (action in ELEMENT_SPECIFIC_ACTIONS) {
-                println("[JcefCallWebView] Handling Element-specific action locally: $action")
                 sendElementActionResponse(message)
 
                 when (action) {

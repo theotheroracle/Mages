@@ -769,22 +769,24 @@ impl WasmClient {
         callback_url_or_query: String,
         _expected_state: String,
         _expected_issuer: Option<String>,
-    ) -> bool {
+    ) -> JsValue {
         let Some(state) = self.state() else {
-            return false;
+            return to_json(&serde_json::json!({"ok": false, "error": "not initialized"}));
         };
         let url_or_query = match matrix_sdk::reqwest::Url::parse(&callback_url_or_query) {
             Ok(url) => UrlOrQuery::Url(url),
             Err(_) => UrlOrQuery::Query(callback_url_or_query),
         };
-        if state
+        match state
             .client()
             .oauth()
             .finish_login(url_or_query)
             .await
-            .is_err()
         {
-            return false;
+            Ok(_) => {}
+            Err(e) => {
+                return to_json(&serde_json::json!({"ok": false, "error": e.to_string()}));
+            }
         }
         state.persist_session();
         state
@@ -795,7 +797,7 @@ impl WasmClient {
         let _ = state.ensure_sync_service().await;
         let _ = state.client().event_cache().subscribe();
         state.ensure_send_queue_supervision();
-        true
+        to_json(&serde_json::json!({"ok": true}))
     }
 
     // Methods with wasm-specific signatures (cast, missing optional args)

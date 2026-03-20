@@ -80,11 +80,7 @@ actual fun CallWebViewHost(
             val api = json.optString("api")
             val action = json.optString("action")
 
-            Log.d("WidgetBridge", "Widget → Native: api=$api, action=$action")
-
             if (action in ELEMENT_SPECIFIC_ACTIONS) {
-                Log.d("WidgetBridge", "Handling Element-specific action locally: $action")
-
                 sendElementActionResponse(webView, message)
                 onMessageFromWidget(message)
 
@@ -114,7 +110,6 @@ actual fun CallWebViewHost(
                     Log.e("WidgetBridge", "WebView is null!")
                     return
                 }
-                Log.d("WidgetBridge", "Native → Widget: ${message.take(200)}")
 
                 val origin = "*" // HACK: Same as above
                 val script = "postMessage($message, '$origin')"

@@ -163,16 +163,11 @@ data class AppSettings(
 //    @Setting(
 //        type = TextInput::class,
 //        title = "Status Message",
-//        description = "What's on your mind?"
+//        description = "Mostly only shown by discord-based clients"
 //    )
 //    val statusMessage: String = ""
 
-//    @Setting(
-//        title = "Element Call URL",
-//        description = "Override Element Call instance (default: call.element.io)",
-//        category = Calls::class,
-//        type = TextInput::class
-//    )
+
     val elementCallUrl: String = "",
 
     @Setting(

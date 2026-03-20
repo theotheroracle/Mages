@@ -714,14 +714,18 @@ class WebStubMatrixPort : MatrixPort, VerificationService {
                 return MatrixPort.OauthLoginResult.Failed("OAuth popup closed or blocked")
             }
 
-            val finished = requireClient()
+            val finishResult = requireClient()
                 .finishLoginFromRedirect(callbackHref, "", null)
-                .await<Boolean>()
+                .await<JsAny?>()
+                ?.toJsonObject()
 
-            if (finished) {
+            val finishOk = (finishResult?.get("ok") as? JsonPrimitive)?.booleanOrNull == true
+            val finishError = (finishResult?.get("error") as? JsonPrimitive)?.contentOrNull
+
+            if (finishOk) {
                 MatrixPort.OauthLoginResult.Completed
             } else {
-                MatrixPort.OauthLoginResult.Failed("OAuth finish failed")
+                MatrixPort.OauthLoginResult.Failed(finishError ?: "OAuth finish failed")
             }
         } catch (e: Exception) {
             MatrixPort.OauthLoginResult.Failed(e.message)
