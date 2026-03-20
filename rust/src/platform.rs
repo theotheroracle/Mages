@@ -158,6 +158,21 @@ fn room_list_cache_file(store_dir: &Path) -> PathBuf {
     store_dir.join("room_list_cache.json")
 }
 
+pub(crate) async fn persist_session(store_dir: &Path, info: &SessionInfo) -> std::io::Result<()> {
+    #[cfg(not(target_family = "wasm"))]
+    {
+        tokio::fs::create_dir_all(store_dir).await?;
+        let payload = serde_json::to_string(info).unwrap();
+        tokio::fs::write(session_file(store_dir), payload).await
+    }
+
+    #[cfg(target_family = "wasm")]
+    {
+        let _ = (store_dir, info);
+        Ok(())
+    }
+}
+
 pub(crate) async fn build_and_persist_session(sdk: &matrix_sdk::Client, store_dir: &Path) {
     #[cfg(not(target_family = "wasm"))]
     {
