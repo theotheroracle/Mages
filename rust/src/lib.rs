@@ -73,6 +73,7 @@ mod platform;
 mod types;
 #[cfg(target_family = "wasm")]
 mod wasm_bridge;
+mod verification_flow;
 
 pub use core::{CoreClient, TimelineManager};
 pub use types::*;
@@ -109,7 +110,10 @@ use matrix_sdk::{
     },
 };
 use matrix_sdk::{
-    encryption::EncryptionSettings,
+    encryption::{
+        EncryptionSettings,
+        verification::Verification,
+    },
     ruma::{
         self,
         api::client::profile::{AvatarUrl, DisplayName},
@@ -121,7 +125,6 @@ use matrix_sdk::{
     },
 };
 use matrix_sdk::{
-    encryption::verification::{SasState as SdkSasState, SasVerification, VerificationRequest},
     ruma::events::receipt::ReceiptThread,
 };
 use matrix_sdk_ui::{
@@ -289,11 +292,9 @@ pub struct Client {
     core: TokioDrop<Arc<CoreClient>>,
     store_dir: PathBuf,
     guards: Mutex<Vec<tokio::task::JoinHandle<()>>>,
-    verifs: VerifMap,
     send_observers: Arc<Mutex<HashMap<u64, Arc<dyn SendObserver>>>>,
     send_obs_counter: AtomicU64,
     send_tx: tokio::sync::mpsc::UnboundedSender<SendUpdate>,
-    inbox: Arc<Mutex<HashMap<String, (OwnedUserId, OwnedDeviceId)>>>,
     subs_counter: AtomicU64,
     timeline_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
     typing_subs: Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>,
@@ -434,11 +435,9 @@ impl Client {
             core: TokioDrop::new(core.clone()),
             store_dir: store_dir_path,
             guards: Mutex::new(vec![]),
-            verifs: core.verifs.clone(),
             send_observers: Arc::new(Mutex::new(HashMap::new())),
             send_obs_counter: AtomicU64::new(0),
             send_tx,
-            inbox: core.inbox.clone(),
             subs_counter: AtomicU64::new(0),
             timeline_subs: Mutex::new(HashMap::new()),
             typing_subs: Mutex::new(HashMap::new()),
@@ -1109,7 +1108,6 @@ impl Client {
     pub fn start_verification_inbox(&self, observer: Box<dyn VerificationInboxObserver>) -> u64 {
         let sdk = self.core.sdk.clone();
         let obs: Arc<dyn VerificationInboxObserver> = Arc::from(observer);
-        let inbox = self.core.inbox.clone();
         sub_manager!(self, inbox_subs, async move {
             sdk.encryption().wait_for_e2ee_initialization_tasks().await;
             if let Err(e) = sdk.event_cache().subscribe() {
@@ -1126,7 +1124,6 @@ impl Client {
                             let flow_id = ev.content.transaction_id.to_string();
                             let from_user = ev.sender.to_string();
                             let from_device = ev.content.from_device.to_string();
-                            inbox.lock().unwrap().insert(flow_id.clone(), (ev.sender, ev.content.from_device.clone()));
                             let _ = catch_unwind(AssertUnwindSafe(|| obs.on_request(flow_id, from_user, from_device)));
                         } else { break; }
                     }
@@ -1136,7 +1133,6 @@ impl Client {
                                 if let MessageType::VerificationRequest(_) = &o.content.msgtype {
                                     let flow_id = o.event_id.to_string();
                                     let from_user = o.sender.to_string();
-                                    inbox.lock().unwrap().insert(flow_id.clone(), (o.sender.clone(), owned_device_id!("inroom")));
                                     let _ = catch_unwind(AssertUnwindSafe(|| obs.on_request(flow_id, from_user, String::new())));
                                 }
                             }
@@ -1734,101 +1730,6 @@ impl Client {
                 path: dest_path,
                 bytes: data.len() as u64,
             })
-        })
-    }
-
-    pub fn observe_verification(
-        &self,
-        flow_id: String,
-        other_user_id: Option<String>,
-        observer: Box<dyn VerificationObserver>,
-    ) -> bool {
-        let sdk = self.core.sdk.clone();
-        let verifs = self.verifs.clone();
-        let inbox = self.inbox.clone();
-        let obs: Arc<dyn VerificationObserver> = Arc::from(observer);
-        let resolved_user = self.core.resolve_other_user(&flow_id, other_user_id);
-        let Some(other_user) = resolved_user else {
-            obs.on_error(flow_id.clone(), "Cannot resolve other user".into());
-            return false;
-        };
-        let h = spawn_task!(async move {
-            sdk.encryption().wait_for_e2ee_initialization_tasks().await;
-            let encryption = sdk.encryption();
-            let request = encryption
-                .get_verification_request(&other_user, &flow_id)
-                .await;
-            if let Some(req) = request {
-                obs.on_phase(flow_id.clone(), SasPhase::Requested);
-                req.accept().await.ok();
-                obs.on_phase(flow_id.clone(), SasPhase::Ready);
-                match req.start_sas().await {
-                    Ok(Some(sas)) => {
-                        obs.on_phase(flow_id.clone(), SasPhase::Started);
-                        run_sas_loop(sas, &flow_id, &verifs, &obs).await;
-                    }
-                    Ok(None) => {
-                        obs.on_error(flow_id.clone(), "SAS not started (None)".into());
-                    }
-                    Err(e) => {
-                        obs.on_error(flow_id.clone(), format!("start_sas error: {e}"));
-                    }
-                }
-            } else {
-                obs.on_error(flow_id.clone(), "Verification request not found".into());
-            }
-        });
-        self.guards.lock().unwrap().push(h);
-        true
-    }
-
-    pub fn start_verification(&self, user_id: String) -> Result<String, FfiError> {
-        RT.block_on(async {
-            let uid = user_id.parse::<OwnedUserId>().ffi()?;
-            let encryption = self.core.sdk.encryption();
-            let identity = encryption
-                .get_user_identity(&uid)
-                .await
-                .ffi()?
-                .or_ffi("User identity not found")?;
-            let request = identity.request_verification().await.ffi()?;
-            Ok(request.flow_id().to_string())
-        })
-    }
-
-    pub fn confirm_verification(&self, flow_id: String) -> bool {
-        let verifs = self.verifs.clone();
-        RT.block_on(async {
-            let sas = { verifs.lock().unwrap().get(&flow_id).map(|v| v.sas.clone()) };
-            if let Some(sas) = sas {
-                sas.confirm().await.is_ok()
-            } else {
-                false
-            }
-        })
-    }
-
-    pub fn cancel_verification(&self, flow_id: String) -> bool {
-        let verifs = self.verifs.clone();
-        RT.block_on(async {
-            let sas = { verifs.lock().unwrap().get(&flow_id).map(|v| v.sas.clone()) };
-            if let Some(sas) = sas {
-                sas.cancel().await.is_ok()
-            } else {
-                false
-            }
-        })
-    }
-
-    pub fn mismatch_verification(&self, flow_id: String) -> bool {
-        let verifs = self.verifs.clone();
-        RT.block_on(async {
-            let sas = { verifs.lock().unwrap().get(&flow_id).map(|v| v.sas.clone()) };
-            if let Some(sas) = sas {
-                sas.mismatch().await.is_ok()
-            } else {
-                false
-            }
         })
     }
 
@@ -2584,190 +2485,198 @@ impl Client {
         })
     }
 
-    pub fn start_self_sas(
+    pub fn start_device_verification(
         &self,
         device_id: String,
-        observer: Box<dyn VerificationObserver>,
+        listener: Box<dyn VerifEventListener>,
     ) -> String {
-        let obs: Arc<dyn VerificationObserver> = Arc::from(observer);
-        RT.block_on(async {
-            let Some(me) = self.core.sdk.user_id() else {
-                obs.on_error("".into(), "No user".into());
-                return "".into();
-            };
-            self.core
-                .sdk
-                .encryption()
-                .wait_for_e2ee_initialization_tasks()
-                .await;
-            let Ok(devices) = self.core.sdk.encryption().get_user_devices(me).await else {
-                obs.on_error("".into(), "Devices unavailable".into());
-                return "".into();
-            };
-            let dev = devices
-                .devices()
-                .find(|d| d.device_id().as_str() == device_id);
-            let Some(dev) = dev else {
-                obs.on_error("".into(), "Device not found".into());
-                return "".into();
-            };
-            match dev.request_verification().await {
-                Ok(req) => {
-                    let flow_id = req.flow_id().to_string();
-                    self.wait_and_start_sas(flow_id.clone(), req, obs);
-                    flow_id
-                }
-                Err(e) => {
-                    obs.on_error("".into(), e.to_string());
-                    "".into()
+        let lis: Arc<dyn VerifEventListener> = Arc::from(listener);
+        let emit_err = |lis: &Arc<dyn VerifEventListener>, msg: String| {
+            let err = serde_json::to_string(&crate::verification_flow::VerifEvent::Error {
+                message: msg,
+            }).unwrap_or_default();
+            lis.on_event(err);
+        };
+
+        let me = match self.core.sdk.user_id() {
+            Some(u) => u,
+            None => {
+                emit_err(&lis, "No user session".into());
+                return String::new();
+            }
+        };
+        let device_id_owned = OwnedDeviceId::from(device_id);
+        let device = match RT.block_on(
+            self.core.sdk.encryption().get_device(me, &device_id_owned)
+        ) {
+            Ok(Some(d)) => d,
+            Ok(None) => {
+                emit_err(&lis, "Device not found".into());
+                return String::new();
+            }
+            Err(e) => {
+                emit_err(&lis, format!("Failed to get device: {e}"));
+                return String::new();
+            }
+        };
+        let request = match RT.block_on(device.request_verification()) {
+            Ok(r) => r,
+            Err(e) => {
+                emit_err(&lis, format!("Request verification failed: {e}"));
+                return String::new();
+            }
+        };
+        let flow_id = request.flow_id().to_owned();
+        let req = request;
+        let lis2 = lis.clone();
+
+        let h = spawn_task!(async move {
+            let stream = crate::verification_flow::drive_verification_request(req, true).await;
+            futures_util::pin_mut!(stream);
+            while let Some(event) = stream.next().await {
+                let json = serde_json::to_string(&event).unwrap_or_default();
+                lis2.on_event(json);
+                if matches!(event, crate::verification_flow::VerifEvent::Done) ||
+                    matches!(event, crate::verification_flow::VerifEvent::Cancelled { .. })
+                {
+                    break;
                 }
             }
-        })
+        });
+        self.guards.lock().unwrap().push(h);
+        flow_id
     }
 
-    pub fn start_user_sas(
+    pub fn start_user_verification(
         &self,
         user_id: String,
-        observer: Box<dyn VerificationObserver>,
+        listener: Box<dyn VerifEventListener>,
     ) -> String {
-        let obs: Arc<dyn VerificationObserver> = Arc::from(observer);
-        RT.block_on(async {
-            let Ok(uid) = user_id.parse::<OwnedUserId>() else {
-                obs.on_error("".into(), "Bad user id".into());
-                return "".into();
-            };
-            self.core
-                .sdk
-                .encryption()
-                .wait_for_e2ee_initialization_tasks()
-                .await;
-            match self.core.sdk.encryption().request_user_identity(&uid).await {
-                Ok(Some(identity)) => match identity.request_verification().await {
-                    Ok(req) => {
-                        let flow_id = req.flow_id().to_string();
-                        self.wait_and_start_sas(flow_id.clone(), req, obs);
-                        flow_id
-                    }
-                    Err(e) => {
-                        obs.on_error("".into(), e.to_string());
-                        "".into()
-                    }
-                },
-                Ok(None) => {
-                    obs.on_error("".into(), "User has no cross-signing identity".into());
-                    "".into()
-                }
-                Err(e) => {
-                    obs.on_error("".into(), format!("Identity fetch failed: {e}"));
-                    "".into()
+        let lis: Arc<dyn VerifEventListener> = Arc::from(listener);
+        let emit_err = |lis: &Arc<dyn VerifEventListener>, msg: String| {
+            let err = serde_json::to_string(&crate::verification_flow::VerifEvent::Error {
+                message: msg,
+            }).unwrap_or_default();
+            lis.on_event(err);
+        };
+
+        let Ok(uid) = user_id.parse::<OwnedUserId>() else {
+            emit_err(&lis, "Invalid user ID".into());
+            return String::new();
+        };
+        let identity = match RT.block_on(
+            self.core.sdk.encryption().get_user_identity(&uid)
+        ) {
+            Ok(Some(i)) => i,
+            Ok(None) => {
+                emit_err(&lis, "User identity not found".into());
+                return String::new();
+            }
+            Err(e) => {
+                emit_err(&lis, format!("Failed to get user identity: {e}"));
+                return String::new();
+            }
+        };
+        let request = match RT.block_on(identity.request_verification()) {
+            Ok(r) => r,
+            Err(e) => {
+                emit_err(&lis, format!("Request verification failed: {e}"));
+                return String::new();
+            }
+        };
+        let flow_id = request.flow_id().to_owned();
+        let req = request;
+        let lis2 = lis.clone();
+
+        let h = spawn_task!(async move {
+            let stream = crate::verification_flow::drive_verification_request(req, true).await;
+            futures_util::pin_mut!(stream);
+            while let Some(event) = stream.next().await {
+                let json = serde_json::to_string(&event).unwrap_or_default();
+                lis2.on_event(json);
+                if matches!(event, crate::verification_flow::VerifEvent::Done) ||
+                    matches!(event, crate::verification_flow::VerifEvent::Cancelled { .. })
+                {
+                    break;
                 }
             }
-        })
+        });
+        self.guards.lock().unwrap().push(h);
+        flow_id
     }
 
-    pub fn accept_verification_request(
-        &self,
-        flow_id: String,
-        other_user_id: Option<String>,
-        observer: Box<dyn VerificationObserver>,
-    ) -> bool {
-        let obs: Arc<dyn VerificationObserver> = Arc::from(observer);
-        RT.block_on(async {
-            let Some(user) = self.core.resolve_other_user(&flow_id, other_user_id) else {
-                return false;
-            };
-            if let Some(req) = self
-                .core
-                .sdk
-                .encryption()
-                .get_verification_request(&user, &flow_id)
-                .await
-            {
-                if req.accept().await.is_err() {
-                    return false;
-                }
-                self.wait_and_start_sas(flow_id, req, obs);
-                return true;
-            }
-            false
-        })
-    }
+    pub fn cancel_verification(&self, flow_id: String) -> bool {
+        let me = match self.core.sdk.user_id() {
+            Some(u) => u,
+            None => return false,
+        };
 
-    pub fn accept_sas(
-        &self,
-        flow_id: String,
-        other_user_id: Option<String>,
-        observer: Box<dyn VerificationObserver>,
-    ) -> bool {
-        let obs: Arc<dyn VerificationObserver> = Arc::from(observer);
-        let verifs = self.verifs.clone();
         RT.block_on(async {
-            if let Some(f) = verifs.lock().unwrap().get(&flow_id) {
-                return f.sas.accept().await.is_ok();
-            }
-            let Some(user) = self.core.resolve_other_user(&flow_id, other_user_id) else {
-                return false;
-            };
-            let Some(verification) = self
-                .core
-                .sdk
-                .encryption()
-                .get_verification(&user, &flow_id)
-                .await
-            else {
-                return false;
-            };
-            for _ in 0..25 {
-                if let Some(sas) = verification.clone().sas() {
-                    let sas_clone = sas.clone();
-                    let fid = flow_id.clone();
-                    let v = verifs.clone();
-                    let o = obs.clone();
-                    spawn_detached!(async move {
-                        Self::attach_sas_stream(v, fid, sas_clone, o).await;
-                    });
-                    return sas.accept().await.is_ok();
+            if let Some(v) = self.core.sdk.encryption().get_verification(me, &flow_id).await {
+                match v {
+                    Verification::SasV1(sas) => sas.cancel().await.is_ok(),
+                    _ => false,
                 }
-                sleep(Duration::from_millis(120)).await;
-            }
-            false
-        })
-    }
-
-    pub fn cancel_verification_request(
-        &self,
-        flow_id: String,
-        other_user_id: Option<String>,
-    ) -> bool {
-        RT.block_on(async {
-            let user = if let Some(uid) = other_user_id {
-                match uid.parse::<OwnedUserId>() {
-                    Ok(u) => u,
-                    Err(_) => return false,
-                }
-            } else if let Some((u, _)) = self.inbox.lock().unwrap().get(&flow_id).cloned() {
-                u
+            } else if let Some(req) = self.core.sdk.encryption().get_verification_request(me, &flow_id).await {
+                req.cancel().await.is_ok()
             } else {
-                return false;
-            };
-            if let Some(req) = self
-                .core
-                .sdk
-                .encryption()
-                .get_verification_request(&user, &flow_id)
-                .await
-            {
-                return req.cancel().await.is_ok();
+                false
             }
-            if let Some(verification) = self
-                .core
-                .sdk
-                .encryption()
-                .get_verification(&user, &flow_id)
-                .await
-            {
+        })
+    }
+
+    pub fn confirm_sas(&self, flow_id: String) -> bool {
+        let me = match self.core.sdk.user_id() {
+            Some(u) => u,
+            None => return false,
+        };
+
+        RT.block_on(async {
+            if let Some(Verification::SasV1(sas)) = self.core.sdk.encryption().get_verification(me, &flow_id).await {
+                sas.confirm().await.is_ok()
+            } else {
+                false
+            }
+        })
+    }
+
+    pub fn accept_verification_request(&self, flow_id: String, other_user_id: Option<String>) -> bool {
+        let uid = match other_user_id {
+            Some(u) => match u.parse::<OwnedUserId>() {
+                Ok(uid) => uid,
+                Err(_) => return false,
+            },
+            None => match self.core.sdk.user_id() {
+                Some(u) => u.to_owned(),
+                None => return false,
+            },
+        };
+
+        RT.block_on(async {
+            if let Some(req) = self.core.sdk.encryption().get_verification_request(&uid, &flow_id).await {
+                req.accept().await.is_ok()
+            } else {
+                false
+            }
+        })
+    }
+
+    pub fn accept_sas(&self, flow_id: String, other_user_id: Option<String>) -> bool {
+        let uid = match other_user_id {
+            Some(u) => match u.parse::<OwnedUserId>() {
+                Ok(uid) => uid,
+                Err(_) => return false,
+            },
+            None => match self.core.sdk.user_id() {
+                Some(u) => u.to_owned(),
+                None => return false,
+            },
+        };
+
+        RT.block_on(async {
+            if let Some(verification) = self.core.sdk.encryption().get_verification(&uid, &flow_id).await {
                 if let Some(sas) = verification.sas() {
-                    return sas.cancel().await.is_ok();
+                    return sas.accept().await.is_ok();
                 }
             }
             false
@@ -2833,97 +2742,12 @@ impl Client {
         Ok(())
     }
 
-    fn wait_and_start_sas(
-        &self,
-        flow_id: String,
-        req: VerificationRequest,
-        obs: Arc<dyn VerificationObserver>,
-    ) {
-        let verifs = self.verifs.clone();
-        let h = spawn_task!(async move {
-            obs.on_phase(flow_id.clone(), SasPhase::Requested);
-            match req.start_sas().await {
-                Ok(Some(sas)) => {
-                    obs.on_phase(flow_id.clone(), SasPhase::Started);
-                    run_sas_loop(sas, &flow_id, &verifs, &obs).await;
-                }
-                Ok(None) => obs.on_error(flow_id.clone(), "SAS not started (None)".into()),
-                Err(e) => obs.on_error(flow_id.clone(), format!("start_sas error: {e}")),
-            }
-        });
-        self.guards.lock().unwrap().push(h);
-    }
-
-    async fn attach_sas_stream(
-        verifs: VerifMap,
-        flow_id: String,
-        sas: SasVerification,
-        obs: Arc<dyn VerificationObserver>,
-    ) {
-        run_sas_loop(sas, &flow_id, &verifs, &obs).await;
-    }
 }
 
 impl Drop for Client {
     fn drop(&mut self) {
         self.shutdown_inner();
     }
-}
-
-async fn run_sas_loop(
-    sas: SasVerification,
-    flow_id: &str,
-    verifs: &VerifMap,
-    obs: &Arc<dyn VerificationObserver>,
-) {
-    let other_user = sas.other_user_id().to_owned();
-    let other_device = sas.other_device().device_id().to_owned();
-    {
-        let mut guard = verifs.lock().unwrap();
-        guard.insert(
-            flow_id.to_string(),
-            VerifFlow {
-                sas: sas.clone(),
-                _other_user: other_user.clone(),
-                _other_device: other_device.clone(),
-            },
-        );
-    }
-    obs.on_phase(flow_id.to_string(), SasPhase::Started);
-    let mut stream = sas.changes();
-    while let Some(state) = stream.next().await {
-        match state {
-            SdkSasState::KeysExchanged { emojis, .. } => {
-                if let Some(emoji_slice) = emojis {
-                    let emoji_strings: Vec<String> = emoji_slice
-                        .emojis
-                        .iter()
-                        .map(|e| e.symbol.to_string())
-                        .collect();
-                    obs.on_emojis(SasEmojis {
-                        flow_id: flow_id.to_string(),
-                        other_user: other_user.to_string(),
-                        other_device: other_device.to_string(),
-                        emojis: emoji_strings,
-                    });
-                    obs.on_phase(flow_id.to_string(), SasPhase::Emojis);
-                }
-            }
-            SdkSasState::Confirmed => {
-                obs.on_phase(flow_id.to_string(), SasPhase::Confirmed);
-            }
-            SdkSasState::Done { .. } => {
-                obs.on_phase(flow_id.to_string(), SasPhase::Done);
-                break;
-            }
-            SdkSasState::Cancelled(_) => {
-                obs.on_phase(flow_id.to_string(), SasPhase::Cancelled);
-                break;
-            }
-            _ => {}
-        }
-    }
-    verifs.lock().unwrap().remove(flow_id);
 }
 
 pub(crate) fn build_unstable_poll_content(
@@ -3350,92 +3174,6 @@ fn render_msg_like(_ev: &EventTimelineItem, ml: &MsgLikeContent) -> String {
         Redacted => "Message deleted".to_string(),
         UnableToDecrypt(_e) => "Unable to decrypt this message".to_string(),
         Other(_) => "Custom message".to_string(),
-    }
-}
-
-async fn attach_sas_stream(
-    verifs: VerifMap,
-    flow_id: String,
-    sas: SasVerification,
-    obs: Arc<dyn VerificationObserver>,
-) {
-    info!("attach_sas_stream: flow_id={}", flow_id);
-
-    let other_user = sas.other_user_id().to_owned();
-    let other_device = sas.other_device().device_id().to_owned();
-
-    verifs.lock().unwrap().insert(
-        flow_id.clone(),
-        VerifFlow {
-            sas: sas.clone(),
-            _other_user: other_user.clone(),
-            _other_device: other_device.clone(),
-        },
-    );
-
-    obs.on_phase(flow_id.clone(), SasPhase::Ready);
-
-    let mut stream = sas.changes();
-
-    while let Some(state) = stream.next().await {
-        info!("attach_sas_stream: flow_id={} state={:?}", flow_id, state);
-
-        match state {
-            SdkSasState::KeysExchanged { emojis, decimals } => {
-                if let Some(emojis) = emojis {
-                    let payload = SasEmojis {
-                        flow_id: flow_id.clone(),
-                        other_user: sas.other_user_id().to_string(),
-                        other_device: sas.other_device().device_id().to_string(),
-                        emojis: emojis.emojis.iter().map(|e| e.symbol.to_string()).collect(),
-                    };
-                    obs.on_phase(flow_id.clone(), SasPhase::Emojis);
-                    obs.on_emojis(payload);
-                    continue;
-                }
-
-                let decimal_values = Some(decimals).or_else(|| sas.decimals());
-                if let Some((a, b, c)) = decimal_values {
-                    obs.on_phase(flow_id.clone(), SasPhase::Failed);
-                    obs.on_error(
-                        flow_id.clone(),
-                        format!("SAS is decimal-only ({a}-{b}-{c}) but currently UI is emoji-only"),
-                    );
-                    continue;
-                }
-                obs.on_phase(flow_id.clone(), SasPhase::Failed);
-                obs.on_error(
-                    flow_id.clone(),
-                    "KeysExchanged but no emojis provided".into(),
-                );
-            }
-
-            SdkSasState::Confirmed => {
-                obs.on_phase(flow_id.clone(), SasPhase::Confirmed);
-            }
-
-            SdkSasState::Done { .. } => {
-                obs.on_phase(flow_id.clone(), SasPhase::Done);
-                verifs.lock().unwrap().remove(&flow_id);
-                break;
-            }
-
-            SdkSasState::Cancelled(info_c) => {
-                obs.on_phase(flow_id.clone(), SasPhase::Cancelled);
-                obs.on_error(flow_id.clone(), info_c.reason().to_owned());
-                verifs.lock().unwrap().remove(&flow_id);
-                break;
-            }
-
-            SdkSasState::Accepted { .. } => {
-                obs.on_phase(flow_id.clone(), SasPhase::Accepted);
-            }
-            SdkSasState::Started { .. } => {
-                obs.on_phase(flow_id.clone(), SasPhase::Started);
-            }
-
-            SdkSasState::Created { .. } => {}
-        }
     }
 }
 

@@ -1,6 +1,7 @@
 package org.mlm.mages.matrix
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import org.mlm.mages.AttachmentInfo
 import org.mlm.mages.MessageEvent
@@ -148,10 +149,36 @@ data class LiveLocationShare(
     val isLive: Boolean
 )
 
-interface VerificationObserver {
-    fun onPhase(flowId: String, phase: SasPhase)
-    fun onEmojis(flowId: String, otherUser: String, otherDevice: String, emojis: List<String>)
-    fun onError(flowId: String, message: String)
+@Serializable
+sealed class VerifEvent {
+    @Serializable @SerialName("Requested")
+    data class Requested(val flow_id: String) : VerifEvent()
+    @Serializable @SerialName("Ready") data object Ready : VerifEvent()
+    @Serializable @SerialName("SasStarted") data object SasStarted : VerifEvent()
+    @Serializable @SerialName("KeysExchanged")
+    data class KeysExchanged(
+        val emojis: List<EmojiEntry>,
+        val other_user: String,
+        val other_device: String,
+    ) : VerifEvent()
+    @Serializable @SerialName("Confirmed") data object Confirmed : VerifEvent()
+    @Serializable @SerialName("Done") data object Done : VerifEvent()
+    @Serializable @SerialName("Cancelled")
+    data class Cancelled(val reason: String) : VerifEvent()
+    @Serializable @SerialName("Error")
+    data class Error(val message: String) : VerifEvent()
+}
+
+@Serializable
+data class EmojiEntry(val symbol: String, val description: String)
+
+interface VerificationService {
+    fun startDeviceVerification(deviceId: String): kotlinx.coroutines.flow.Flow<VerifEvent>
+    fun startUserVerification(userId: String): kotlinx.coroutines.flow.Flow<VerifEvent>
+    suspend fun acceptVerificationRequest(flowId: String, otherUserId: String): Boolean
+    suspend fun acceptSas(flowId: String, otherUserId: String): Boolean
+    suspend fun confirmSas(flowId: String): Boolean
+    suspend fun cancelVerification(flowId: String): Boolean
 }
 
 interface ReceiptsObserver { fun onChanged() }
@@ -571,17 +598,6 @@ interface MatrixPort {
 
     suspend fun listMyDevices(): List<DeviceSummary>
 
-    suspend fun startSelfSas(targetDeviceId: String, observer: VerificationObserver): String
-    suspend fun startUserSas(userId: String, observer: VerificationObserver): String
-
-    suspend fun acceptVerificationRequest(flowId: String, otherUserId: String?, observer: VerificationObserver): Boolean
-    suspend fun acceptSas(flowId: String, otherUserId: String?, observer: VerificationObserver): Boolean
-
-    suspend fun confirmVerification(flowId: String): Boolean
-    suspend fun cancelVerification(flowId: String): Boolean
-
-    suspend fun cancelVerificationRequest(flowId: String, otherUserId: String?): Boolean
-
     fun enterForeground()
     fun enterBackground()
 
@@ -806,3 +822,5 @@ interface MatrixPort {
 }
 
 expect fun createMatrixPort(): MatrixPort
+
+fun MatrixPort.asVerificationService(): VerificationService? = this as? VerificationService

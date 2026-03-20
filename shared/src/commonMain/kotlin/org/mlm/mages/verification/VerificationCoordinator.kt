@@ -10,9 +10,12 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.mlm.mages.MatrixService
+import org.mlm.mages.matrix.EmojiEntry
 import org.mlm.mages.matrix.SasPhase
-import org.mlm.mages.matrix.VerificationObserver
 import org.mlm.mages.matrix.MatrixPort
+import org.mlm.mages.matrix.VerifEvent
+import org.mlm.mages.matrix.VerificationService
+import org.mlm.mages.matrix.asVerificationService
 
 data class VerificationUiState(
     val sasFlowId: String? = null,
@@ -36,6 +39,8 @@ class VerificationCoordinator(
 
     private var inboxToken: ULong? = null
 
+    private var verificationService: VerificationService? = null
+
     init {
         scope.launch {
             service.isReady.first { it }
@@ -44,10 +49,17 @@ class VerificationCoordinator(
                 reset()
                 if (account != null) {
                     startInboxIfPossible()
+                    initVerificationService()
                 }
             }
         }
     }
+
+    private fun initVerificationService() {
+        val port = service.portOrNull
+        verificationService = port?.asVerificationService()
+    }
+
     private fun reset() {
         inboxToken?.let { token ->
             runCatching { service.portOrNull?.stopVerificationInbox(token) }
@@ -80,80 +92,122 @@ class VerificationCoordinator(
         })
     }
 
-    private fun commonObserver(): VerificationObserver = object : VerificationObserver {
-        override fun onPhase(flowId: String, phase: SasPhase) {
-            _state.value = _state.value.copy(
-                sasFlowId = flowId,
-                sasPhase = phase,
-                sasError = null,
-                sasContinuePressed = false
-            )
-            if (phase == SasPhase.Done || phase == SasPhase.Cancelled) {
-                _state.value = VerificationUiState()
-            }
-        }
-
-        override fun onEmojis(flowId: String, otherUser: String, otherDevice: String, emojis: List<String>) {
-            _state.value = _state.value.copy(
-                sasFlowId = flowId,
-                sasOtherUser = otherUser,
-                sasOtherDevice = otherDevice,
-                sasEmojis = emojis,
-                sasError = null
-            )
-        }
-
-        override fun onError(flowId: String, message: String) {
-            _state.value = _state.value.copy(
-                sasFlowId = flowId,
-                sasError = message, // TODO: Fix the "sdk not started" err, the flow works as intended
-                sasContinuePressed = false
-            )
-        }
-    }
-
     fun startSelfVerify(deviceId: String) {
-        val port = service.portOrNull ?: return
-        val myUserId = runCatching { port.whoami() }.getOrNull() ?: return
-
         _state.value = _state.value.copy(
+            sasFlowId = null,
+            sasPhase = SasPhase.Requested,
             sasIncoming = false,
-            sasOtherUser = myUserId,
+            sasOtherUser = runCatching { service.portOrNull?.whoami() }.getOrNull(),
             sasOtherDevice = deviceId,
             sasError = null
         )
 
         scope.launch {
-            val flowId = runCatching { port.startSelfSas(deviceId, commonObserver()) }
-                .getOrNull()
-                .orEmpty()
-
-            if (flowId.isBlank()) {
-                _state.value = _state.value.copy(sasError = "Failed to start verification")
-            } else {
-                _state.value = _state.value.copy(sasFlowId = flowId)
+            try {
+                verificationService?.startDeviceVerification(deviceId)?.collect { event ->
+                    handleVerifEvent(event)
+                }
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(
+                    sasPhase = SasPhase.Failed,
+                    sasError = e.message ?: "Verification failed to start",
+                    sasContinuePressed = false
+                )
+            } ?: run {
+                _state.value = _state.value.copy(
+                    sasPhase = SasPhase.Failed,
+                    sasError = "Verification service unavailable"
+                )
             }
         }
     }
 
     fun startUserVerify(userId: String) {
-        val port = service.portOrNull ?: return
-
         _state.value = _state.value.copy(
+            sasFlowId = null,
+            sasPhase = SasPhase.Requested,
             sasIncoming = false,
             sasOtherUser = userId,
             sasError = null
         )
 
         scope.launch {
-            val flowId = runCatching { port.startUserSas(userId, commonObserver()) }
-                .getOrNull()
-                .orEmpty()
+            try {
+                verificationService?.startUserVerification(userId)?.collect { event ->
+                    handleVerifEvent(event)
+                }
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(
+                    sasPhase = SasPhase.Failed,
+                    sasError = e.message ?: "Verification failed to start",
+                    sasContinuePressed = false
+                )
+            } ?: run {
+                _state.value = _state.value.copy(
+                    sasPhase = SasPhase.Failed,
+                    sasError = "Verification service unavailable"
+                )
+            }
+        }
+    }
 
-            if (flowId.isBlank()) {
-                _state.value = _state.value.copy(sasError = "Failed to start verification")
-            } else {
-                _state.value = _state.value.copy(sasFlowId = flowId)
+    private fun handleVerifEvent(event: VerifEvent) {
+        when (event) {
+            is VerifEvent.Requested -> {
+                _state.value = _state.value.copy(
+                    sasFlowId = event.flow_id,
+                    sasPhase = SasPhase.Requested,
+                    sasError = null,
+                    sasContinuePressed = false
+                )
+            }
+            is VerifEvent.Ready -> {
+                _state.value = _state.value.copy(
+                    sasPhase = SasPhase.Ready,
+                    sasError = null
+                )
+            }
+            is VerifEvent.SasStarted -> {
+                _state.value = _state.value.copy(
+                    sasPhase = SasPhase.Started,
+                    sasError = null
+                )
+            }
+            is VerifEvent.KeysExchanged -> {
+                _state.value = _state.value.copy(
+                    sasOtherUser = event.other_user,
+                    sasOtherDevice = event.other_device,
+                    sasEmojis = event.emojis.map { it.symbol },
+                    sasPhase = SasPhase.Emojis,
+                    sasError = null
+                )
+            }
+            is VerifEvent.Confirmed -> {
+                _state.value = _state.value.copy(
+                    sasPhase = SasPhase.Confirmed,
+                    sasError = null
+                )
+            }
+            is VerifEvent.Done -> {
+                _state.value = _state.value.copy(
+                    sasPhase = SasPhase.Done,
+                    sasError = null
+                )
+                _state.value = VerificationUiState()
+            }
+            is VerifEvent.Cancelled -> {
+                _state.value = _state.value.copy(
+                    sasPhase = SasPhase.Cancelled,
+                    sasError = event.reason
+                )
+                _state.value = VerificationUiState()
+            }
+            is VerifEvent.Error -> {
+                _state.value = _state.value.copy(
+                    sasPhase = SasPhase.Failed,
+                    sasError = event.message,
+                    sasContinuePressed = false
+                )
             }
         }
     }
@@ -164,87 +218,57 @@ class VerificationCoordinator(
      * - Ready/Started => accept SAS (sas-level accept; UI "Continue")
      */
     fun acceptOrContinue() {
-        val port = service.portOrNull
-        if (port == null) {
-            println(">>> acceptOrContinue: port is NULL!")
-            _state.value = _state.value.copy(sasError = "Not connected")
-            return
-        }
-
-        val s = _state.value
-        val flowId = s.sasFlowId
+        val flowId = _state.value.sasFlowId
         if (flowId == null) {
-            println(">>> acceptOrContinue: flowId is NULL!")
             _state.value = _state.value.copy(sasError = "No active verification")
             return
         }
 
-        println(">>> acceptOrContinue: flowId=$flowId, phase=${s.sasPhase}")
+        val phase = _state.value.sasPhase
+        val otherUser = _state.value.sasOtherUser
 
-        _state.value = s.copy(sasContinuePressed = true, sasError = null)
-
-        val obs = commonObserver()
+        _state.value = _state.value.copy(sasContinuePressed = true, sasError = null)
 
         scope.launch {
-            println(">>> acceptOrContinue: launching coroutine for phase=${_state.value.sasPhase}")
             val ok: Boolean = try {
-                when (_state.value.sasPhase) {
+                when (phase) {
                     SasPhase.Requested -> {
-                        println(">>> calling acceptVerificationRequest")
-                        port.acceptVerificationRequest(flowId, _state.value.sasOtherUser, obs)
+                        verificationService?.acceptVerificationRequest(flowId, otherUser ?: "")
+                            ?: false
                     }
                     SasPhase.Ready, SasPhase.Started -> {
-                        println(">>> calling acceptSas")
-                        port.acceptSas(flowId, _state.value.sasOtherUser, obs)
+                        verificationService?.acceptSas(flowId, otherUser ?: "") ?: false
                     }
-                    else -> {
-                        println(">>> unexpected phase: ${_state.value.sasPhase}")
-                        false
-                    }
+                    else -> false
                 }
             } catch (e: Throwable) {
-                println(">>> acceptOrContinue exception: ${e.message}")
-                e.printStackTrace()
                 false
-            } finally {
-                val cur = _state.value
-                if (cur.sasFlowId == flowId) {
-                    _state.value = cur.copy(sasContinuePressed = false)
-                }
             }
 
-            println(">>> acceptOrContinue result: $ok")
-            if (!ok) {
-                val cur = _state.value
-                if (cur.sasFlowId == flowId) {
-                    _state.value = cur.copy(sasError = "Continue failed")
-                }
+            val cur = _state.value
+            if (cur.sasFlowId == flowId) {
+                _state.value = cur.copy(
+                    sasContinuePressed = false,
+                    sasError = if (!ok) "Continue failed" else null
+                )
             }
         }
     }
 
     fun confirm() {
-        val port = service.portOrNull ?: return
         val flowId = _state.value.sasFlowId ?: return
 
         scope.launch {
-            val ok = runCatching { port.confirmVerification(flowId) }.getOrDefault(false)
+            val ok = verificationService?.confirmSas(flowId) ?: false
             if (!ok) _state.value = _state.value.copy(sasError = "Confirm failed")
         }
     }
 
     fun cancel() {
-        val port = service.portOrNull ?: return
-        val s = _state.value
-        val flowId = s.sasFlowId ?: return
+        val flowId = _state.value.sasFlowId ?: return
 
         scope.launch {
-            val ok = if (s.sasPhase == SasPhase.Requested) {
-                runCatching { port.cancelVerificationRequest(flowId, s.sasOtherUser) }.getOrDefault(false)
-            } else {
-                runCatching { port.cancelVerification(flowId) }.getOrDefault(false)
-            }
-
+            val ok = verificationService?.cancelVerification(flowId) ?: false
             if (!ok) {
                 _state.value = _state.value.copy(sasError = "Cancel failed")
             } else {

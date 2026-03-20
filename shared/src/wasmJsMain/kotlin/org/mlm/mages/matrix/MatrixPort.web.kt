@@ -69,7 +69,7 @@ private external fun bytesToUint8Array(bytes: JsAny): JsAny
 fun ByteArray.toJsUint8Array(): JsAny = bytesToUint8Array(this.toJsReference())
 // --
 
-class WebStubMatrixPort : MatrixPort {
+class WebStubMatrixPort : MatrixPort, VerificationService {
     private var client: WasmClient? = null
     private var currentHs: String? = null
     private var currentAccountId: String? = null
@@ -77,10 +77,6 @@ class WebStubMatrixPort : MatrixPort {
 
     private var nextConnectionObserverToken: ULong = 1uL
     private val connectionObserverStops = mutableMapOf<ULong, () -> Unit>()
-
-    private var currentVerificationSub: Double = 0.0
-    private var currentVerificationObserver: VerificationObserver? = null
-    private var currentVerificationFlowId: String? = null
 
     companion object {
         private const val PENDING_OAUTH_HS_KEY = "mages_pending_oauth_hs_v1"
@@ -291,7 +287,6 @@ class WebStubMatrixPort : MatrixPort {
     override fun isLoggedIn(): Boolean = client?.isLoggedIn() == true
 
     override fun close() {
-        cleanupVerificationObservation()
         try { client?.free() } catch (e: Exception) { e.printStackTrace() }
         client = null
         currentHs = null
@@ -443,57 +438,6 @@ class WebStubMatrixPort : MatrixPort {
         requireClient().unobserveVerificationInbox(token.toDouble())
     }
 
-    private fun observeVerificationFlow(flowId: String, otherUserId: String?, observer: VerificationObserver) {
-        if (currentVerificationFlowId == flowId && currentVerificationSub > 0.0) return
-
-        if (currentVerificationSub > 0.0) {
-            requireClientOrNull()?.unobserveVerification(currentVerificationSub)
-        }
-
-        currentVerificationFlowId = flowId
-        currentVerificationObserver = observer
-
-        currentVerificationSub = requireClient().observeVerification(
-            flowId,
-            otherUserId,
-            jsCallback1 { payload: JsAny? ->
-                val obj = payload?.toJsonObject() ?: return@jsCallback1
-                val fid = (obj["flowId"] as? JsonPrimitive)?.content ?: return@jsCallback1
-                val phaseName = (obj["phase"] as? JsonPrimitive)?.content ?: return@jsCallback1
-                val phase = runCatching { enumValueOf<SasPhase>(phaseName) }.getOrNull() ?: return@jsCallback1
-                currentVerificationObserver?.onPhase(fid, phase)
-                if (phase == SasPhase.Done || phase == SasPhase.Cancelled) {
-                    cleanupVerificationObservation()
-                }
-            },
-            jsCallback1 { payload: JsAny? ->
-                val obj = payload?.toJsonObject() ?: return@jsCallback1
-                val fid = (obj["flowId"] as? JsonPrimitive)?.content ?: return@jsCallback1
-                val otherUser = (obj["otherUser"] as? JsonPrimitive)?.content ?: return@jsCallback1
-                val otherDevice = (obj["otherDevice"] as? JsonPrimitive)?.content ?: return@jsCallback1
-                val emojis = runCatching {
-                    wasmJson.decodeFromJsonElement<List<String>>(obj["emojis"] ?: return@jsCallback1)
-                }.getOrDefault(emptyList())
-                currentVerificationObserver?.onEmojis(fid, otherUser, otherDevice, emojis)
-            },
-            jsCallback1 { payload: JsAny? ->
-                val obj = payload?.toJsonObject() ?: return@jsCallback1
-                val fid = (obj["flowId"] as? JsonPrimitive)?.content ?: return@jsCallback1
-                val message = (obj["message"] as? JsonPrimitive)?.content ?: return@jsCallback1
-                currentVerificationObserver?.onError(fid, message)
-            }
-        )
-    }
-
-    private fun cleanupVerificationObservation() {
-        if (currentVerificationSub > 0.0) {
-            requireClientOrNull()?.unobserveVerification(currentVerificationSub)
-        }
-        currentVerificationSub = 0.0
-        currentVerificationObserver = null
-        currentVerificationFlowId = null
-    }
-
     override suspend fun retryByTxn(roomId: String, txnId: String): Boolean = false
 
     override fun stopTypingObserver(token: ULong) {
@@ -578,57 +522,6 @@ class WebStubMatrixPort : MatrixPort {
 
     override suspend fun listMyDevices(): List<DeviceSummary> =
         decodeValueOrNull(requireClient().listMyDevices().awaitAny(), "listMyDevices") ?: emptyList()
-
-    override suspend fun startSelfSas(targetDeviceId: String, observer: VerificationObserver): String {
-        val flowId = requireClient().startSelfSas(targetDeviceId).await<JsAny?>()?.toString().orEmpty()
-        if (flowId.isNotBlank()) {
-            observer.onPhase(flowId, SasPhase.Requested)
-            observeVerificationFlow(flowId, whoami(), observer)
-        }
-        return flowId
-    }
-
-    override suspend fun startUserSas(userId: String, observer: VerificationObserver): String {
-        val flowId = requireClient().startUserSas(userId).await<JsAny?>()?.toString().orEmpty()
-        if (flowId.isNotBlank()) {
-            observer.onPhase(flowId, SasPhase.Requested)
-            observeVerificationFlow(flowId, userId, observer)
-        }
-        return flowId
-    }
-
-    override suspend fun acceptVerificationRequest(
-        flowId: String,
-        otherUserId: String?,
-        observer: VerificationObserver
-    ): Boolean {
-        observeVerificationFlow(flowId, otherUserId, observer)
-        return requireClient().acceptVerificationRequest(flowId, otherUserId).awaitBool()
-    }
-
-    override suspend fun acceptSas(
-        flowId: String,
-        otherUserId: String?,
-        observer: VerificationObserver
-    ): Boolean {
-        observeVerificationFlow(flowId, otherUserId, observer)
-        return requireClient().acceptSas(flowId, otherUserId).awaitBool()
-    }
-
-    override suspend fun confirmVerification(flowId: String): Boolean =
-        requireClient().confirmVerification(flowId).awaitBool()
-
-    override suspend fun cancelVerification(flowId: String): Boolean {
-        val result = requireClient().cancelVerification(flowId).awaitBool()
-        cleanupVerificationObservation()
-        return result
-    }
-
-    override suspend fun cancelVerificationRequest(flowId: String, otherUserId: String?): Boolean {
-        val result = requireClient().cancelVerificationRequest(flowId, otherUserId).awaitBool()
-        cleanupVerificationObservation()
-        return result
-    }
 
     override fun enterForeground() {
         isInForeground = true
@@ -1268,6 +1161,108 @@ class WebStubMatrixPort : MatrixPort {
     override suspend fun declineKnockRequest(roomId: String, userId: String, reason: String?): Result<Unit> {
         return Result.failure(UnsupportedOperationException("Not implemented on web"))
     }
+
+    override fun startDeviceVerification(deviceId: String): Flow<VerifEvent> = callbackFlow {
+        val flowId = requireClient().startDeviceVerification(
+            deviceId,
+            jsCallback1 { event: JsAny? ->
+                val jsonStr = event?.toString() ?: return@jsCallback1
+                val parsed = runCatching {
+                    verifJson.decodeFromString<VerifEvent>(jsonStr)
+                }.getOrNull() ?: return@jsCallback1
+                trySend(parsed)
+            }
+        ).await<JsAny?>()?.toString().orEmpty()
+        if (flowId.isBlank()) {
+            trySend(VerifEvent.Error("Failed to start device verification"))
+            channel.close()
+            return@callbackFlow
+        }
+        awaitClose { }
+    }
+
+    override fun startUserVerification(userId: String): Flow<VerifEvent> = callbackFlow {
+        val flowId = requireClient().startUserVerification(
+            userId,
+            jsCallback1 { event: JsAny? ->
+                val jsonStr = event?.toString() ?: return@jsCallback1
+                val parsed = runCatching {
+                    verifJson.decodeFromString<VerifEvent>(jsonStr)
+                }.getOrNull() ?: return@jsCallback1
+                trySend(parsed)
+            }
+        ).await<JsAny?>()?.toString().orEmpty()
+        if (flowId.isBlank()) {
+            trySend(VerifEvent.Error("Failed to start user verification"))
+            channel.close()
+            return@callbackFlow
+        }
+        awaitClose { }
+    }
+
+    override suspend fun acceptVerificationRequest(flowId: String, otherUserId: String): Boolean =
+        requireClient().acceptVerificationRequest(flowId, otherUserId).awaitBool()
+
+    override suspend fun acceptSas(flowId: String, otherUserId: String): Boolean =
+        requireClient().acceptSas(flowId, otherUserId).awaitBool()
+
+    override suspend fun confirmSas(flowId: String): Boolean =
+        requireClient().confirmSas(flowId).awaitBool()
+
+    override suspend fun cancelVerification(flowId: String): Boolean =
+        requireClient().cancelVerification(flowId).awaitBool()
+}
+
+class WebVerificationService(private val client: WasmClient) : VerificationService {
+    override fun startDeviceVerification(deviceId: String): Flow<VerifEvent> = callbackFlow {
+        val flowId = client.startDeviceVerification(
+            deviceId,
+            jsCallback1 { event: JsAny? ->
+                val jsonStr = event?.toString() ?: return@jsCallback1
+                val parsed = runCatching {
+                    verifJson.decodeFromString<VerifEvent>(jsonStr)
+                }.getOrNull() ?: return@jsCallback1
+                trySend(parsed)
+            }
+        ).await<JsAny?>()?.toString().orEmpty()
+        if (flowId.isBlank()) {
+            trySend(VerifEvent.Error("Failed to start device verification"))
+            channel.close()
+            return@callbackFlow
+        }
+        awaitClose { /* Flow ends naturally via Done/Cancelled/Error */ }
+    }
+
+    override fun startUserVerification(userId: String): Flow<VerifEvent> = callbackFlow {
+        val flowId = client.startUserVerification(
+            userId,
+            jsCallback1 { event: JsAny? ->
+                val jsonStr = event?.toString() ?: return@jsCallback1
+                val parsed = runCatching {
+                    verifJson.decodeFromString<VerifEvent>(jsonStr)
+                }.getOrNull() ?: return@jsCallback1
+                trySend(parsed)
+            }
+        ).await<JsAny?>()?.toString().orEmpty()
+        if (flowId.isBlank()) {
+            trySend(VerifEvent.Error("Failed to start user verification"))
+            channel.close()
+            return@callbackFlow
+        }
+        awaitClose { /* Flow ends naturally via Done/Cancelled/Error */ }
+    }
+
+    override suspend fun confirmSas(flowId: String): Boolean =
+        client.confirmSas(flowId).awaitBool()
+
+    override suspend fun cancelVerification(flowId: String): Boolean =
+        client.cancelVerification(flowId).awaitBool()
+
+    override suspend fun acceptVerificationRequest(flowId: String, otherUserId: String): Boolean =
+        client.acceptVerificationRequest(flowId, otherUserId).awaitBool()
+
+    override suspend fun acceptSas(flowId: String, otherUserId: String): Boolean =
+        client.acceptSas(flowId, otherUserId).awaitBool()
 }
 
 actual fun createMatrixPort(): MatrixPort = WebStubMatrixPort()

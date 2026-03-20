@@ -3,11 +3,9 @@ use matrix_sdk::{EncryptionState, PredecessorRoom, RoomDisplayName, SuccessorRoo
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, Mutex};
-use uniffi::{Enum, Object, Record, export};
+use std::sync::Arc;
+use uniffi::{export, Enum, Object, Record};
 
-use matrix_sdk::encryption::verification::SasVerification;
-use matrix_sdk::ruma::{OwnedDeviceId, OwnedUserId};
 use matrix_sdk::send_queue::SendHandle;
 
 use crate::RT;
@@ -221,14 +219,6 @@ pub struct ThreadSummary {
 pub struct OwnReceipt {
     pub event_id: Option<String>,
     pub ts_ms: Option<u64>,
-}
-
-#[derive(Clone, Serialize, Deserialize, Record)]
-pub struct SasEmojis {
-    pub flow_id: String,
-    pub other_user: String,
-    pub other_device: String,
-    pub emojis: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, uniffi::Record)]
@@ -602,20 +592,6 @@ pub enum PollKind {
     Undisclosed,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Enum)]
-pub enum SasPhase {
-    Created,
-    Requested,
-    Ready,
-    Accepted,
-    Started,
-    Emojis,
-    Confirmed,
-    Cancelled,
-    Failed,
-    Done,
-}
-
 #[derive(Clone, Serialize, Deserialize, Enum)]
 pub enum Presence {
     Online,
@@ -732,16 +708,14 @@ pub trait TimelineObserver: Send + Sync {
 }
 
 #[export(callback_interface)]
-pub trait VerificationObserver: Send + Sync {
-    fn on_phase(&self, flow_id: String, phase: SasPhase);
-    fn on_emojis(&self, payload: SasEmojis);
-    fn on_error(&self, flow_id: String, message: String);
-}
-
-#[export(callback_interface)]
 pub trait VerificationInboxObserver: Send + Sync {
     fn on_request(&self, flow_id: String, from_user: String, from_device: String);
     fn on_error(&self, message: String);
+}
+
+#[export(callback_interface)]
+pub trait VerifEventListener: Send + Sync {
+    fn on_event(&self, event_json: String);
 }
 
 #[export(callback_interface)]
@@ -823,14 +797,6 @@ pub(crate) struct SessionInfo {
     pub refresh_token: Option<String>,
     pub homeserver: String,
     pub recovery_state: Option<String>,
-}
-
-pub(crate) type VerifMap = Arc<Mutex<HashMap<String, VerifFlow>>>;
-
-pub(crate) struct VerifFlow {
-    pub(crate) sas: SasVerification,
-    pub(crate) _other_user: OwnedUserId,
-    pub(crate) _other_device: OwnedDeviceId,
 }
 
 pub struct TokioDrop<T>(Option<T>);

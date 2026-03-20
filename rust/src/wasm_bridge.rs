@@ -1,6 +1,7 @@
 use crate::core::{CoreClient, TimelineManager, map_send_queue_update};
 use crate::errors::{IntoFfi, OptionFfi};
 use crate::types::*;
+use crate::verification_flow::{drive_verification_request, VerifEvent};
 use crate::{
     emit_timeline_reset_filled, latest_room_event_for, mages_client_metadata, map_vec_diff,
     missing_reply_event_id, strip_matrix_path,
@@ -277,32 +278,6 @@ impl VerificationInboxObserver for JsVerificationInboxObserver {
 unsafe impl Send for JsVerificationInboxObserver {}
 unsafe impl Sync for JsVerificationInboxObserver {}
 
-struct JsVerificationObserver(Function, Function, Function);
-impl VerificationObserver for JsVerificationObserver {
-    fn on_phase(&self, flow_id: String, phase: SasPhase) {
-        call_js(
-            &self.0,
-            JsValue::from_str(
-                &serde_json::json!({"flowId": flow_id, "phase": format!("{:?}", phase)})
-                    .to_string(),
-            ),
-        );
-    }
-    fn on_emojis(&self, payload: SasEmojis) {
-        call_js(&self.1, to_json(&payload));
-    }
-    fn on_error(&self, flow_id: String, message: String) {
-        call_js(
-            &self.2,
-            JsValue::from_str(
-                &serde_json::json!({"flowId": flow_id, "message": message}).to_string(),
-            ),
-        );
-    }
-}
-unsafe impl Send for JsVerificationObserver {}
-unsafe impl Sync for JsVerificationObserver {}
-
 struct JsRecoveryObserver(Function, Function, Function);
 impl RecoveryObserver for JsRecoveryObserver {
     fn on_progress(&self, step: String) {
@@ -563,7 +538,6 @@ wasm_unobserve! {
     "unobserveRecoveryState"     => unobserve_recovery_state(recovery_state_subs);
     "unobserveBackupState"       => unobserve_backup_state(backup_state_subs);
     "unobserveRoomList"          => unobserve_room_list(room_list_subs);
-    "unobserveVerification"     => unobserve_verification(verification_subs);
 }
 
 #[wasm_bindgen]
@@ -1320,7 +1294,6 @@ impl WasmClient {
                     maybe = td_sub.next() => {
                         if let Some((ev, ())) = maybe {
                             let fid = ev.content.transaction_id.to_string();
-                            s.core.inbox.lock().unwrap().insert(fid.clone(), (ev.sender.clone(), ev.content.from_device.clone()));
                             let _ = catch_unwind(AssertUnwindSafe(|| obs.on_request(fid, ev.sender.to_string(), ev.content.from_device.to_string())));
                         } else { break; }
                     }
@@ -1329,7 +1302,6 @@ impl WasmClient {
                             if let SyncRoomMessageEvent::Original(o) = ev {
                                 if let MessageType::VerificationRequest(_) = &o.content.msgtype {
                                     let fid = o.event_id.to_string();
-                                    s.core.inbox.lock().unwrap().insert(fid.clone(), (o.sender.clone(), owned_device_id!("inroom")));
                                     let _ = catch_unwind(AssertUnwindSafe(|| obs.on_request(fid, o.sender.to_string(), String::new())));
                                 }
                             }
@@ -1337,90 +1309,6 @@ impl WasmClient {
                     }
                 }
             }
-        })
-    }
-
-    #[wasm_bindgen(js_name = observeVerification)]
-    pub fn observe_verification(
-        &self,
-        flow_id: String,
-        other_user_id: Option<String>,
-        on_phase: Function,
-        on_emojis: Function,
-        on_error: Function,
-    ) -> f64 {
-        let Some(state) = self.state() else {
-            return 0.0;
-        };
-        let verifs = state.core.verifs.clone();
-        let inbox = state.core.inbox.clone();
-        let client = state.client().clone();
-        let s = state.clone();
-
-        wasm_subscribe!(state, verification_subs, async move {
-            let obs: Arc<dyn VerificationObserver> =
-                Arc::new(JsVerificationObserver(on_phase, on_emojis, on_error));
-
-            let user = match s.core.resolve_other_user(&flow_id, other_user_id) {
-                Some(u) => u,
-                None => {
-                    let mut resolved = None;
-                    for _ in 0..25 {
-                        if let Some((u, _)) = inbox.lock().unwrap().get(&flow_id).cloned() {
-                            resolved = Some(u);
-                            break;
-                        }
-                        sleep(Duration::from_millis(200)).await;
-                    }
-                    match resolved {
-                        Some(u) => u,
-                        None => {
-                            obs.on_error(flow_id.clone(), "Cannot resolve other user".into());
-                            return;
-                        }
-                    }
-                }
-            };
-
-            let mut tried_start_sas = false;
-
-            for _ in 0..600 {
-                if let Some(verification) = client.encryption().get_verification(&user, &flow_id).await
-                {
-                    if let Some(sas) = verification.sas() {
-                        obs.on_phase(flow_id.clone(), SasPhase::Started);
-                        crate::run_sas_loop(sas, &flow_id, &verifs, &obs).await;
-                        return;
-                    }
-                }
-
-                if !tried_start_sas {
-                    if let Some(req) =
-                        client.encryption().get_verification_request(&user, &flow_id).await
-                    {
-                        if req.is_ready() {
-                            tried_start_sas = true;
-                            match req.start_sas().await {
-                                Ok(Some(sas)) => {
-                                    obs.on_phase(flow_id.clone(), SasPhase::Started);
-                                    crate::run_sas_loop(sas, &flow_id, &verifs, &obs).await;
-                                    return;
-                                }
-                                Ok(None) => {
-                                    tried_start_sas = false;
-                                }
-                                Err(_) => {
-                                    tried_start_sas = false;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                sleep(Duration::from_millis(200)).await;
-            }
-
-            obs.on_error(flow_id.clone(), "Verification timed out waiting for SAS".into());
         })
     }
 
@@ -1476,63 +1364,6 @@ impl WasmClient {
                 let _ = catch_unwind(AssertUnwindSafe(|| obs.on_update(mapped)));
             }
         })
-    }
-
-    #[wasm_bindgen(js_name = confirmVerification)]
-    pub async fn confirm_verification(&self, flow_id: String) -> bool {
-        let Some(state) = self.state() else {
-            return false;
-        };
-        let sas = state
-            .core
-            .verifs
-            .lock()
-            .unwrap()
-            .get(&flow_id)
-            .map(|f| f.sas.clone());
-        match sas {
-            Some(s) => s.confirm().await.is_ok(),
-            None => false,
-        }
-    }
-
-    #[wasm_bindgen(js_name = cancelVerification)]
-    pub async fn cancel_verification(&self, flow_id: String) -> bool {
-        let Some(state) = self.state() else {
-            return false;
-        };
-        let sas = state
-            .core
-            .verifs
-            .lock()
-            .unwrap()
-            .get(&flow_id)
-            .map(|f| f.sas.clone());
-        if let Some(s) = sas {
-            return s.cancel().await.is_ok();
-        }
-        let user = state
-            .core
-            .inbox
-            .lock()
-            .unwrap()
-            .get(&flow_id)
-            .map(|p| p.0.clone())
-            .or_else(|| state.client().user_id().map(|u| u.to_owned()));
-        let Some(user) = user else {
-            return false;
-        };
-        if let Some(v) = state
-            .client()
-            .encryption()
-            .get_verification(&user, &flow_id)
-            .await
-        {
-            if let Some(sas) = v.sas() {
-                return sas.cancel().await.is_ok();
-            }
-        }
-        false
     }
 
     #[wasm_bindgen(js_name = sendQueueSetEnabled)]
@@ -2093,99 +1924,6 @@ impl WasmClient {
         to_json(&Vec::<RenderedNotification>::new())
     }
 
-    #[wasm_bindgen(js_name = startSelfSas)]
-    pub async fn start_self_sas(&self, device_id: String) -> JsValue {
-        let Some(state) = self.state() else {
-            return JsValue::from_str("");
-        };
-        let Some(me) = state.client().user_id() else {
-            return JsValue::from_str("");
-        };
-        state
-            .client()
-            .encryption()
-            .wait_for_e2ee_initialization_tasks()
-            .await;
-        let Ok(devices) = state.client().encryption().get_user_devices(me).await else {
-            return JsValue::from_str("");
-        };
-        let dev = devices
-            .devices()
-            .find(|d| d.device_id().as_str() == device_id);
-        let Some(dev) = dev else {
-            return JsValue::from_str("");
-        };
-        match dev.request_verification().await {
-            Ok(req) => JsValue::from_str(&req.flow_id().to_string()),
-            Err(_) => JsValue::from_str(""),
-        }
-    }
-
-    #[wasm_bindgen(js_name = startUserSas)]
-    pub async fn start_user_sas(&self, user_id: String) -> JsValue {
-        let Some(state) = self.state() else {
-            return JsValue::from_str("");
-        };
-        let Ok(uid) = user_id.parse::<OwnedUserId>() else {
-            return JsValue::from_str("");
-        };
-        state
-            .client()
-            .encryption()
-            .wait_for_e2ee_initialization_tasks()
-            .await;
-        match state
-            .client()
-            .encryption()
-            .request_user_identity(&uid)
-            .await
-        {
-            Ok(Some(identity)) => match identity.request_verification().await {
-                Ok(req) => JsValue::from_str(&req.flow_id().to_string()),
-                Err(_) => JsValue::from_str(""),
-            },
-            _ => JsValue::from_str(""),
-        }
-    }
-
-    #[wasm_bindgen(js_name = acceptVerificationRequest)]
-    pub async fn accept_verification_request(
-        &self,
-        flow_id: String,
-        other_user_id: Option<String>,
-    ) -> bool {
-        let Some(state) = self.state() else {
-            return false;
-        };
-        state
-            .core
-            .accept_verification_request_flow(flow_id, other_user_id)
-            .await
-    }
-
-    #[wasm_bindgen(js_name = acceptSas)]
-    pub async fn accept_sas(&self, flow_id: String, other_user_id: Option<String>) -> bool {
-        let Some(state) = self.state() else {
-            return false;
-        };
-        state.core.accept_sas_flow(flow_id, other_user_id).await
-    }
-
-    #[wasm_bindgen(js_name = cancelVerificationRequest)]
-    pub async fn cancel_verification_request(
-        &self,
-        flow_id: String,
-        other_user_id: Option<String>,
-    ) -> bool {
-        let Some(state) = self.state() else {
-            return false;
-        };
-        state
-            .core
-            .cancel_verification_request(flow_id, other_user_id)
-            .await
-    }
-
     #[wasm_bindgen(js_name = sendExistingAttachment)]
     pub async fn send_existing_attachment(
         &self,
@@ -2512,5 +2250,281 @@ impl WasmClient {
         self.state()
             .map(|s| to_json(&*s.room_list_cache.borrow()))
             .unwrap_or(to_json(&Vec::<RoomListEntry>::new()))
+    }
+
+    #[wasm_bindgen(js_name = startDeviceVerification)]
+    pub async fn start_device_verification(
+        &self,
+        target_device_id: String,
+        on_event: Function,
+    ) -> String {
+        let Some(state) = self.state() else {
+            return String::new();
+        };
+
+        let me = match state.client().user_id() {
+            Some(u) => u,
+            None => {
+                call_js(&on_event, to_json(&VerifEvent::Error {
+                    message: "No user session".into(),
+                }));
+                return String::new();
+            }
+        };
+
+        let device_id = OwnedDeviceId::from(target_device_id);
+        let device = match state
+            .client()
+            .encryption()
+            .get_device(me, &device_id)
+            .await
+        {
+            Ok(Some(d)) => d,
+            Ok(None) => {
+                call_js(&on_event, to_json(&VerifEvent::Error {
+                    message: "Device not found".into(),
+                }));
+                return String::new();
+            }
+            Err(e) => {
+                call_js(&on_event, to_json(&VerifEvent::Error {
+                    message: format!("Failed to get device: {e}"),
+                }));
+                return String::new();
+            }
+        };
+
+        let request = match device.request_verification().await {
+            Ok(r) => r,
+            Err(e) => {
+                call_js(&on_event, to_json(&VerifEvent::Error {
+                    message: format!("Request verification failed: {e}"),
+                }));
+                return String::new();
+            }
+        };
+
+        let flow_id = request.flow_id().to_owned();
+
+        let client = state.client().clone();
+        let fid = flow_id.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let stream = drive_verification_request(request, true).await;
+            futures_util::pin_mut!(stream);
+            while let Some(event) = stream.next().await {
+                let json = serde_json::to_string(&event).unwrap_or_default();
+                let js_val = JsValue::from_str(&json);
+                call_js(&on_event, js_val);
+                if matches!(event, VerifEvent::Done) || matches!(event, VerifEvent::Cancelled { .. }) {
+                    break;
+                }
+            }
+        });
+
+        flow_id
+    }
+
+    #[wasm_bindgen(js_name = startUserVerification)]
+    pub async fn start_user_verification(
+        &self,
+        user_id: String,
+        on_event: Function,
+    ) -> String {
+        let Some(state) = self.state() else {
+            return String::new();
+        };
+
+        let uid = match user_id.parse::<OwnedUserId>() {
+            Ok(u) => u,
+            Err(_) => {
+                call_js(&on_event, to_json(&VerifEvent::Error {
+                    message: "Invalid user ID".into(),
+                }));
+                return String::new();
+            }
+        };
+
+        let identity = match state
+            .client()
+            .encryption()
+            .get_user_identity(&uid)
+            .await
+        {
+            Ok(Some(i)) => i,
+            _ => {
+                call_js(&on_event, to_json(&VerifEvent::Error {
+                    message: "User identity not found".into(),
+                }));
+                return String::new();
+            }
+        };
+
+        let request = match identity.request_verification().await {
+            Ok(r) => r,
+            Err(e) => {
+                call_js(&on_event, to_json(&VerifEvent::Error {
+                    message: format!("Request verification failed: {e}"),
+                }));
+                return String::new();
+            }
+        };
+
+        let flow_id = request.flow_id().to_owned();
+
+        let client = state.client().clone();
+        let fid = flow_id.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let stream = drive_verification_request(request, true).await;
+            futures_util::pin_mut!(stream);
+            while let Some(event) = stream.next().await {
+                let json = serde_json::to_string(&event).unwrap_or_default();
+                let js_val = JsValue::from_str(&json);
+                call_js(&on_event, js_val);
+                if matches!(event, VerifEvent::Done) || matches!(event, VerifEvent::Cancelled { .. }) {
+                    break;
+                }
+            }
+        });
+
+        flow_id
+    }
+
+    #[wasm_bindgen(js_name = confirmSas)]
+    pub async fn confirm_sas(&self, flow_id: String) -> bool {
+        let Some(state) = self.state() else {
+            return false;
+        };
+
+        let me = match state.client().user_id() {
+            Some(u) => u,
+            None => return false,
+        };
+
+        if let Some(Verification::SasV1(sas)) = state
+            .client()
+            .encryption()
+            .get_verification(me, &flow_id)
+            .await
+        {
+            sas.confirm().await.is_ok()
+        } else {
+            false
+        }
+    }
+
+    #[wasm_bindgen(js_name = cancelVerification)]
+    pub async fn cancel_verification(&self, flow_id: String) -> bool {
+        let Some(state) = self.state() else {
+            return false;
+        };
+
+        let me = match state.client().user_id() {
+            Some(u) => u,
+            None => return false,
+        };
+
+        if let Some(v) = state
+            .client()
+            .encryption()
+            .get_verification(me, &flow_id)
+            .await
+        {
+            match v {
+                Verification::SasV1(sas) => sas.cancel().await.is_ok(),
+                _ => false,
+            }
+        } else if let Some(req) = state
+            .client()
+            .encryption()
+            .get_verification_request(me, &flow_id)
+            .await
+        {
+            req.cancel().await.is_ok()
+        } else {
+            false
+        }
+    }
+
+    #[wasm_bindgen(js_name = cancelVerificationWithUser)]
+    pub async fn cancel_verification_with_user(&self, flow_id: String, other_user_id: String) -> bool {
+        let Some(state) = self.state() else {
+            return false;
+        };
+
+        let user = match other_user_id.parse::<OwnedUserId>() {
+            Ok(u) => u,
+            Err(_) => return false,
+        };
+
+        if let Some(v) = state
+            .client()
+            .encryption()
+            .get_verification(&user, &flow_id)
+            .await
+        {
+            match v {
+                Verification::SasV1(sas) => sas.cancel().await.is_ok(),
+                _ => false,
+            }
+        } else if let Some(req) = state
+            .client()
+            .encryption()
+            .get_verification_request(&user, &flow_id)
+            .await
+        {
+            req.cancel().await.is_ok()
+        } else {
+            false
+        }
+    }
+
+    #[wasm_bindgen(js_name = acceptVerificationRequest)]
+    pub async fn accept_verification_request(
+        &self,
+        flow_id: String,
+        other_user_id: String,
+    ) -> bool {
+        let Some(state) = self.state() else {
+            return false;
+        };
+
+        let uid = match other_user_id.parse::<OwnedUserId>() {
+            Ok(u) => u,
+            Err(_) => return false,
+        };
+
+        if let Some(req) = state
+            .client()
+            .encryption()
+            .get_verification_request(&uid, &flow_id)
+            .await
+        {
+            return req.accept().await.is_ok();
+        }
+        false
+    }
+
+    #[wasm_bindgen(js_name = acceptSas)]
+    pub async fn accept_sas(&self, flow_id: String, other_user_id: String) -> bool {
+        let Some(state) = self.state() else {
+            return false;
+        };
+
+        let uid = match other_user_id.parse::<OwnedUserId>() {
+            Ok(u) => u,
+            Err(_) => return false,
+        };
+
+        if let Some(verification) = state
+            .client()
+            .encryption()
+            .get_verification(&uid, &flow_id)
+            .await
+        {
+            if let Some(sas) = verification.sas() {
+                return sas.accept().await.is_ok();
+            }
+        }
+        false
     }
 }

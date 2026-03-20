@@ -1,23 +1,26 @@
 package org.mlm.mages.matrix
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import mages.FfiRoomNotificationMode
-import mages.SasEmojis
 import mages.TimelineDiffKind
 import mages.Client as FfiClient
 import mages.RoomSummary as FfiRoom
 import org.mlm.mages.*
 import org.mlm.mages.platform.MagesPaths
 
-class RustMatrixPort : MatrixPort {
+class RustMatrixPort : MatrixPort, VerificationService {
     @Volatile
     private var client: FfiClient? = null
+    private val json = Json { ignoreUnknownKeys = true; classDiscriminator = "phase" }
     private val clientLock = Any()
     private var currentHs: String? = null
     private var currentAccountId: String? = null
@@ -470,124 +473,6 @@ class RustMatrixPort : MatrixPort {
                     }
                 }
             }.getOrElse { emptyList() }
-        }
-
-    private fun mages.SasPhase.toCommon(): SasPhase = when (this) {
-        mages.SasPhase.CREATED -> SasPhase.Created
-        mages.SasPhase.REQUESTED -> SasPhase.Requested
-        mages.SasPhase.READY -> SasPhase.Ready
-        mages.SasPhase.ACCEPTED -> SasPhase.Accepted
-        mages.SasPhase.STARTED -> SasPhase.Started
-        mages.SasPhase.EMOJIS -> SasPhase.Emojis
-        mages.SasPhase.CONFIRMED -> SasPhase.Confirmed
-        mages.SasPhase.CANCELLED -> SasPhase.Cancelled
-        mages.SasPhase.FAILED -> SasPhase.Failed
-        mages.SasPhase.DONE -> SasPhase.Done
-    }
-
-    override suspend fun startSelfSas(
-        targetDeviceId: String,
-        observer: VerificationObserver
-    ): String = withContext(Dispatchers.IO) {
-        val obs = object : mages.VerificationObserver {
-            override fun onPhase(flowId: String, phase: mages.SasPhase) {
-                observer.onPhase(flowId, phase.toCommon())
-            }
-
-            override fun onEmojis(payload: SasEmojis) {
-                observer.onEmojis(
-                    payload.flowId,
-                    payload.otherUser,
-                    payload.otherDevice,
-                    payload.emojis
-                )
-            }
-
-            override fun onError(flowId: String, message: String) {
-                observer.onError(flowId, message)
-            }
-        }
-        withClient { it.startSelfSas(targetDeviceId, obs) }
-    }
-
-    override suspend fun startUserSas(
-        userId: String,
-        observer: VerificationObserver
-    ): String = withContext(Dispatchers.IO) {
-        val obs = object : mages.VerificationObserver {
-            override fun onPhase(flowId: String, phase: mages.SasPhase) {
-                observer.onPhase(flowId, phase.toCommon())
-            }
-
-            override fun onEmojis(payload: SasEmojis) {
-                observer.onEmojis(
-                    payload.flowId,
-                    payload.otherUser,
-                    payload.otherDevice,
-                    payload.emojis
-                )
-            }
-
-            override fun onError(flowId: String, message: String) {
-                observer.onError(flowId, message)
-            }
-        }
-        withClient { it.startUserSas(userId, obs) }
-    }
-
-    override suspend fun acceptVerificationRequest(
-        flowId: String,
-        otherUserId: String?,
-        observer: VerificationObserver
-    ): Boolean = withContext(Dispatchers.IO) {
-        val cb = object : mages.VerificationObserver {
-            override fun onPhase(flowId: String, phase: mages.SasPhase) =
-                observer.onPhase(flowId, phase.toCommon())
-
-            override fun onEmojis(payload: SasEmojis) =
-                observer.onEmojis(payload.flowId, payload.otherUser, payload.otherDevice, payload.emojis)
-
-            override fun onError(flowId: String, message: String) =
-                observer.onError(flowId, message)
-        }
-
-        runCatching { withClient { it.acceptVerificationRequest(flowId, otherUserId, cb) } }
-            .getOrDefault(false)
-    }
-
-    override suspend fun acceptSas(
-        flowId: String,
-        otherUserId: String?,
-        observer: VerificationObserver
-    ): Boolean = withContext(Dispatchers.IO) {
-        val cb = object : mages.VerificationObserver {
-            override fun onPhase(flowId: String, phase: mages.SasPhase) =
-                observer.onPhase(flowId, phase.toCommon())
-
-            override fun onEmojis(payload: SasEmojis) =
-                observer.onEmojis(payload.flowId, payload.otherUser, payload.otherDevice, payload.emojis)
-
-            override fun onError(flowId: String, message: String) =
-                observer.onError(flowId, message)
-        }
-
-        runCatching { withClient { it.acceptSas(flowId, otherUserId, cb) } }
-            .getOrDefault(false)
-    }
-
-    override suspend fun confirmVerification(flowId: String): Boolean =
-        withContext(Dispatchers.IO) {
-            runCatching { withClient { it.confirmVerification(flowId) } }.getOrDefault(false)
-        }
-
-    override suspend fun cancelVerification(flowId: String): Boolean =
-        withContext(Dispatchers.IO) {
-            runCatching { withClient { it.cancelVerification(flowId) } }.getOrDefault(false)
-        }
-
-    override suspend fun cancelVerificationRequest(flowId: String, otherUserId: String?): Boolean =
-        withContext(Dispatchers.IO) {
-            runCatching { withClient { it.cancelVerificationRequest(flowId, otherUserId) } }.getOrDefault(false)
         }
 
     override suspend fun logout(): Boolean =
@@ -1752,6 +1637,65 @@ private fun mages.RoomListEntry.toKotlinRoomListEntry(): RoomListEntry =
             )
         }
     )
+
+    override fun startDeviceVerification(deviceId: String): Flow<VerifEvent> = callbackFlow {
+        val listener = object : mages.VerifEventListener {
+            override fun onEvent(eventJson: String) {
+                runCatching {
+                    json.decodeFromString<VerifEvent>(eventJson)
+                }.getOrNull()?.let { trySend(it) }
+            }
+        }
+        val flowId = withContext(Dispatchers.IO) {
+            client?.startDeviceVerification(deviceId, listener).orEmpty()
+        }
+        if (flowId.isBlank()) {
+            trySend(VerifEvent.Error("Failed to start device verification"))
+            channel.close()
+            return@callbackFlow
+        }
+        awaitClose { }
+    }
+
+    override fun startUserVerification(userId: String): Flow<VerifEvent> = callbackFlow {
+        val listener = object : mages.VerifEventListener {
+            override fun onEvent(eventJson: String) {
+                runCatching {
+                    json.decodeFromString<VerifEvent>(eventJson)
+                }.getOrNull()?.let { trySend(it) }
+            }
+        }
+        val flowId = withContext(Dispatchers.IO) {
+            client?.startUserVerification(userId, listener).orEmpty()
+        }
+        if (flowId.isBlank()) {
+            trySend(VerifEvent.Error("Failed to start user verification"))
+            channel.close()
+            return@callbackFlow
+        }
+        awaitClose { }
+    }
+
+    override suspend fun acceptVerificationRequest(flowId: String, otherUserId: String): Boolean =
+        withContext(Dispatchers.IO) {
+            client?.acceptVerificationRequest(flowId, otherUserId.ifEmpty { null }) ?: false
+        }
+
+    override suspend fun acceptSas(flowId: String, otherUserId: String): Boolean =
+        withContext(Dispatchers.IO) {
+            client?.acceptSas(flowId, otherUserId.ifEmpty { null }) ?: false
+        }
+
+    override suspend fun confirmSas(flowId: String): Boolean =
+        withContext(Dispatchers.IO) {
+            client?.confirmSas(flowId) ?: false
+        }
+
+    override suspend fun cancelVerification(flowId: String): Boolean =
+        withContext(Dispatchers.IO) {
+            client?.cancelVerification(flowId) ?: false
+        }
+}
 
 
 private fun mages.PollData.toModel(): PollData {

@@ -137,17 +137,6 @@ class MatrixService(
     suspend fun listMyDevices(): List<DeviceSummary> =
         runCatching { port.listMyDevices() }.getOrElse { emptyList() }
 
-    suspend fun startSelfSas(deviceId: String, observer: VerificationObserver) =
-        port.startSelfSas(deviceId, observer)
-
-    suspend fun startUserSas(userId: String, observer: VerificationObserver) =
-        port.startUserSas(userId, observer)
-
-    suspend fun confirmVerification(flowId: String) = port.confirmVerification(flowId)
-    suspend fun cancelVerification(flowId: String) = port.cancelVerification(flowId)
-    suspend fun cancelVerificationRequest(flowId: String, otherUserId: String?) =
-        port.cancelVerificationRequest(flowId, otherUserId)
-
     suspend fun logout(): Boolean {
         supervisedSyncStarted = false
         return port.logout()

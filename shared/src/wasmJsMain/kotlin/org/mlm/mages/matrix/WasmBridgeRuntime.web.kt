@@ -34,6 +34,11 @@ internal val wasmJson = Json {
     namingStrategy = JsonNamingStrategy.SnakeCase
 }
 
+internal val verifJson = Json {
+    ignoreUnknownKeys = true
+    classDiscriminator = "phase"
+}
+
 internal suspend fun ensureWasmBridgeReady() {
     // wasm-bindgen auto-initializes when the module is loaded
 }

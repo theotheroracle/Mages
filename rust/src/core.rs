@@ -59,7 +59,6 @@ use matrix_sdk::{
         room::{JoinRuleSummary, RoomType},
     },
     send_queue::SendHandle as SdkSendHandle,
-    sleep::sleep,
 };
 use matrix_sdk_ui::{
     eyeball_im::{Vector, VectorDiff},
@@ -85,17 +84,13 @@ use crate::{
     PredecessorRoomInfo, Presence, PresenceInfo, PublicRoom, PublicRoomsPage, ReactionSummary,
     RecoveryState, RenderedNotification, RoomDirectoryVisibility, RoomHistoryVisibility,
     RoomJoinRule, RoomListEntry, RoomPowerLevelChanges, RoomPowerLevels, RoomPreview,
-    RoomPreviewMembership, RoomProfile, RoomSummary, RoomTags, RoomUpgradeLinks, SasEmojis,
-    SasPhase, SearchHit, SearchPage, SeenByEntry, SendState, SendUpdate, SpaceChildInfo,
+    RoomPreviewMembership, RoomProfile, RoomSummary, RoomTags, RoomUpgradeLinks,
+    SearchHit, SearchPage, SeenByEntry, SendState, SendUpdate, SpaceChildInfo,
     SpaceHierarchyPage, SpaceInfo, SuccessorRoomInfo, ThreadPage, ThreadSummary, UnreadStats,
-    VerifFlow, VerifMap, build_unstable_poll_content, emit_timeline_reset_filled,
+    build_unstable_poll_content, emit_timeline_reset_filled,
     latest_room_event_for, map_event_id_via_timeline, map_notification_item_to_rendered,
     map_timeline_event, map_vec_diff, missing_reply_event_id, notification_event_ts_ms, now_ms,
     paginate_backwards_visible, timeline_event_filter,
-};
-
-use matrix_sdk::encryption::verification::{
-    SasState as SdkSasState, SasVerification, VerificationRequest,
 };
 
 #[cfg(not(target_family = "wasm"))]
@@ -185,8 +180,6 @@ pub struct CoreClient {
     pub sdk: SdkClient,
     pub timeline_mgr: TimelineManager,
     pub sync_service: Arc<Mutex<Option<Arc<SyncService>>>>,
-    pub verifs: VerifMap,
-    pub inbox: Arc<Mutex<HashMap<String, (OwnedUserId, OwnedDeviceId)>>>,
     pub send_handles_by_txn: Arc<Mutex<HashMap<String, SdkSendHandle>>>,
     pub live_location_beacons: Arc<Mutex<HashMap<String, LiveLocationBeaconState>>>,
 }
@@ -198,8 +191,6 @@ impl CoreClient {
             sdk,
             timeline_mgr,
             sync_service: Arc::new(Mutex::new(None)),
-            verifs: Arc::new(Mutex::new(HashMap::new())),
-            inbox: Arc::new(Mutex::new(HashMap::new())),
             send_handles_by_txn: Arc::new(Mutex::new(HashMap::new())),
             live_location_beacons: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -273,16 +264,8 @@ impl CoreClient {
         }
     }
 
-    pub fn resolve_other_user(
-        &self,
-        flow_id: &str,
-        other_user_id: Option<String>,
-    ) -> Option<OwnedUserId> {
-        if let Some(uid) = other_user_id {
-            uid.parse().ok()
-        } else {
-            self.inbox.lock().unwrap().get(flow_id).map(|p| p.0.clone())
-        }
+    pub fn resolve_other_user(&self, other_user_id: Option<String>) -> Option<OwnedUserId> {
+        other_user_id.and_then(|uid| uid.parse().ok())
     }
 
     pub async fn rooms(&self) -> Vec<RoomSummary> {
@@ -1105,89 +1088,6 @@ impl CoreClient {
         } else {
             backups.disable().await.is_ok()
         }
-    }
-
-    pub async fn cancel_verification_request(
-        &self,
-        flow_id: String,
-        other_user_id: Option<String>,
-    ) -> bool {
-        let user = if let Some(uid) = other_user_id {
-            match uid.parse::<OwnedUserId>() {
-                Ok(u) => u,
-                Err(_) => return false,
-            }
-        } else if let Some((u, _)) = self.inbox.lock().unwrap().get(&flow_id).cloned() {
-            u
-        } else {
-            return false;
-        };
-
-        if let Some(req) = self
-            .sdk
-            .encryption()
-            .get_verification_request(&user, &flow_id)
-            .await
-        {
-            return req.cancel().await.is_ok();
-        }
-        if let Some(verification) = self
-            .sdk
-            .encryption()
-            .get_verification(&user, &flow_id)
-            .await
-        {
-            if let Some(sas) = verification.sas() {
-                return sas.cancel().await.is_ok();
-            }
-        }
-        false
-    }
-
-    pub async fn accept_sas_flow(&self, flow_id: String, other_user_id: Option<String>) -> bool {
-        let user = self.resolve_other_user(&flow_id, other_user_id);
-        let Some(user) = user else { return false };
-
-        // Fast path: cached SAS
-        if let Some(f) = self.verifs.lock().unwrap().get(&flow_id) {
-            return f.sas.accept().await.is_ok();
-        }
-
-        // Slow path: wait for sas() to appear
-        let Some(verification) = self
-            .sdk
-            .encryption()
-            .get_verification(&user, &flow_id)
-            .await
-        else {
-            return false;
-        };
-        for _ in 0..25 {
-            if let Some(sas) = verification.clone().sas() {
-                return sas.accept().await.is_ok();
-            }
-            sleep(Duration::from_millis(120)).await;
-        }
-        false
-    }
-
-    pub async fn accept_verification_request_flow(
-        &self,
-        flow_id: String,
-        other_user_id: Option<String>,
-    ) -> bool {
-        let user = self.resolve_other_user(&flow_id, other_user_id);
-        let Some(user) = user else { return false };
-
-        if let Some(req) = self
-            .sdk
-            .encryption()
-            .get_verification_request(&user, &flow_id)
-            .await
-        {
-            return req.accept().await.is_ok();
-        }
-        false
     }
 
     pub async fn room_send_queue_set_enabled(&self, room_id: String, enabled: bool) -> bool {
