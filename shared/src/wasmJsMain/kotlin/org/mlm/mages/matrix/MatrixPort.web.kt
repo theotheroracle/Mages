@@ -380,7 +380,8 @@ class WebStubMatrixPort : MatrixPort, VerificationService {
 
     override fun whoami(): String? = client?.whoami()
 
-    override fun accountManagementUrl(): String? = null
+    override suspend fun accountManagementUrl(): String? =
+        requireClient().accountManagementUrl().await<JsAny?>()?.toString()?.takeIf { it != "null" }
 
     override fun setupRecovery(observer: MatrixPort.RecoveryObserver): Boolean {
         val client = requireClient()
@@ -472,8 +473,13 @@ class WebStubMatrixPort : MatrixPort, VerificationService {
         height: Int,
         crop: Boolean
     ): Result<String> = runCatching {
-        requireClient().thumbnailToCache(wasmJson.encodeToString(info), width.toDouble(), height.toDouble(), crop).await<String?>()
-            .orEmpty()
+        val raw = requireClient()
+            .thumbnailToCache(wasmJson.encodeToString(info), width.toDouble(), height.toDouble(), crop)
+            .await<JsAny?>()
+            ?.toString()
+            ?.takeIf { it.startsWith("data:") }
+            ?: error("Thumbnail fetch failed")
+        raw
     }
 
     override fun observeConnection(observer: MatrixPort.ConnectionObserver): ULong {
@@ -620,12 +626,7 @@ class WebStubMatrixPort : MatrixPort, VerificationService {
 
     override suspend fun logout(): Boolean {
         val f = requireClientOrNull() ?: return false
-        return try {
-            f.logout()
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        }
+        return f.logout().awaitUnitResult().isSuccess
     }
 
     override suspend fun sendAttachmentFromPath(
@@ -648,9 +649,10 @@ class WebStubMatrixPort : MatrixPort, VerificationService {
         info: AttachmentInfo,
         filenameHint: String?
     ): Result<String> = runCatching {
-        val uri = requireClient().downloadAttachmentToCacheFile(wasmJson.encodeToString(info), filenameHint).awaitString()
+        requireClient()
+            .downloadAttachmentToCacheFile(wasmJson.encodeToString(info), filenameHint)
+            .awaitStringValue()
             ?: error("Attachment download failed")
-        uri
     }
 
     override suspend fun searchRoom(
@@ -659,12 +661,14 @@ class WebStubMatrixPort : MatrixPort, VerificationService {
         limit: Int,
         offset: Int?
     ): SearchPage = decodeValueOrNull(
-        requireClient().searchRoom(roomId, query, limit.toDouble(), offset?.toDouble()),
+        requireClient().searchRoom(roomId, query, limit.toDouble(), offset?.toDouble()).awaitAny(),
         "searchRoom"
     ) ?: SearchPage(emptyList(), null)
 
     override suspend fun recoverWithKey(recoveryKey: String): Result<Unit> = runCatching {
-        requireClient().recoverWithKey(recoveryKey).awaitUnit() }
+        val ok = requireClient().recoverWithKey(recoveryKey).awaitPlainBool()
+        if (!ok) error("Recovery failed")
+    }
 
     override fun observeReceipts(roomId: String, observer: ReceiptsObserver): ULong =
         requireClient().observeReceipts(roomId, jsCallback0 { observer.onChanged() }).toULong()
@@ -1083,11 +1087,14 @@ class WebStubMatrixPort : MatrixPort, VerificationService {
     override suspend fun roomPowerLevels(roomId: String): RoomPowerLevels? =
         requireClient().roomPowerLevels(roomId).awaitValue()
 
-    override suspend fun canUserBan(roomId: String, userId: String): Boolean = false
+    override suspend fun canUserBan(roomId: String, userId: String): Boolean =
+        requireClient().canUserBan(roomId, userId).awaitPlainBool()
 
-    override suspend fun canUserInvite(roomId: String, userId: String): Boolean = false
+    override suspend fun canUserInvite(roomId: String, userId: String): Boolean =
+        requireClient().canUserInvite(roomId, userId).awaitPlainBool()
 
-    override suspend fun canUserRedactOther(roomId: String, userId: String): Boolean = false
+    override suspend fun canUserRedactOther(roomId: String, userId: String): Boolean =
+        requireClient().canUserRedactOther(roomId, userId).awaitPlainBool()
 
     override suspend fun updatePowerLevelForUser(
         roomId: String,

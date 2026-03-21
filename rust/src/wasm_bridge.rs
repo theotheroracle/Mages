@@ -605,11 +605,13 @@ impl WasmClient {
     }
 
     #[wasm_bindgen]
-    pub fn logout(&self) -> bool {
-        if let Some(state) = self.state() {
-            clear_wasm_session(&state.store_name);
-        }
-        false
+    pub async fn logout(&self) -> JsValue {
+        let Some(state) = self.state() else {
+            return webffi_err("not initialized");
+        };
+        let result = state.client().matrix_auth().logout().await;
+        clear_wasm_session(&state.store_name);
+        webffi_unit(result.map(|_| ()))
     }
 
     #[wasm_bindgen(js_name = homeserverLoginDetails)]
@@ -749,6 +751,17 @@ impl WasmClient {
             return webffi_not_init();
         };
         webffi_value(s.core.dm_peer_user_id(room_id).await)
+    }
+
+    #[wasm_bindgen(js_name = accountManagementUrl)]
+    pub async fn account_management_url(&self) -> JsValue {
+        let Some(s) = self.state() else {
+            return JsValue::NULL;
+        };
+        match s.core.account_management_url().await {
+            Ok(Some(url)) => JsValue::from_str(&url),
+            _ => JsValue::NULL,
+        }
     }
 
     #[wasm_bindgen(js_name = ensureDm)]
@@ -1879,24 +1892,10 @@ impl WasmClient {
         let Some(room) = state.client().get_room(&rid) else {
             return webffi_err("room not found");
         };
-
         let mime_type: Mime = mime.parse().unwrap_or(mime::APPLICATION_OCTET_STREAM);
-
-        let upload_response = match state.client().media().upload(&mime_type, data, None).await {
-            Ok(resp) => resp,
-            Err(e) => return webffi_err(&format!("media upload failed: {}", e)),
-        };
-
-        let content = matrix_sdk::ruma::events::room::message::RoomMessageEventContent::new(
-            matrix_sdk::ruma::events::room::message::MessageType::File(
-                matrix_sdk::ruma::events::room::message::FileMessageEventContent::new(
-                    filename,
-                    MediaSource::Plain(upload_response.content_uri),
-                ),
-            ),
-        );
-
-        webffi_unit(room.send(content).await.map(|_| ()))
+        let config = AttachmentConfig::new();
+        let result = room.send_attachment(&filename, &mime_type, data, config).await.map(|_| ());
+        webffi_unit(result)
     }
 
     #[wasm_bindgen(js_name = downloadAttachmentToCacheFile)]
@@ -1927,13 +1926,20 @@ impl WasmClient {
         };
         match state.client().media().get_media_content(&req, true).await {
             Ok(data) => {
-                let b64 = base64_encode(&data).unwrap_or_default();
+                let b64 = match base64_encode(&data) {
+                    Ok(s) => s,
+                    Err(e) => return webffi_err(&format!(
+                        "base64 encode failed: {:?}",
+                        e.as_string().unwrap_or_default()
+                    )),
+                };
                 let mime = att
                     .mime
                     .unwrap_or_else(|| "application/octet-stream".to_string());
-                JsValue::from_str(&format!("data:{};base64,{}", mime, b64))
+                let data_uri = format!("data:{};base64,{}", mime, b64);
+                webffi_value(Ok::<String, String>(data_uri))
             }
-            Err(_) => JsValue::NULL,
+            Err(e) => webffi_err(&format!("media download failed: {}", e)),
         }
     }
 
@@ -1946,10 +1952,10 @@ impl WasmClient {
         _use_crop: bool,
     ) -> JsValue {
         let Some(state) = self.state() else {
-            return JsValue::NULL;
+            return webffi_err("not initialized");
         };
         let Ok(att): Result<AttachmentInfo, _> = serde_json::from_str(&att_json) else {
-            return JsValue::NULL;
+            return webffi_err("invalid attachment JSON");
         };
         let (mxc_uri, thumbnail_mxc) = if let Some(thumb) = att.thumbnail_mxc_uri.as_ref() {
             (thumb.clone(), true)
@@ -1964,7 +1970,7 @@ impl WasmClient {
             let Ok(ef): Result<matrix_sdk::ruma::events::room::EncryptedFile, _> =
                 serde_json::from_str(&enc.json)
             else {
-                return JsValue::NULL;
+                return webffi_err("invalid encrypted file JSON");
             };
             MediaSource::Encrypted(Box::new(ef))
         } else {
@@ -1977,7 +1983,10 @@ impl WasmClient {
         };
         match state.client().media().get_media_content(&req, true).await {
             Ok(data) => {
-                let b64 = base64_encode(&data).unwrap_or_default();
+                let b64 = match base64_encode(&data) {
+                    Ok(s) => s,
+                    Err(_) => return webffi_err("base64 encode failed"),
+                };
                 let mime = if data.starts_with(&[0x89, b'P', b'N', b'G']) {
                     "image/png"
                 } else {
@@ -1985,7 +1994,7 @@ impl WasmClient {
                 };
                 JsValue::from_str(&format!("data:{};base64,{}", mime, b64))
             }
-            Err(_) => JsValue::NULL,
+            Err(e) => webffi_err(&format!("thumbnail fetch failed: {}", e)),
         }
     }
 
@@ -1997,9 +2006,8 @@ impl WasmClient {
         height: u32,
         _crop: bool,
     ) -> JsValue {
-        // On wasm we can return the mxc URI directly for the web layer to convert
         let Some(state) = self.state() else {
-            return JsValue::NULL;
+            return webffi_err("not initialized");
         };
         let uri = matrix_sdk::ruma::OwnedMxcUri::from(mxc_uri);
         let settings = MediaThumbnailSettings::new(width.into(), height.into());
@@ -2009,8 +2017,10 @@ impl WasmClient {
         };
         match state.client().media().get_media_content(&req, true).await {
             Ok(data) => {
-                // Return as base64 data URI
-                let b64 = base64_encode(&data).unwrap_or_default();
+                let b64 = match base64_encode(&data) {
+                    Ok(s) => s,
+                    Err(_) => return webffi_err("base64 encode failed"),
+                };
                 let mime = if data.starts_with(&[0x89, b'P', b'N', b'G']) {
                     "image/png"
                 } else {
@@ -2018,7 +2028,7 @@ impl WasmClient {
                 };
                 JsValue::from_str(&format!("data:{};base64,{}", mime, b64))
             }
-            Err(_) => JsValue::NULL,
+            Err(e) => webffi_err(&format!("mxc thumbnail failed: {}", e)),
         }
     }
 

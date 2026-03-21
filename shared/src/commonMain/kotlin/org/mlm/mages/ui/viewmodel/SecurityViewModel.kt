@@ -158,7 +158,7 @@ class SecurityViewModel(
     private fun loadAccountManagementUrl() {
         launch {
             val port = service.portOrNull ?: return@launch
-            val url = runCatching { port.accountManagementUrl() }.getOrNull()
+            val url = port.accountManagementUrl()
             updateState { copy(accountManagementUrl = url) }
         }
     }

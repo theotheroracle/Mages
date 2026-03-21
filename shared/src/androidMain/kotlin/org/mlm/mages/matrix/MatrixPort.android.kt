@@ -248,8 +248,8 @@ class RustMatrixPort : MatrixPort, VerificationService {
         }
     }
 
-    override fun accountManagementUrl(): String? {
-        return runBlocking(Dispatchers.IO) {
+    override suspend fun accountManagementUrl(): String? {
+        return withContext(Dispatchers.IO) {
             withClient { it.accountManagementUrl() }
         }
     }

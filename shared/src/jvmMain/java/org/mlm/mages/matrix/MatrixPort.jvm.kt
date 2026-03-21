@@ -247,8 +247,8 @@ class RustMatrixPort : MatrixPort, VerificationService {
         }
     }
 
-    override fun accountManagementUrl(): String? {
-        return runBlocking(Dispatchers.IO) {
+    override suspend fun accountManagementUrl(): String? {
+        return withContext(Dispatchers.IO) {
             withClient { it.accountManagementUrl() }
         }
     }
@@ -280,7 +280,7 @@ class RustMatrixPort : MatrixPort, VerificationService {
                 observer.onUpdate(mapped)
             }
         }
-        return withClient { it.observeRecoveryState(cb) }
+        return withClient { runBlocking(Dispatchers.IO) {  it.observeRecoveryState(cb) } }
     }
 
     override fun unobserveRecoveryState(subId: ULong): Boolean =
@@ -301,7 +301,7 @@ class RustMatrixPort : MatrixPort, VerificationService {
                 observer.onUpdate(mapped)
             }
         }
-        return withClient { it.observeBackupState(cb) }
+        return withClient { runBlocking(Dispatchers.IO) { it.observeBackupState(cb) } }
     }
 
     override fun unobserveBackupState(subId: ULong): Boolean =
