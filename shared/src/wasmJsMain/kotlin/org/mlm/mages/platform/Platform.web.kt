@@ -48,6 +48,10 @@ actual fun platformEmbeddedElementCallUrlOrNull(): String? {
 
 actual fun platformNeedsControlledAudioDevices(): Boolean = false
 
+actual fun setSystemBarsVisibility(hide: Boolean) {
+    // No-op
+}
+
 actual class CameraPickerLauncher {
     private var onResult: ((PlatformFile?) -> Unit)? = null
 

@@ -10,6 +10,8 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import io.github.vinceglb.filekit.FileKit
 import io.github.vinceglb.filekit.PlatformFile
 import io.github.vinceglb.filekit.cacheDir
@@ -72,6 +74,17 @@ actual fun platformEmbeddedElementCallUrlOrNull(): String? {
 actual fun platformEmbeddedElementCallParentUrlOrNull(): String? = "https://appassets.androidplatform.net/element-call/index.html"
 
 actual fun platformNeedsControlledAudioDevices(): Boolean = true
+
+actual fun setSystemBarsVisibility(hide: Boolean) {
+    val activity = KoinPlatform.getKoin().get<Activity>()
+    val window = activity.window
+    val controller = WindowInsetsControllerCompat(window, window.decorView)
+    if (hide) {
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+    } else {
+        controller.show(WindowInsetsCompat.Type.systemBars())
+    }
+}
 
 actual class CameraPickerLauncher(
     private val fileKitLauncher: PhotoResultLauncher
