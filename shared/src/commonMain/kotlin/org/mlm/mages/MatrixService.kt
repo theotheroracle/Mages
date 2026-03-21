@@ -148,7 +148,7 @@ class MatrixService(
         mime: String,
         filename: String? = null,
         onProgress: ((Long, Long?) -> Unit)? = null
-    ) = runCatching { port.sendAttachmentFromPath(roomId, path, mime, filename, onProgress) }.getOrElse { false }
+    ): Boolean = port.sendAttachmentFromPath(roomId, path, mime, filename, onProgress)
 
     suspend fun recoverWithKey(recoveryKey: String) =
         runCatching { port.recoverWithKey(recoveryKey) }.getOrElse { false }

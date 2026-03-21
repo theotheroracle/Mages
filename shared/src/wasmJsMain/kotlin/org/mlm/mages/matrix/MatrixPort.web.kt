@@ -22,6 +22,8 @@ import org.mlm.mages.platform.retrieveWebBlob
 import org.mlm.mages.platform.navigatorOnLine
 import org.w3c.dom.url.URL
 import org.w3c.dom.events.Event
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.js.JsAny
 import kotlin.js.Promise
 
@@ -131,6 +133,24 @@ private suspend fun Promise<JsAny?>.awaitUnit(): Result<Unit> {
 
 private suspend fun Promise<JsAny?>.awaitAny(): JsAny? =
     await()
+
+@JsFun("""(base64) => {
+    const bin = atob(base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+}""")
+private external fun base64ToUint8Array(base64: String): JsAny
+
+@JsFun("(msg) => console.log(msg)")
+private external fun consoleLog(msg: String)
+
+@OptIn(ExperimentalEncodingApi::class)
+fun ByteArray.toJsUint8Array(): JsAny {
+    val b64 = Base64.Default.encode(this)
+    return base64ToUint8Array(b64)
+}
+
 
 @JsFun("""(url, redirectOrigin) => new Promise((resolve) => {
     const w = window.open(url, '_blank', 'width=600,height=700,popup=yes');
@@ -342,8 +362,8 @@ class WebStubMatrixPort : MatrixPort, VerificationService {
         body: String?,
         onProgress: ((Long, Long?) -> Unit)?
     ): Result<Unit> {
-        val ok = requireClient().sendExistingAttachment(roomId, wasmJson.encodeToString(attachment), body).awaitPlainBool()
-        return if (ok) Result.success(Unit) else Result.failure(Exception("Not supported on web"))
+        val result = requireClient().sendExistingAttachment(roomId, wasmJson.encodeToString(attachment), body).awaitResult()
+        return if (result.ok) Result.success(Unit) else Result.failure(Exception(result.error ?: "Send failed"))
     }
 
     override fun isLoggedIn(): Boolean = client?.isLoggedIn() == true
@@ -616,19 +636,21 @@ class WebStubMatrixPort : MatrixPort, VerificationService {
         onProgress: ((Long, Long?) -> Unit)?
     ): Boolean {
         val bytes = retrieveWebBlob(path)
-        if (bytes != null) {
-            clearWebBlob(path)
-            return sendAttachmentFromPath(roomId, path, mime, filename ?: path, onProgress)
+        if (bytes == null) {
+            throw Exception("Blob not found for path: $path")
         }
-        return false
+        clearWebBlob(path)
+        val result = requireClient().sendAttachmentBytes(roomId, filename ?: path, mime, bytes.toJsUint8Array()).awaitUnitResult()
+        return result.isSuccess
     }
 
     override suspend fun downloadAttachmentToCache(
         info: AttachmentInfo,
         filenameHint: String?
     ): Result<String> = runCatching {
-        (requireClient().downloadAttachmentToCacheFile(wasmJson.encodeToString(info), filenameHint).awaitString()
-            ?: error("Attachment download failed"))
+        val uri = requireClient().downloadAttachmentToCacheFile(wasmJson.encodeToString(info), filenameHint).awaitString()
+            ?: error("Attachment download failed")
+        uri
     }
 
     override suspend fun searchRoom(

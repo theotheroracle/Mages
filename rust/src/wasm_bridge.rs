@@ -27,7 +27,13 @@ use js_sys::Function;
 use matrix_sdk::authentication::oauth::UrlOrQuery;
 use matrix_sdk::authentication::oauth::registration::language_tags::LanguageTag;
 
-use matrix_sdk::ruma::events::room::{MediaSource, message::MessageType};
+use matrix_sdk::ruma::events::room::{
+    ImageInfo, MediaSource,
+    message::{
+        FileMessageEventContent, ImageMessageEventContent, MessageType, VideoInfo,
+        VideoMessageEventContent,
+    },
+};
 
 use matrix_sdk::ruma::events::{
     key::verification::request::ToDeviceKeyVerificationRequestEvent, receipt::SyncReceiptEvent,
@@ -45,10 +51,12 @@ use matrix_sdk::widget::{
 
 use matrix_sdk::{
     Client as SdkClient, Room, RoomDisplayName, RoomState,
+    attachment::AttachmentConfig,
     authentication::AuthSession,
     encryption::{BackupDownloadStrategy, EncryptionSettings},
     media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
 };
+use mime::Mime;
 
 use matrix_sdk_ui::{
     eyeball_im::{Vector, VectorDiff},
@@ -1785,42 +1793,200 @@ impl WasmClient {
     #[wasm_bindgen(js_name = sendExistingAttachment)]
     pub async fn send_existing_attachment(
         &self,
-        _room_id: String,
-        _att_json: String,
-        _body: Option<String>,
-    ) -> bool {
-        false // not supported on wasm
+        room_id: String,
+        att_json: String,
+        body: Option<String>,
+    ) -> JsValue {
+        let Some(state) = self.state() else {
+            return webffi_not_init();
+        };
+        let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            return webffi_err("invalid room_id");
+        };
+        let Some(room) = state.client().get_room(&rid) else {
+            return webffi_err("room not found");
+        };
+        let Ok(att): Result<AttachmentInfo, _> = serde_json::from_str(&att_json) else {
+            return webffi_err("invalid attachment JSON");
+        };
+        let default_caption = match att.kind {
+            AttachmentKind::Image => "Image",
+            AttachmentKind::Video => "Video",
+            AttachmentKind::File => "File",
+        };
+        let caption = body.unwrap_or_else(|| default_caption.to_string());
+        let media_source = if let Some(enc) = att.encrypted.as_ref() {
+            let Ok(ef): Result<matrix_sdk::ruma::events::room::EncryptedFile, _> =
+                serde_json::from_str(&enc.json)
+            else {
+                return webffi_err("invalid encrypted file JSON");
+            };
+            MediaSource::Encrypted(Box::new(ef))
+        } else {
+            MediaSource::Plain(att.mxc_uri.clone().into())
+        };
+        let msgtype = match att.kind {
+            AttachmentKind::Image => {
+                let mut info = ImageInfo::new();
+                info.mimetype = att.mime.clone();
+                info.size = att.size_bytes.and_then(matrix_sdk::ruma::UInt::new);
+                info.width = att.width.map(matrix_sdk::ruma::UInt::from);
+                info.height = att.height.map(matrix_sdk::ruma::UInt::from);
+                let mut img = ImageMessageEventContent::new(caption.clone(), media_source);
+                img.info = Some(Box::new(info));
+                MessageType::Image(img)
+            }
+            AttachmentKind::Video => {
+                let mut info = VideoInfo::new();
+                info.mimetype = att.mime.clone();
+                info.size = att.size_bytes.and_then(matrix_sdk::ruma::UInt::new);
+                info.width = att.width.map(matrix_sdk::ruma::UInt::from);
+                info.height = att.height.map(matrix_sdk::ruma::UInt::from);
+                info.duration = att.duration_ms.map(Duration::from_millis);
+                let mut vid = VideoMessageEventContent::new(caption.clone(), media_source);
+                vid.info = Some(Box::new(info));
+                MessageType::Video(vid)
+            }
+            AttachmentKind::File => {
+                let mut info = matrix_sdk::ruma::events::room::message::FileInfo::new();
+                info.mimetype = att.mime.clone();
+                info.size = att.size_bytes.and_then(matrix_sdk::ruma::UInt::new);
+                let mut file = FileMessageEventContent::new(caption.clone(), media_source);
+                file.info = Some(Box::new(info));
+                MessageType::File(file)
+            }
+        };
+        let content =
+            matrix_sdk::ruma::events::room::message::RoomMessageEventContent::new(msgtype);
+        let result = room.send(content).await.map(|_| ());
+        webffi_unit(result)
     }
 
     #[wasm_bindgen(js_name = sendAttachmentBytes)]
     pub async fn send_attachment_bytes(
         &self,
-        _room_id: String,
-        _filename: String,
-        _mime: String,
-        _data: Vec<u8>,
-    ) -> bool {
-        false // not supported on wasm yet
+        room_id: String,
+        filename: String,
+        mime: String,
+        data: Vec<u8>,
+    ) -> JsValue {
+        let Some(state) = self.state() else {
+            return webffi_not_init();
+        };
+        let Ok(rid) = OwnedRoomId::try_from(room_id) else {
+            return webffi_err("invalid room_id");
+        };
+        let Some(room) = state.client().get_room(&rid) else {
+            return webffi_err("room not found");
+        };
+
+        let mime_type: Mime = mime.parse().unwrap_or(mime::APPLICATION_OCTET_STREAM);
+
+        let upload_response = match state.client().media().upload(&mime_type, data, None).await {
+            Ok(resp) => resp,
+            Err(e) => return webffi_err(&format!("media upload failed: {}", e)),
+        };
+
+        let content = matrix_sdk::ruma::events::room::message::RoomMessageEventContent::new(
+            matrix_sdk::ruma::events::room::message::MessageType::File(
+                matrix_sdk::ruma::events::room::message::FileMessageEventContent::new(
+                    filename,
+                    MediaSource::Plain(upload_response.content_uri),
+                ),
+            ),
+        );
+
+        webffi_unit(room.send(content).await.map(|_| ()))
     }
 
     #[wasm_bindgen(js_name = downloadAttachmentToCacheFile)]
     pub async fn download_attachment_to_cache_file(
         &self,
-        _att_json: String,
+        att_json: String,
         _filename_hint: Option<String>,
     ) -> JsValue {
-        JsValue::NULL // not supported on wasm
+        let Some(state) = self.state() else {
+            return webffi_not_init();
+        };
+        let Ok(att): Result<AttachmentInfo, _> = serde_json::from_str(&att_json) else {
+            return webffi_err("invalid attachment JSON");
+        };
+        let source = if let Some(enc) = att.encrypted.as_ref() {
+            let Ok(ef): Result<matrix_sdk::ruma::events::room::EncryptedFile, _> =
+                serde_json::from_str(&enc.json)
+            else {
+                return webffi_err("invalid encrypted file JSON");
+            };
+            MediaSource::Encrypted(Box::new(ef))
+        } else {
+            MediaSource::Plain(att.mxc_uri.clone().into())
+        };
+        let req = MediaRequestParameters {
+            source,
+            format: MediaFormat::File,
+        };
+        match state.client().media().get_media_content(&req, true).await {
+            Ok(data) => {
+                let b64 = base64_encode(&data).unwrap_or_default();
+                let mime = att
+                    .mime
+                    .unwrap_or_else(|| "application/octet-stream".to_string());
+                JsValue::from_str(&format!("data:{};base64,{}", mime, b64))
+            }
+            Err(_) => JsValue::NULL,
+        }
     }
 
     #[wasm_bindgen(js_name = thumbnailToCache)]
     pub async fn thumbnail_to_cache(
         &self,
-        _att_json: String,
-        _width: u32,
-        _height: u32,
+        att_json: String,
+        width: u32,
+        height: u32,
         _use_crop: bool,
     ) -> JsValue {
-        JsValue::NULL // not supported on wasm
+        let Some(state) = self.state() else {
+            return JsValue::NULL;
+        };
+        let Ok(att): Result<AttachmentInfo, _> = serde_json::from_str(&att_json) else {
+            return JsValue::NULL;
+        };
+        let (mxc_uri, thumbnail_mxc) = if let Some(thumb) = att.thumbnail_mxc_uri.as_ref() {
+            (thumb.clone(), true)
+        } else {
+            (att.mxc_uri.clone(), false)
+        };
+        let source = if let Some(enc) = if thumbnail_mxc {
+            att.thumbnail_encrypted.as_ref()
+        } else {
+            att.encrypted.as_ref()
+        } {
+            let Ok(ef): Result<matrix_sdk::ruma::events::room::EncryptedFile, _> =
+                serde_json::from_str(&enc.json)
+            else {
+                return JsValue::NULL;
+            };
+            MediaSource::Encrypted(Box::new(ef))
+        } else {
+            MediaSource::Plain(mxc_uri.into())
+        };
+        let settings = MediaThumbnailSettings::new(width.into(), height.into());
+        let req = MediaRequestParameters {
+            source,
+            format: MediaFormat::Thumbnail(settings),
+        };
+        match state.client().media().get_media_content(&req, true).await {
+            Ok(data) => {
+                let b64 = base64_encode(&data).unwrap_or_default();
+                let mime = if data.starts_with(&[0x89, b'P', b'N', b'G']) {
+                    "image/png"
+                } else {
+                    "image/jpeg"
+                };
+                JsValue::from_str(&format!("data:{};base64,{}", mime, b64))
+            }
+            Err(_) => JsValue::NULL,
+        }
     }
 
     #[wasm_bindgen(js_name = mxcThumbnailToCache)]
