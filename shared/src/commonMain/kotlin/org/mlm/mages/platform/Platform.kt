@@ -18,6 +18,8 @@ expect fun platformEmbeddedElementCallUrlOrNull(): String?
 
 expect fun platformEmbeddedElementCallParentUrlOrNull(): String?
 
+expect fun platformNeedsControlledAudioDevices(): Boolean
+
 expect class CameraPickerLauncher {
     fun launch()
 }

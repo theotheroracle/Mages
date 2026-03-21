@@ -1809,6 +1809,7 @@ impl Client {
         room_id: String,
         element_call_url: Option<String>,
         parent_url: Option<String>,
+        use_controlled_audio_devices: bool,
         intent: ElementCallIntent,
         observer: Box<dyn CallWidgetObserver>,
         language_tag: Option<String>,
@@ -1845,7 +1846,7 @@ impl Client {
                 (ElementCallIntent::JoinExistingVoiceDm, _) => WidgetIntent::JoinExistingDmVoice,
             };
             let config = VirtualElementCallWidgetConfig {
-                controlled_audio_devices: Some(true),
+                controlled_audio_devices: Some(use_controlled_audio_devices),
                 preload: Some(false),
                 app_prompt: Some(false),
                 confine_to_room: Some(true),

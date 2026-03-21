@@ -15,6 +15,7 @@ import mages.Client as FfiClient
 import mages.RoomSummary as FfiRoom
 import org.mlm.mages.*
 import org.mlm.mages.platform.MagesPaths
+import org.mlm.mages.platform.platformNeedsControlledAudioDevices
 
 private inline fun <T> runWithFfiResult(block: () -> T): Result<T> =
     runCatching(block).recoverCatching { e ->
@@ -1448,6 +1449,7 @@ class RustMatrixPort : MatrixPort, VerificationService {
                     roomId,
                     elementCallUrl,
                     parentUrl,
+                    platformNeedsControlledAudioDevices(),
                     ffiIntent,
                     cb,
                     languageTag,

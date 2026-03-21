@@ -1,8 +1,12 @@
 package org.mlm.mages.platform
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.graphics.Color
 import android.graphics.Outline
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.Build
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
@@ -39,6 +43,52 @@ private val ELEMENT_SPECIFIC_ACTIONS = setOf(
     "minimize",
     "im.vector.hangup",
 )
+
+private fun setupAudioDeviceBridge(webView: WebView) {
+    val audioManager = webView.context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    
+    @Suppress("DEPRECATION")
+    fun getOutputDevices(): List<AudioDeviceInfo> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            audioManager.availableCommunicationDevices
+        } else {
+            audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter { it.isSink }
+        }
+    }
+    
+    val devices = getOutputDevices().map { device ->
+        val isSpeaker = device.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+        val isEarpiece = device.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+        val isExternalHeadset = device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                                device.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                                device.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES
+        val name = when (device.type) {
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "Built-in speaker"
+            AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "Built-in earpiece"
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "Bluetooth"
+            AudioDeviceInfo.TYPE_WIRED_HEADSET -> "Wired headset"
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "Wired headphones"
+            AudioDeviceInfo.TYPE_USB_HEADSET -> "USB headset"
+            AudioDeviceInfo.TYPE_USB_DEVICE -> "USB device"
+            AudioDeviceInfo.TYPE_USB_ACCESSORY -> "USB accessory"
+            else -> device.productName?.toString() ?: "Unknown"
+        }
+        """{"id":"${device.id}","name":"$name","isSpeaker":$isSpeaker,"isEarpiece":$isEarpiece,"isExternalHeadset":$isExternalHeadset}"""
+    }
+    
+    val devicesJson = "[${devices.joinToString(",")}]"
+    
+    webView.evaluateJavascript(
+        """
+        if (typeof controls !== 'undefined' && typeof controls.setAvailableOutputDevices === 'function') {
+            controls.setAvailableOutputDevices($devicesJson);
+        } else if (typeof controls !== 'undefined' && typeof controls.setAvailableAudioDevices === 'function') {
+            controls.setAvailableAudioDevices($devicesJson);
+        }
+        """.trimIndent(),
+        null
+    )
+}
 
 @SuppressLint("SetJavaScriptEnabled", "ComposableNaming")
 @Composable
@@ -286,6 +336,10 @@ actual fun CallWebViewHost(
                             """.trimIndent(),
                             null
                         )
+                        
+                        view.postDelayed({
+                            setupAudioDeviceBridge(view)
+                        }, 500)
                     }
 
                     override fun onPageFinished(view: WebView?, url: String?) {

@@ -46,6 +46,8 @@ actual fun platformEmbeddedElementCallUrlOrNull(): String? {
     }.getOrNull()
 }
 
+actual fun platformNeedsControlledAudioDevices(): Boolean = false
+
 actual class CameraPickerLauncher {
     private var onResult: ((PlatformFile?) -> Unit)? = null
 

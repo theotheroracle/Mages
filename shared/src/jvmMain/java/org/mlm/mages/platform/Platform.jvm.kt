@@ -39,6 +39,8 @@ actual fun platformEmbeddedElementCallUrlOrNull(): String? = ElementCallLocalSer
 
 actual fun platformEmbeddedElementCallParentUrlOrNull(): String? = ElementCallLocalServer.parentUrl()
 
+actual fun platformNeedsControlledAudioDevices(): Boolean = false
+
 actual class CameraPickerLauncher {
     actual fun launch() {
         // No-op

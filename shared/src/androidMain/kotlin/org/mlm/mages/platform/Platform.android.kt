@@ -71,6 +71,8 @@ actual fun platformEmbeddedElementCallUrlOrNull(): String? {
 
 actual fun platformEmbeddedElementCallParentUrlOrNull(): String? = "https://appassets.androidplatform.net/element-call/index.html"
 
+actual fun platformNeedsControlledAudioDevices(): Boolean = true
+
 actual class CameraPickerLauncher(
     private val fileKitLauncher: PhotoResultLauncher
 ) {

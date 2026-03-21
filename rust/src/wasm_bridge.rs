@@ -1940,7 +1940,7 @@ impl WasmClient {
             _ => WidgetIntent::JoinExisting,
         };
         let config = VirtualElementCallWidgetConfig {
-            controlled_audio_devices: Some(true),
+            controlled_audio_devices: None,
             preload: Some(false),
             app_prompt: Some(false),
             confine_to_room: Some(true),
