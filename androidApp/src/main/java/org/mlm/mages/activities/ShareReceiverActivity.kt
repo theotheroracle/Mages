@@ -383,7 +383,7 @@ private suspend fun sendSharedContent(
     try {
         when (content) {
             is SharedContent.Text -> {
-                port.send(roomId, content.text)
+                port.send(roomId, content.text).isSuccess
             }
             is SharedContent.SingleFile -> {
                 val tempFile = copyUriToTempFile(context, content.uri, content.fileName)
@@ -397,7 +397,7 @@ private suspend fun sendSharedContent(
                 tempFile.delete()
 
                 if (success && !content.caption.isNullOrBlank()) {
-                    port.send(roomId, content.caption)
+                    port.send(roomId, content.caption).isSuccess
                 } else success
             }
             is SharedContent.MultipleFiles -> {

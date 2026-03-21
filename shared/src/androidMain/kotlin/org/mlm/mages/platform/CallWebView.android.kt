@@ -111,9 +111,10 @@ actual fun CallWebViewHost(
                     return
                 }
 
-                val origin = "*" // HACK: Same as above
-                val script = "postMessage($message, '$origin')"
+                // echo-suppressed post
+                val script = "window.__MagesPostFromHost && window.__MagesPostFromHost($message) || postMessage($message, '*')" // HACK: Same as above (*)
                 webView.post {
+                    Log.d("WidgetBridge", "Sending to widget: $message")
                     webView.evaluateJavascript(script) { result ->
                         Log.d("WidgetBridge", "postMessage result: $result")
                     }
@@ -237,17 +238,51 @@ actual fun CallWebViewHost(
 
                         view.evaluateJavascript(
                             """
-                            window.addEventListener('message', function(event) {
-                                let message = {data: event.data, origin: event.origin}
-                                if (message.data.response && message.data.api == "toWidget"
-                                    || !message.data.response && message.data.api == "fromWidget") {
-                                    let json = JSON.stringify(event.data);
-                                    console.log('message sent: ' + json);
-                                    elementX.postMessage(json);
-                                } else {
-                                    console.log('message received (ignored): ' + JSON.stringify(event.data));
+                            (function () {
+                                if (window.__MagesBridgeInstalled) {
+                                    return;
                                 }
-                            });
+                                window.__MagesBridgeInstalled = true;
+                                
+                                window.__MagesEchoBlock = new Set();
+                                
+                                function keyFor(data) {
+                                    if (!data || typeof data !== 'object') return null;
+                                    return JSON.stringify({
+                                        api: data.api || null,
+                                        requestId: data.requestId || null,
+                                        action: data.action || null,
+                                        hasResponse: Object.prototype.hasOwnProperty.call(data, 'response')
+                                    });
+                                }
+                                
+                                window.__MagesPostFromHost = function(payload) {
+                                    const key = keyFor(payload);
+                                    if (key) window.__MagesEchoBlock.add(key);
+                                    window.postMessage(payload, '*');
+                                };
+                                
+                                window.addEventListener('message', function(ev) {
+                                    const data = ev.data;
+                                    if (!data || typeof data !== 'object') return;
+                                    
+                                    const key = keyFor(data);
+                                    if (key && window.__MagesEchoBlock.delete(key)) {
+                                        return;
+                                    }
+                                    
+                                    const hasResponse = Object.prototype.hasOwnProperty.call(data, 'response');
+                                    const shouldForward = 
+                                        (!hasResponse && data.api === 'fromWidget') ||
+                                        (hasResponse && data.api === 'toWidget');
+                                    
+                                    if (!shouldForward) return;
+                                    
+                                    if (typeof elementX !== 'undefined' && elementX.postMessage) {
+                                        elementX.postMessage(JSON.stringify(data));
+                                    }
+                                });
+                            })();
                             """.trimIndent(),
                             null
                         )
@@ -258,7 +293,14 @@ actual fun CallWebViewHost(
                         Log.d("WidgetBridge", "Page finished: $url")
 
                         view?.evaluateJavascript(
-                            "controls.onBackButtonPressed = () => { elementX.postMessage(JSON.stringify({api:'fromWidget',action:'minimize'})) }",
+                            """
+                            if (typeof controls !== 'undefined') {
+                                controls.onBackButtonPressed = function() {
+                                    window.__MagesPostFromHost && window.__MagesPostFromHost(JSON.stringify({api:'fromWidget',action:'minimize'})) || 
+                                    elementX.postMessage(JSON.stringify({api:'fromWidget',action:'minimize'}));
+                                };
+                            }
+                            """.trimIndent(),
                             null
                         )
                     }

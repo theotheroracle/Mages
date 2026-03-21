@@ -24,7 +24,6 @@ package org.mlm.mages.platform
 private external fun ensureEcState()
 
 @JsFun("""(containerId, widgetUrl, onMessage) => {
-    globalThis._ec || (globalThis._ec = {iframe:null,listener:null,onMsg:null,container:null,isWidget:function(d){return !!d&&typeof d==='object'&&((d.response&&d.api==='toWidget')||(!d.response&&d.api==='fromWidget'))},applyState:function(m){var c=globalThis._ec.container;if(!c)return;c.style.cssText=m?'position:fixed;width:220px;height:140px;top:120px;left:24px;z-index:999999;border-radius:16px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,0.35);background:#000':'position:fixed;top:0;left:0;right:0;bottom:0;width:100vw;height:100vh;z-index:999999;border-radius:0;overflow:visible;box-shadow:none;background:#000'}});
     var ec = globalThis._ec;
     if (ec.iframe) {
         if (ec.listener) { window.removeEventListener('message', ec.listener); ec.listener = null; }
@@ -57,11 +56,20 @@ private external fun ensureEcState()
     window.addEventListener('message', ec.listener);
     return true;
 }""")
-external fun createElementCallIframe(
+private external fun createElementCallIframeInternal(
     containerId: String,
     widgetUrl: String,
     onMessage: (String) -> Unit
 ): Boolean
+
+fun createElementCallIframe(
+    containerId: String,
+    widgetUrl: String,
+    onMessage: (String) -> Unit
+): Boolean {
+    ensureEcState()
+    return createElementCallIframeInternal(containerId, widgetUrl, onMessage)
+}
 
 @JsFun("""(message) => {
     var ec = globalThis._ec; if (!ec) return false;

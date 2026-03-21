@@ -94,8 +94,6 @@ private class JcefCallWebViewController(
     suspend fun load(url: String) {
         if (urlLoaded.get() == url || disposed.get()) return
 
-        println("[JcefCallWebView] Loading widget URL: $url")
-
         // if first time
         val needsDownload = !JcefRuntime.isInitialized()
         var infoDialog: JDialog? = null
@@ -198,7 +196,6 @@ private class JcefCallWebViewController(
 
             onMessageFromWidget(message)
         } catch (e: Exception) {
-            println("[JcefCallWebView] Error parsing message: ${e.message}")
             onMessageFromWidget(message)
         }
     }
@@ -214,40 +211,34 @@ private class JcefCallWebViewController(
             response.put("action", original.optString("action"))
             response.put("response", JSONObject())
 
-            val responseStr = response.toString()
-            println("[JcefCallWebView] Sending Element response: $responseStr")
-            postMessageToWidget(responseStr)
-        } catch (e: Exception) {
-            println("[JcefCallWebView] Failed to send response: ${e.message}")
-            e.printStackTrace()
+            postMessageToWidget(response.toString())
+        } catch (_: Exception) {
         }
     }
 
     override fun sendToWidget(message: String) {
         if (disposed.get()) return
-        println("[JcefCallWebView] Native → Widget: ${message.take(300)}")
         postMessageToWidget(message)
     }
 
     private fun postMessageToWidget(jsonMessage: String) {
         val b = browser ?: run {
-            println("[JcefCallWebView] Browser null, queueing message")
             pendingToWidget.add(jsonMessage)
             return
         }
 
         val f = b.mainFrame ?: run {
-            println("[JcefCallWebView] Frame null, queueing message")
             pendingToWidget.add(jsonMessage)
             return
         }
 
-        val js = "postMessage($jsonMessage, '*')"
+        val js = "window.__MagesPostFromHost && window.__MagesPostFromHost($jsonMessage) || postMessage($jsonMessage, '*')"
         f.executeJavaScript(js, b.url ?: "", 0)
     }
 
     private fun createBrowserInFrame(app: CefApp) {
         val cl = app.createClient()
+        
         val routerCfg = CefMessageRouter.CefMessageRouterConfig("elementX", "elementXCancel")
         val r = CefMessageRouter.create(routerCfg)
 
@@ -271,7 +262,6 @@ private class JcefCallWebViewController(
         cl.addLoadHandler(object : CefLoadHandlerAdapter() {
             override fun onLoadStart(browser: CefBrowser, frame: CefFrame, transitionType: CefRequest.TransitionType) {
                 if (!frame.isMain) return
-                println("[JcefCallWebView] onLoadStart: ${frame.url}")
                 if (frame.url != "about:blank") {
                     injectBridge(frame)
                 }
@@ -279,7 +269,6 @@ private class JcefCallWebViewController(
 
             override fun onLoadEnd(browser: CefBrowser, frame: CefFrame, httpStatusCode: Int) {
                 if (!frame.isMain) return
-                println("[JcefCallWebView] onLoadEnd: ${frame.url} (status: $httpStatusCode)")
                 if (frame.url == "about:blank") {
                     browserReady.countDown()
                 } else {
@@ -295,7 +284,6 @@ private class JcefCallWebViewController(
                 errorText: String,
                 failedUrl: String
             ) {
-                println("[JcefCallWebView] onLoadError: $failedUrl - $errorText")
                 if (frame.isMain) browserReady.countDown()
             }
         })
@@ -308,7 +296,6 @@ private class JcefCallWebViewController(
                 source: String,
                 line: Int
             ): Boolean {
-                println("[WebViewConsole] [$level] $source:$line $message")
                 return false
             }
         })
@@ -348,19 +335,63 @@ private class JcefCallWebViewController(
     }
 
     private fun injectBridge(frame: CefFrame) {
-        // This is the original working bridge - only intercepts fromWidget requests
         val js = """
-            window.addEventListener('message', function(event) {
-                let message = {data: event.data, origin: event.origin};
-                if (message.data.response && message.data.api == "toWidget"
-                    || !message.data.response && message.data.api == "fromWidget") {
-                    let json = JSON.stringify(event.data);
-                    elementX({request: json, persistent: false, onSuccess: function(){}, onFailure: function(){}});
+            (function () {
+                // One-time install guard (IMP)
+                if (window.__MagesBridgeInstalled) {
+                    return;
                 }
-            });
+                window.__MagesBridgeInstalled = true;
+                
+                // Echo suppression set
+                window.__MagesEchoBlock = new Set();
+                
+                function keyFor(data) {
+                    if (!data || typeof data !== 'object') return null;
+                    return JSON.stringify({
+                        api: data.api || null,
+                        requestId: data.requestId || null,
+                        action: data.action || null,
+                        hasResponse: Object.prototype.hasOwnProperty.call(data, 'response')
+                    });
+                }
+                
+                // Called by native to send messages TO the widget
+                window.__MagesPostFromHost = function(payload) {
+                    const key = keyFor(payload);
+                    if (key) window.__MagesEchoBlock.add(key);
+                    window.postMessage(payload, '*');
+                };
+                
+                // Listen for messages FROM the widget
+                window.addEventListener('message', function(ev) {
+                    const data = ev.data;
+                    if (!data || typeof data !== 'object') return;
+                    
+                    const key = keyFor(data);
+                    // Check if this is an echoed host message - if so, consume it
+                    if (key && window.__MagesEchoBlock.delete(key)) {
+                        return;
+                    }
+                    
+                    // Forward widget→host requests and responses
+                    const hasResponse = Object.prototype.hasOwnProperty.call(data, 'response');
+                    const shouldForward = 
+                        (!hasResponse && data.api === 'fromWidget') ||
+                        (hasResponse && data.api === 'toWidget');
+                    
+                    if (!shouldForward) return;
+                    
+                    if (typeof elementX === 'function') {
+                        elementX({
+                            request: JSON.stringify(data),
+                            persistent: false
+                        });
+                    }
+                });
+            })();
         """.trimIndent()
 
-        println("[JcefCallWebView] Injecting bridge into frame: ${frame.url}")
         frame.executeJavaScript(js, frame.url, 0)
     }
 
@@ -382,7 +413,6 @@ private class JcefCallWebViewController(
     }
 
     private fun flushPendingToWidget() {
-        println("[JcefCallWebView] Flushing ${pendingToWidget.size} pending messages")
         while (true) {
             val msg = pendingToWidget.poll() ?: break
             postMessageToWidget(msg)

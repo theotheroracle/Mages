@@ -114,7 +114,6 @@ class RustMatrixPort : MatrixPort, VerificationService {
             }
 
             override fun onError(message: String) {
-                println("Err: $message")
             }
         }
 
@@ -893,7 +892,6 @@ class RustMatrixPort : MatrixPort, VerificationService {
         name: String?, topic: String?, invitees: List<String>, isPublic: Boolean, roomAlias: String?
     ): String? = withContext(Dispatchers.IO) {
         runWithFfiResult { withClient { it.createRoom(name, topic, invitees, isPublic, roomAlias) } }
-            .onFailure { println("createRoom failed: ${it.message}") }
             .getOrNull()
     }
 
@@ -1446,7 +1444,6 @@ class RustMatrixPort : MatrixPort, VerificationService {
 
         runCatching {
             withClient { cl ->
-                println("[MatrixPort] startElementCall: elementCallUrl=$elementCallUrl, parentUrl=$parentUrl, intent=$ffiIntent")
                 val info = cl.startElementCall(
                     roomId,
                     elementCallUrl,
@@ -1456,7 +1453,6 @@ class RustMatrixPort : MatrixPort, VerificationService {
                     languageTag,
                     theme
                 )
-                println("[MatrixPort] startElementCall result: widgetUrl=${info.widgetUrl}, widgetBaseUrl=${info.widgetBaseUrl}, parentUrl=${info.parentUrl}")
                 CallSession(
                     sessionId = info.sessionId,
                     widgetUrl = info.widgetUrl,

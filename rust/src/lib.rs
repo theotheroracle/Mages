@@ -1920,7 +1920,7 @@ impl Client {
             .get(&session_id)
             .cloned()
         {
-            spawn_detached!(async move {
+            let _ = RT.block_on(async {
                 let _ = handle.send(message).await;
             });
             true
