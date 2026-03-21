@@ -113,6 +113,18 @@ js_observer_json!(JsCallWidgetObserver: CallWidgetObserver::on_to_widget, messag
 js_observer_json!(JsRecoveryStateObserver: RecoveryStateObserver::on_update, state: RecoveryState);
 js_observer_json!(JsBackupStateObserver: BackupStateObserver::on_update, state: BackupState);
 
+struct JsWidgetObserver(Function);
+impl JsWidgetObserver {
+    fn new(f: Function) -> Self {
+        Self(f)
+    }
+    fn on_to_widget(&self, msg: &str) {
+        let _ = self.0.call1(&JsValue::NULL, &JsValue::from_str(msg));
+    }
+}
+unsafe impl Send for JsWidgetObserver {}
+unsafe impl Sync for JsWidgetObserver {}
+
 struct JsTimelineObserver(Function, Function);
 impl TimelineObserver for JsTimelineObserver {
     fn on_diff(&self, diff: TimelineDiffKind) {
@@ -1892,6 +1904,7 @@ impl WasmClient {
         intent: String,
         language_tag: Option<String>,
         theme: Option<String>,
+        observer: JsValue,
     ) -> JsValue {
         let Some(state) = self.state() else {
             return JsValue::NULL;
@@ -1944,6 +1957,7 @@ impl WasmClient {
         };
         let widget_base_url = settings.base_url().map(|u| u.to_string());
         let (driver, handle) = WidgetDriver::new(settings);
+        let handle_for_recv = handle.clone();
         state.widget_handles.borrow_mut().insert(session_id, handle);
 
         let cap_provider = crate::ElementCallCapabilitiesProvider {};
@@ -1964,6 +1978,26 @@ impl WasmClient {
             )
             .await;
         });
+
+        if let Some(obs_fn) = observer.dyn_into::<Function>().ok() {
+            let widget_obs = JsWidgetObserver::new(obs_fn);
+            let (ah_recv, ar_recv) = AbortHandle::new_pair();
+            state
+                .widget_driver_subs
+                .borrow_mut()
+                .insert(session_id + 1, ah_recv);
+            wasm_bindgen_futures::spawn_local(async move {
+                let _ = Abortable::new(
+                    async move {
+                        while let Some(msg) = handle_for_recv.recv().await {
+                            widget_obs.on_to_widget(&msg);
+                        }
+                    },
+                    ar_recv,
+                )
+                .await;
+            });
+        }
 
         to_json(&CallSessionInfo {
             session_id,

@@ -33,6 +33,9 @@ private external fun jsCallback0(fn: () -> Unit): JsAny
 @JsFun("(fn) => function(a) { return fn(a); }")
 private external fun jsCallback1(fn: (JsAny?) -> Unit): JsAny
 
+@JsFun("(fn) => function(msg) { fn(msg); }")
+private external fun jsWidgetObserver(fn: (String) -> Unit): JsAny
+
 @JsFun("(arr) => arr")
 private external fun jsArrayPassthrough(arr: JsAny): JsAny
 
@@ -1186,13 +1189,17 @@ class WebStubMatrixPort : MatrixPort, VerificationService {
         theme: String?,
         observer: CallWidgetObserver
     ): CallSession? {
+        val jsObserver = jsWidgetObserver { msg: String ->
+            observer.onToWidget(msg)
+        }
         val result = requireClient().startElementCall(
             roomId,
             elementCallUrl,
             parentUrl,
             intent.name,
             languageTag,
-            theme
+            theme,
+            jsObserver
         ).await<JsAny?>()
 
         return decodeValueOrNull<CallSession>(result, "startElementCall")
