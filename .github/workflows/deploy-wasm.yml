@@ -3,7 +3,7 @@ name: wasmJs Pages
 on:
   push:
     branches:
-      - web-new-3
+      - main
   workflow_dispatch:
 
 concurrency:
