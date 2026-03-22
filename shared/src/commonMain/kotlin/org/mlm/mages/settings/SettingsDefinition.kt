@@ -90,6 +90,15 @@ data class AppSettings(
     val showUsernameInDms: Boolean = false,
 
     @Setting(
+        title = "Message bubble animations",
+        description = "Animate messages as they appear",
+        category = Appearance::class,
+        type = Toggle::class,
+        platforms = [SettingPlatform.ANDROID]
+    )
+    val bubbleAnimations: Boolean = true,
+
+    @Setting(
         title = "Chat bubbles",
         description = "Open system settings to enable (or disable) conversation bubbles",
         category = Notifications::class,

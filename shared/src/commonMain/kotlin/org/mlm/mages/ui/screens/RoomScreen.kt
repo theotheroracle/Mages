@@ -627,7 +627,8 @@ fun RoomScreen(
                                             highlightedEventId = state.highlightedEventId,
                                             viewModel = viewModel,
                                             showMessageAvatars = settings.showMessageAvatars,
-                                            showUsernameInDms = settings.showUsernameInDms
+                                            showUsernameInDms = settings.showUsernameInDms,
+                                            enableBubbleAnimations = settings.bubbleAnimations
                                         )
                                     }
                                 }
@@ -1129,6 +1130,7 @@ private fun MessageItem(
     viewModel: RoomViewModel,
     showMessageAvatars: Boolean,
     showUsernameInDms: Boolean,
+    enableBubbleAnimations: Boolean = true,
 ) {
     val timestamp = event.timestampMs
 
@@ -1277,7 +1279,7 @@ private fun MessageItem(
                     .background(
                         MaterialTheme.colorScheme.primary.copy(alpha = 0.14f * highlightAlpha)
                     )
-                    .animateContentSize()
+                    .then(if (enableBubbleAnimations) Modifier.animateContentSize() else Modifier)
             ) {
                 MessageBubble(
                     model = MessageBubbleModel(
