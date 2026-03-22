@@ -15,7 +15,7 @@ expect object Notifier {
 }
 
 @Composable
-expect fun BindLifecycle(service: MatrixService)
+expect fun BindLifecycle(service: MatrixService, resetSyncState: Boolean = true)
 
 @Composable
 expect fun BindNotifications(service: MatrixService, settingsRepository: SettingsRepository<AppSettings>)

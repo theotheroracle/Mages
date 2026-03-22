@@ -51,7 +51,7 @@ actual object Notifier {
 }
 
 @Composable
-actual fun BindLifecycle(service: MatrixService) {
+actual fun BindLifecycle(service: MatrixService, resetSyncState: Boolean) {
     // no-op here
 }
 

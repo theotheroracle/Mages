@@ -40,7 +40,7 @@ actual object Notifier {
 }
 
 @Composable
-actual fun BindLifecycle(service: MatrixService) {
+actual fun BindLifecycle(service: MatrixService, resetSyncState: Boolean) {
     DisposableEffect(service) {
         val focusHandler: (Event) -> Unit = {
             Notifier.setWindowFocused(true)

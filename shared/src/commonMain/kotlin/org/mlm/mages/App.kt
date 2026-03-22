@@ -164,7 +164,7 @@ private fun AppContent(
                 onRequestVideoCallPermissions
             )
 
-            BindLifecycle(service)
+            BindLifecycle(service, resetSyncState = true)
 
             LaunchedEffect(activeId) {
                 if (activeId == null || !service.isLoggedIn()) {
@@ -186,8 +186,8 @@ private fun AppContent(
             }
 
             LaunchedEffect(activeId) {
-                service.resetSyncState()
                 if (activeId == null || !service.isLoggedIn()) return@LaunchedEffect
+                service.resetSyncState()
                 service.startSupervisedSync()
             }
 

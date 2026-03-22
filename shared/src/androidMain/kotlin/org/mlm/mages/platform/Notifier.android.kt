@@ -18,7 +18,6 @@ import io.github.mlmgames.settings.core.SettingsRepository
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.koin.core.context.GlobalContext
 import org.mlm.mages.MatrixService
@@ -51,7 +50,7 @@ actual object Notifier {
             }
         }
 
-        val activeCount = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val activeCount = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             mgr.activeNotifications.count { it.notification.channelId == CHANNEL_ID }
         } else 0
 
@@ -95,7 +94,7 @@ actual object Notifier {
 }
 
 @Composable
-actual fun BindLifecycle(service: MatrixService) {
+actual fun BindLifecycle(service: MatrixService, resetSyncState: Boolean) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
 
@@ -104,18 +103,19 @@ actual fun BindLifecycle(service: MatrixService) {
 
             override fun onStart(owner: LifecycleOwner) {
                 scope.launch {
-                    runCatching { service.initFromDisk() }
+                    SessionBootstrapper.ensureSessionReady(service)
 
-                    val port = service.portOrNull ?: return@launch
-                    if (!service.isLoggedIn()) return@launch
+                    if (service.isLoggedIn() && service.portOrNull != null) {
+                        runCatching { service.portOrNull?.enterForeground() }
+                        if (resetSyncState) {
+                            runCatching { service.resetSyncState() }
+                            runCatching { service.startSupervisedSync() }
+                        }
 
-                    runCatching { port.enterForeground() }
-                    runCatching { service.resetSyncState() }
-                    runCatching { service.startSupervisedSync() }
-
-                    val ctx = runCatching { GlobalContext.get().get<Context>() }.getOrNull()
-                    if (ctx != null) {
-                        runCatching { PusherReconciler.ensureServerPusherRegistered(ctx, PREF_INSTANCE) }
+                        val ctx = runCatching { GlobalContext.get().get<Context>() }.getOrNull()
+                        if (ctx != null) {
+                            runCatching { PusherReconciler.ensureServerPusherRegistered(ctx, PREF_INSTANCE) }
+                        }
                     }
                 }
             }
