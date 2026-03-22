@@ -5,7 +5,7 @@ Mages is an experimental matrix chat client.
 - UI: [Compose Multiplatform](https://www.jetbrains.com/lp/compose-multiplatform/)
 - Core: a Rust library built on top of [matrix-rust-sdk](https://github.com/matrix-org/matrix-rust-sdk), exposed to Kotlin via UniFFI (not using matrix-sdk-ffi)
 
-The goal was to have a cross‑platform desktop/mobile client, while not being as heavy as web apps (initially there were very few alternatives to element-desktop which notify, with proper screen-sharing support and that stay hidden in my tray (unlike neochat, though it has linux-specific push notifs via kunifiedpush, while this currently polls)). Although it might occasionally appear stable, it is never aiming to be as stable as element's clients (or other clients like fluffy or fractal with a proper user-focused goal)
+The goal was to have a cross‑platform desktop/mobile client, while not being as heavy as web apps (initially there were very few alternatives to element-desktop which notify, with proper screen-sharing support and that stay hidden in my tray (unlike neochat, though it has linux-specific push notifs via kunifiedpush, while this currently polls)). Although it might occasionally appear stable, it is never aiming to be as stable as element's clients (or other clients like fluffy or fractal which seem to have a user-focused goal)
 
 ## Status 
 
@@ -16,7 +16,7 @@ This is experimental‑stage software. It is still in it's early stages, and mig
 - Room list with previews and unread counts
 - Room and thread timelines (text, media, polls, live-location sharing)
 - End‑to‑end encryption (via matrix‑sdk)
-- Full Spaces support
+- Spaces support
 - Simple presence / privacy settings
 - Android app and Linux desktop builds (Available on/as FDroid, AppImage (updatable via `Gear Lever` for example), AUR (`mages-bin`), snapcraft and flathub)
 - Unsigned Windows and Mac builds
@@ -33,7 +33,7 @@ This is experimental‑stage software. It is still in it's early stages, and mig
   - Also downloadable via AUR and snap-store.
 
 - **Other platforms**  
-  - The UI is Compose Multiplatform. In practice, only Android and Linux's AppImages are actively tested. Windows and Mac are tested rarely and are not signed/notarized. Web is theortically possible via wasm-bindgen, but should be kinda hard to maintain.
+  - The UI is Compose Multiplatform. In practice, only Android and Linux's AppImages are actively tested. Windows and Mac are tested rarely and are not signed/notarized. [Web](mlm-games.github.io/Mages) works, but isn't supposed to have feature parity (no notifications), and mostly useful for testing latest changes live or previewing the app.
 
 ## Architecture
 
@@ -55,7 +55,7 @@ Most Matrix‑specific logic lives in Rust; Kotlin mostly handles presentation.
 - JDK 21
 - Kotlin/Gradle
 - Rust toolchain (stable)
-- On Android:
+- For Android:
   - Android SDK + NDK (see `android-release` workflow for versions)
   - `cargo-ndk` (for building the Rust library for Android ABIs)
 
