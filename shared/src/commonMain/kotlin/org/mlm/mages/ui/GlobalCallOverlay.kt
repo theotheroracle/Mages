@@ -20,7 +20,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import org.mlm.mages.calls.CallManager
 import org.mlm.mages.platform.CallWebViewHost
-import org.mlm.mages.platform.setSystemBarsVisibility
+import org.mlm.mages.platform.SystemBarsEffect
 import kotlin.math.roundToInt
 
 @Composable
@@ -32,15 +32,7 @@ fun GlobalCallOverlay(
 
     val s = call ?: return
 
-    LaunchedEffect(s.minimized) {
-        setSystemBarsVisibility(!s.minimized)
-    }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            setSystemBarsVisibility(false)
-        }
-    }
+    SystemBarsEffect(hide = !s.minimized)
 
     BoxWithConstraints(modifier.fillMaxSize()) {
         val maxWidth = constraints.maxWidth.toFloat()

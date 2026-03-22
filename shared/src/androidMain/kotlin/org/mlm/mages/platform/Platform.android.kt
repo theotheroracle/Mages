@@ -3,13 +3,16 @@ package org.mlm.mages.platform
 import android.app.Activity
 import android.app.PictureInPictureParams
 import android.content.Context
+import android.content.ContextWrapper
 import android.os.Build
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.github.vinceglb.filekit.FileKit
@@ -75,14 +78,22 @@ actual fun platformEmbeddedElementCallParentUrlOrNull(): String? = "https://appa
 
 actual fun platformNeedsControlledAudioDevices(): Boolean = true
 
-actual fun setSystemBarsVisibility(hide: Boolean) {
-    val activity = KoinPlatform.getKoin().get<Activity>()
-    val window = activity.window
-    val controller = WindowInsetsControllerCompat(window, window.decorView)
-    if (hide) {
-        controller.hide(WindowInsetsCompat.Type.systemBars())
-    } else {
-        controller.show(WindowInsetsCompat.Type.systemBars())
+@Composable
+actual fun SystemBarsEffect(hide: Boolean) {
+    val context = LocalContext.current
+    val view = LocalView.current
+
+    DisposableEffect(hide) {
+        val activity = context.findActivity() ?: return@DisposableEffect onDispose {}
+        val controller = WindowInsetsControllerCompat(activity.window, view)
+        if (hide) {
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
     }
 }
 
@@ -124,3 +135,9 @@ actual suspend fun PlatformFile.toAttachmentData(): AttachmentData =
             sourceKind = AttachmentSourceKind.LocalPath
         )
     }
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}

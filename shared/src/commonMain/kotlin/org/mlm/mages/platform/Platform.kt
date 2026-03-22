@@ -20,7 +20,8 @@ expect fun platformEmbeddedElementCallParentUrlOrNull(): String?
 
 expect fun platformNeedsControlledAudioDevices(): Boolean
 
-expect fun setSystemBarsVisibility(hide: Boolean)
+@Composable
+expect fun SystemBarsEffect(hide: Boolean)
 
 expect class CameraPickerLauncher {
     fun launch()

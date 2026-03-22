@@ -48,8 +48,9 @@ actual fun platformEmbeddedElementCallUrlOrNull(): String? {
 
 actual fun platformNeedsControlledAudioDevices(): Boolean = false
 
-actual fun setSystemBarsVisibility(hide: Boolean) {
-    // No-op
+@Composable
+actual fun SystemBarsEffect(hide: Boolean) {
+    // No-op on web
 }
 
 actual class CameraPickerLauncher {
