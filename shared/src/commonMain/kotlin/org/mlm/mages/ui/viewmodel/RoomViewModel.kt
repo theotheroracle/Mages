@@ -114,6 +114,18 @@ class RoomViewModel(
     private val settings = settingsRepo.flow
         .stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
 
+    private companion object {
+        const val MESSAGE_INFO_READERS_LIMIT = 100
+    }
+
+    private var messageInfoRequestVersion: Long = 0L
+
+    private fun isCurrentMessageInfoRequest(version: Long, eventId: String): Boolean {
+        return version == messageInfoRequestVersion &&
+                currentState.showMessageInfo &&
+                currentState.messageInfoEvent?.eventId == eventId
+    }
+
     init {
         initialize()
     }
@@ -486,25 +498,71 @@ class RoomViewModel(
     }
 
     fun showMessageInfo(event: MessageEvent) {
-        updateState { copy(showMessageInfo = true, messageInfoEvent = event) }
-        if (event.eventId.isBlank()) {
-            updateState { copy(messageInfoEntries = emptyList()) }
-            return
+        val requestVersion = ++messageInfoRequestVersion
+        val canLoadReceipts = event.eventId.isNotBlank()
+        val roomId = currentState.roomId
+        val eventId = event.eventId
+
+        updateState {
+            copy(
+                showMessageInfo = true,
+                messageInfoEvent = event,
+                isLoadingMessageInfo = canLoadReceipts,
+                messageInfoError = null,
+                messageInfoEntries = emptyList(),
+                messageInfoReadersTruncated = false,
+            )
         }
+
+        if (!canLoadReceipts) return
+
         launch {
-            val entries = runSafe {
-                service.port.seenByForEvent(currentState.roomId, event.eventId, 20)
-            } ?: emptyList()
-            updateState { copy(messageInfoEntries = entries) }
+            val result = runCatching {
+                service.port.seenByForEvent(roomId, eventId, MESSAGE_INFO_READERS_LIMIT)
+            }
+
+            if (!isCurrentMessageInfoRequest(requestVersion, eventId)) return@launch
+
+            result
+                .onSuccess { entries ->
+                    val sorted = entries.sortedByDescending { it.tsMs?.toLong() ?: 0L }
+                    updateState {
+                        copy(
+                            isLoadingMessageInfo = false,
+                            messageInfoError = null,
+                            messageInfoEntries = sorted,
+                            messageInfoReadersTruncated = sorted.size >= MESSAGE_INFO_READERS_LIMIT,
+                        )
+                    }
+                    resolveMessageInfoAvatars(sorted)
+                }
+                .onFailure { error ->
+                    updateState {
+                        copy(
+                            isLoadingMessageInfo = false,
+                            messageInfoError = error.message ?: "Failed to load read receipts",
+                            messageInfoEntries = emptyList(),
+                            messageInfoReadersTruncated = false,
+                        )
+                    }
+                }
         }
     }
 
+    fun retryMessageInfo() {
+        currentState.messageInfoEvent?.let(::showMessageInfo)
+    }
+
     fun hideMessageInfo() {
+        messageInfoRequestVersion++
         updateState {
             copy(
                 showMessageInfo = false,
                 messageInfoEvent = null,
-                messageInfoEntries = emptyList()
+                isLoadingMessageInfo = false,
+                messageInfoError = null,
+                messageInfoEntries = emptyList(),
+                messageInfoReadersTruncated = false,
             )
         }
     }
@@ -1533,6 +1591,18 @@ class RoomViewModel(
                 entry.copy(avatarUrl = service.avatars.resolve(entry.avatarUrl, px = 64, crop = true))
             }
             updateState { copy(seenByEntries = resolvedEntries) }
+        }
+    }
+
+    private fun resolveMessageInfoAvatars(entries: List<SeenByEntry>) {
+        entries.forEach { entry ->
+            resolveAvatar(service, entry.avatarUrl, 64) { path ->
+                copy(
+                    messageInfoEntries = messageInfoEntries.map { current ->
+                        if (current.userId == entry.userId) current.copy(avatarUrl = path) else current
+                    }
+                )
+            }
         }
     }
 

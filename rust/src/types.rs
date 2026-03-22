@@ -2,7 +2,7 @@ use matrix_sdk::{PredecessorRoom, SuccessorRoom};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
-use uniffi::{Enum, Record, export};
+use uniffi::{export, Enum, Record};
 
 use crate::RT;
 
@@ -91,6 +91,7 @@ pub struct EncFile {
 pub struct AttachmentInfo {
     pub kind: AttachmentKind,
     pub mxc_uri: String,
+    pub file_name: Option<String>,
     pub mime: Option<String>,
     pub size_bytes: Option<u64>,
     pub width: Option<u32>,

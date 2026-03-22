@@ -2997,6 +2997,7 @@ fn extract_attachment(msg: &matrix_sdk_ui::timeline::Message) -> Option<Attachme
         MT::Image(c) => {
             // main image source
             let (mxc_uri, encrypted) = split_source(&c.source);
+            let file_name = Some(c.filename.clone().unwrap_or_else(|| c.body.clone()));
 
             // metadata + thumbnail
             let (w, h, size, mime, thumb_mxc, thumb_enc) = c
@@ -3018,6 +3019,7 @@ fn extract_attachment(msg: &matrix_sdk_ui::timeline::Message) -> Option<Attachme
             Some(AttachmentInfo {
                 kind: AttachmentKind::Image,
                 mxc_uri,
+                file_name,
                 mime,
                 size_bytes: size,
                 width: w,
@@ -3031,6 +3033,7 @@ fn extract_attachment(msg: &matrix_sdk_ui::timeline::Message) -> Option<Attachme
 
         MT::Video(c) => {
             let (mxc_uri, encrypted) = split_source(&c.source);
+            let file_name = Some(c.filename.clone().unwrap_or_else(|| c.body.clone()));
 
             let (w, h, size, mime, dur, thumb_mxc, thumb_enc) = c
                 .info
@@ -3052,6 +3055,7 @@ fn extract_attachment(msg: &matrix_sdk_ui::timeline::Message) -> Option<Attachme
             Some(AttachmentInfo {
                 kind: AttachmentKind::Video,
                 mxc_uri: mxc_uri.clone(),
+                file_name,
                 mime,
                 size_bytes: size,
                 width: w,
@@ -3066,6 +3070,7 @@ fn extract_attachment(msg: &matrix_sdk_ui::timeline::Message) -> Option<Attachme
 
         MT::File(c) => {
             let (mxc_uri, encrypted) = split_source(&c.source);
+            let file_name = Some(c.filename.clone().unwrap_or_else(|| c.body.clone()));
 
             let (size, mime, thumb_mxc, thumb_enc) = c
                 .info
@@ -3084,6 +3089,7 @@ fn extract_attachment(msg: &matrix_sdk_ui::timeline::Message) -> Option<Attachme
             Some(AttachmentInfo {
                 kind: AttachmentKind::File,
                 mxc_uri,
+                file_name,
                 mime,
                 size_bytes: size,
                 width: None,

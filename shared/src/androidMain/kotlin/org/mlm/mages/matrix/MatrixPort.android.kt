@@ -1378,21 +1378,19 @@ class RustMatrixPort : MatrixPort, VerificationService {
         runWithFfiResult { withClient { it.sendPollEnd(roomId, pollEventId) } }
     }
 
-    override fun seenByForEvent(
+    override suspend fun seenByForEvent(
         roomId: String,
         eventId: String,
         limit: Int
-    ): List<SeenByEntry> {
-        return runBlocking(matrixDispatcher) {
-            withClient {
-                it.seenByForEvent(roomId, eventId, limit.toUInt()).map { entry ->
-                    SeenByEntry(
-                        userId = entry.userId,
-                        displayName = entry.displayName,
-                        avatarUrl = entry.avatarUrl,
-                        tsMs = entry.tsMs
-                    )
-                }
+    ): List<SeenByEntry> = withContext(matrixDispatcher) {
+        withClient {
+            it.seenByForEvent(roomId, eventId, limit.toUInt()).map { entry ->
+                SeenByEntry(
+                    userId = entry.userId,
+                    displayName = entry.displayName,
+                    avatarUrl = entry.avatarUrl,
+                    tsMs = entry.tsMs
+                )
             }
         }
     }
@@ -1591,6 +1589,7 @@ private fun AttachmentInfo.toFfi() = mages.AttachmentInfo(
     },
     mxcUri = mxcUri,
     mime = mime,
+    fileName = fileName,
     sizeBytes = sizeBytes?.toULong(),
     width = width?.toUInt(),
     height = height?.toUInt(),

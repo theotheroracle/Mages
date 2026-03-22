@@ -22,6 +22,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import mages.shared.generated.resources.Res
+import mages.shared.generated.resources.message_info
+import org.jetbrains.compose.resources.stringResource
 import org.mlm.mages.MessageEvent
 import org.mlm.mages.matrix.SendState
 import org.mlm.mages.ui.theme.Spacing
@@ -81,7 +84,10 @@ fun MessageActionSheet(
             Spacer(Modifier.height(Spacing.sm))
 
             if (onShowMessageInfo != null) {
-                ActionItem(Icons.Default.Info, "Message info") { onShowMessageInfo(); onDismiss() }
+                ActionItem(Icons.Default.Info, stringResource(Res.string.message_info)) {
+                    onShowMessageInfo()
+                    onDismiss()
+                }
             }
             ActionItem(Icons.Default.ContentCopy, "Copy") {
                 clipboardManager.setText(AnnotatedString(event.body))

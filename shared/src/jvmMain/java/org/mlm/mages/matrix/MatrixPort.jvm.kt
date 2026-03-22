@@ -117,6 +117,7 @@ class RustMatrixPort : MatrixPort, VerificationService {
             }
 
             override fun onError(message: String) {
+                println("Err: $message")
             }
         }
 
@@ -282,7 +283,7 @@ class RustMatrixPort : MatrixPort, VerificationService {
                 observer.onUpdate(mapped)
             }
         }
-        return withClient { runBlocking(matrixDispatcher) {  it.observeRecoveryState(cb) } }
+        return withClient { it.observeRecoveryState(cb) }
     }
 
     override fun unobserveRecoveryState(subId: ULong): Boolean =
@@ -303,7 +304,7 @@ class RustMatrixPort : MatrixPort, VerificationService {
                 observer.onUpdate(mapped)
             }
         }
-        return withClient { runBlocking(matrixDispatcher) { it.observeBackupState(cb) } }
+        return withClient { it.observeBackupState(cb) }
     }
 
     override fun unobserveBackupState(subId: ULong): Boolean =
@@ -781,13 +782,13 @@ class RustMatrixPort : MatrixPort, VerificationService {
     }
 
     override suspend fun homeserverLoginDetails(): HomeserverLoginDetails = withContext(matrixDispatcher) {
-         val details = withClient { it.homeserverLoginDetails() }
-         HomeserverLoginDetails(
-             supportsOauth = details.supportsOauth,
-             supportsSso = details.supportsSso,
-             supportsPassword = details.supportsPassword,
-         )
-     }
+        val details = withClient { it.homeserverLoginDetails() }
+        HomeserverLoginDetails(
+            supportsOauth = details.supportsOauth,
+            supportsSso = details.supportsSso,
+            supportsPassword = details.supportsPassword,
+        )
+    }
 
     override suspend fun searchUsers(term: String, limit: Int): List<DirectoryUser> =
         withContext(matrixDispatcher) {
@@ -895,6 +896,7 @@ class RustMatrixPort : MatrixPort, VerificationService {
         name: String?, topic: String?, invitees: List<String>, isPublic: Boolean, roomAlias: String?
     ): String? = withContext(matrixDispatcher) {
         runWithFfiResult { withClient { it.createRoom(name, topic, invitees, isPublic, roomAlias) } }
+            .onFailure { println("createRoom failed: ${it.message}") }
             .getOrNull()
     }
 
@@ -1376,21 +1378,19 @@ class RustMatrixPort : MatrixPort, VerificationService {
         runWithFfiResult { withClient { it.sendPollEnd(roomId, pollEventId) } }
     }
 
-    override fun seenByForEvent(
+    override suspend fun seenByForEvent(
         roomId: String,
         eventId: String,
         limit: Int
-    ): List<SeenByEntry> {
-        return runBlocking(matrixDispatcher) {
-            withClient {
-                it.seenByForEvent(roomId, eventId, limit.toUInt()).map { entry ->
-                    SeenByEntry(
-                        userId = entry.userId,
-                        displayName = entry.displayName,
-                        avatarUrl = entry.avatarUrl,
-                        tsMs = entry.tsMs
-                    )
-                }
+    ): List<SeenByEntry> = withContext(matrixDispatcher) {
+        withClient {
+            it.seenByForEvent(roomId, eventId, limit.toUInt()).map { entry ->
+                SeenByEntry(
+                    userId = entry.userId,
+                    displayName = entry.displayName,
+                    avatarUrl = entry.avatarUrl,
+                    tsMs = entry.tsMs
+                )
             }
         }
     }
@@ -1589,6 +1589,7 @@ private fun AttachmentInfo.toFfi() = mages.AttachmentInfo(
     },
     mxcUri = mxcUri,
     mime = mime,
+    fileName = fileName,
     sizeBytes = sizeBytes?.toULong(),
     width = width?.toUInt(),
     height = height?.toUInt(),

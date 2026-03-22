@@ -1,8 +1,10 @@
 package org.mlm.mages.ui.util
 
 import kotlinx.datetime.TimeZone
+import kotlinx.datetime.number
 import kotlinx.datetime.toLocalDateTime
 import okio.Path.Companion.toPath
+import kotlin.math.roundToInt
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.days
 import kotlin.time.ExperimentalTime
@@ -93,4 +95,77 @@ fun formatTimelineDate(
             "${localDateTime.day} $month ${localDateTime.year}"
         }
     }
+}
+
+
+fun formatAbsoluteDateTime(timestampMs: Long): String {
+    val dt = Instant.fromEpochMilliseconds(timestampMs)
+        .toLocalDateTime(TimeZone.currentSystemDefault())
+
+    fun Int.pad2(): String = toString().padStart(2, '0')
+
+    return buildString {
+        append(dt.year)
+        append("-")
+        append(dt.month.number.pad2())
+        append("-")
+        append(dt.day.pad2())
+        append(" ")
+        append(dt.hour.pad2())
+        append(":")
+        append(dt.minute.pad2())
+    }
+}
+
+fun formatBytes(sizeBytes: Long?): String? {
+    if (sizeBytes == null) return null
+    if (sizeBytes < 1024) return "$sizeBytes B"
+
+    val units = listOf("KB", "MB", "GB", "TB")
+    var value = sizeBytes.toDouble()
+    var unitIndex = -1
+    while (value >= 1024 && unitIndex < units.lastIndex) {
+        value /= 1024.0
+        unitIndex++
+    }
+
+    val rounded = if (value >= 10) {
+        value.roundToInt().toString()
+    } else {
+        ((value * 10).roundToInt() / 10.0).toString()
+    }
+
+    return "$rounded ${units[unitIndex]}"
+}
+
+fun formatDimensions(width: Int?, height: Int?): String? {
+    if (width == null || height == null) return null
+    return "${width}×${height}"
+}
+
+fun formatDurationMs(durationMs: Long?): String? {
+    if (durationMs == null) return null
+
+    val totalSeconds = durationMs / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+
+    fun Long.pad2(): String = toString().padStart(2, '0')
+
+    return if (hours > 0) {
+        "${hours.pad2()}:${minutes.pad2()}:${seconds.pad2()}"
+    } else {
+        "${minutes.pad2()}:${seconds.pad2()}"
+    }
+}
+
+fun readableEnumName(raw: String): String {
+    if (raw.isBlank()) return raw
+
+    return raw
+        .replace("_", " ")
+        .replace(Regex("([a-z])([A-Z])"), "$1 $2")
+        .lowercase()
+        .replaceFirstChar { it.uppercase() }
 }

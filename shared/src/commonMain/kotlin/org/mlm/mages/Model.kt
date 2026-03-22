@@ -63,6 +63,7 @@ data class EncFile(
 data class AttachmentInfo(
     val kind: AttachmentKind,
     val mxcUri: String,
+    val fileName: String? = null,
     val mime: String? = null,
     val sizeBytes: Long? = null,
     val width: Int? = null,

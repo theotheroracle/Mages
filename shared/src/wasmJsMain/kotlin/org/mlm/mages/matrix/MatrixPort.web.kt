@@ -1188,7 +1188,7 @@ class WebStubMatrixPort : MatrixPort, VerificationService {
         return if (eventId != null) Result.success(Unit) else Result.failure(Exception("Failed to send poll"))
     }
 
-    override fun seenByForEvent(roomId: String, eventId: String, limit: Int): List<SeenByEntry> =
+    override suspend fun seenByForEvent(roomId: String, eventId: String, limit: Int): List<SeenByEntry> =
         emptyList()
 
     override suspend fun mxcThumbnailToCache(mxcUri: String, width: Int, height: Int, crop: Boolean): String =

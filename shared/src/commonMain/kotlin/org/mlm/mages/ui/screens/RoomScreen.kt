@@ -823,6 +823,10 @@ fun RoomScreen(
         MessageInfoSheet(
             event = messageInfoEvent,
             readers = state.messageInfoEntries,
+            isLoadingReaders = state.isLoadingMessageInfo,
+            readersError = state.messageInfoError,
+            readersTruncated = state.messageInfoReadersTruncated,
+            onRetryReaders = viewModel::retryMessageInfo,
             onDismiss = viewModel::hideMessageInfo
         )
     }
