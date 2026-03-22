@@ -37,7 +37,7 @@ class NotificationEnrichWorker(
         val eventId = inputData.getString(KEY_EVENT_ID) ?: return Result.failure()
 
         // Placeholder + message notification share the same ID (to update after enrich).
-        val notifId = (roomId + eventId).hashCode()
+        val notifId = (roomId).hashCode()
         val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         val settingsRepo = SettingsProvider.get(applicationContext)

@@ -45,7 +45,7 @@ object AndroidNotificationHelper : KoinComponent {
         else
             AppNotificationChannels.CHANNEL_MESSAGES_SILENT
 
-        val notifId = (roomId + eventId).hashCode()
+        val notifId = (roomId).hashCode()
 
         val activeMessageCount = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             mgr.activeNotifications.count {

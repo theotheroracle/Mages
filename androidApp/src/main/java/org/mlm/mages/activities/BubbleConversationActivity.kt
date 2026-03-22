@@ -18,8 +18,6 @@ class BubbleConversationActivity : ComponentActivity() {
         val roomId = intent.getStringExtra(ConversationShortcutPublisher.EXTRA_ROOM_ID)
         if (roomId.isNullOrBlank()) { finish(); return }
 
-        val notificationId = roomId.hashCode()
-
         setContent {
             MainTheme {
                 val vm: RoomViewModel = koinViewModel { parametersOf(roomId, "") }
