@@ -10,6 +10,8 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import io.github.vinceglb.filekit.FileKit
 import io.github.vinceglb.filekit.PlatformFile
 import io.github.vinceglb.filekit.cacheDir
@@ -24,6 +26,7 @@ import okio.buffer
 import okio.sink
 import org.koin.mp.KoinPlatform
 import org.mlm.mages.ui.components.AttachmentData
+import org.mlm.mages.ui.components.AttachmentSourceKind
 import java.io.File
 
 actual fun getDeviceDisplayName(): String {
@@ -35,6 +38,8 @@ actual fun getDeviceDisplayName(): String {
         "Mages (Android - $manufacturer $model)"
     }
 }
+
+actual fun platformSystemBarColorScheme(): ColorScheme? = null
 
 actual fun deleteDirectory(path: String): Boolean {
     return File(path).deleteRecursively()
@@ -63,10 +68,23 @@ fun Activity.enterPip() {
 }
 
 actual fun platformEmbeddedElementCallUrlOrNull(): String? {
-    return null
+    return "https://appassets.androidplatform.net/element-call/index.html"
 }
 
-actual fun platformEmbeddedElementCallParentUrlOrNull(): String? = null
+actual fun platformEmbeddedElementCallParentUrlOrNull(): String? = "https://appassets.androidplatform.net/element-call/index.html"
+
+actual fun platformNeedsControlledAudioDevices(): Boolean = true
+
+actual fun setSystemBarsVisibility(hide: Boolean) {
+    val activity = KoinPlatform.getKoin().get<Activity>()
+    val window = activity.window
+    val controller = WindowInsetsControllerCompat(window, window.decorView)
+    if (hide) {
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+    } else {
+        controller.show(WindowInsetsCompat.Type.systemBars())
+    }
+}
 
 actual class CameraPickerLauncher(
     private val fileKitLauncher: PhotoResultLauncher
@@ -102,6 +120,7 @@ actual suspend fun PlatformFile.toAttachmentData(): AttachmentData =
             path = outFile.absolutePath,
             mimeType = this@toAttachmentData.mimeType().toString(),
             fileName = name,
-            sizeBytes = outFile.length()
+            sizeBytes = outFile.length(),
+            sourceKind = AttachmentSourceKind.LocalPath
         )
     }

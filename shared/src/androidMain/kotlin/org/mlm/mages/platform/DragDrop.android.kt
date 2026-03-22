@@ -15,14 +15,17 @@ import androidx.compose.ui.draganddrop.DragAndDropTarget
 import androidx.compose.ui.draganddrop.mimeTypes
 import androidx.compose.ui.draganddrop.toAndroidDragEvent
 import androidx.compose.ui.platform.LocalContext
+import org.mlm.mages.ui.components.AttachmentData
+import org.mlm.mages.ui.components.AttachmentSourceKind
 import java.io.File
+import androidx.core.net.toUri
 
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
 actual fun Modifier.fileDrop(
     enabled: Boolean,
     onDragEnter: () -> Unit,
     onDragExit: () -> Unit,
-    onDrop: (List<String>) -> Unit
+    onDrop: (List<AttachmentData>) -> Unit
 ): Modifier = composed {
     if (!enabled) return@composed this
 
@@ -56,28 +59,43 @@ actual fun Modifier.fileDrop(
                 val dragEvent = event.toAndroidDragEvent()
                 val clip = dragEvent.clipData ?: return false
 
-                val outPaths = mutableListOf<String>()
+                val attachments = mutableListOf<AttachmentData>()
 
                 for (i in 0 until clip.itemCount) {
                     val item = clip.getItemAt(i)
 
                     val uri = item.uri
-                        ?: item.text?.toString()?.let { runCatching { Uri.parse(it) }.getOrNull() }
+                        ?: item.text?.toString()?.let { runCatching { it.toUri() }.getOrNull() }
                         ?: continue
 
                     // If it's already a file:// URI, we can use it directly.
                     if (uri.scheme == "file") {
-                        uri.path?.let(outPaths::add)
+                        uri.path?.let { path ->
+                            val file = File(path)
+                            if (file.exists()) {
+                                attachments.add(file.toAttachmentData())
+                            }
+                        }
                         continue
                     }
 
                     // For content:// URIs, copy into cache so caller can treat it like a File path.
                     val cached = context.copyUriToCache(uri)
-                    if (cached != null) outPaths += cached
+                    if (cached != null) {
+                        attachments.add(
+                            AttachmentData(
+                                path = cached,
+                                mimeType = context.getMimeType(uri) ?: "application/octet-stream",
+                                fileName = cached.substringAfterLast("/"),
+                                sizeBytes = File(cached).length(),
+                                sourceKind = AttachmentSourceKind.LocalPath
+                            )
+                        )
+                    }
                 }
 
-                return if (outPaths.isNotEmpty()) {
-                    onDrop(outPaths)
+                return if (attachments.isNotEmpty()) {
+                    onDrop(attachments)
                     true
                 } else {
                     false
@@ -92,13 +110,17 @@ actual fun Modifier.fileDrop(
     )
 }
 
+private fun Context.getMimeType(uri: Uri): String? {
+    return contentResolver.getType(uri)
+}
+
 private fun Context.copyUriToCache(uri: Uri): String? {
     return runCatching {
         val name = queryDisplayName(uri)
             ?: uri.lastPathSegment
             ?: "drop_${System.currentTimeMillis()}"
 
-        val safeName = name.replace(Regex("""[^\w\.\-]+"""), "_")
+        val safeName = name.replace(Regex("""[^\w.\-]+"""), "_")
         val dir = File(cacheDir, "dnd").apply { mkdirs() }
         val outFile = File(dir, "${System.currentTimeMillis()}_$safeName")
 
@@ -121,4 +143,14 @@ private fun Context.queryDisplayName(uri: Uri): String? {
         if (idx < 0) return null
         return it.getString(idx)
     }
+}
+
+private fun File.toAttachmentData(): AttachmentData {
+    return AttachmentData(
+        path = absolutePath,
+        mimeType = "application/octet-stream",
+        fileName = name,
+        sizeBytes = length(),
+        sourceKind = AttachmentSourceKind.LocalPath
+    )
 }

@@ -1,8 +1,12 @@
 package org.mlm.mages.platform
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.graphics.Color
 import android.graphics.Outline
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.Build
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
@@ -35,9 +39,56 @@ private val ELEMENT_SPECIFIC_ACTIONS = setOf(
     "io.element.close",
     "io.element.tile_layout",
     "io.element.spotlight_layout",
+    "set_always_on_screen",
     "minimize",
-    "im.vector.hangup"
+    "im.vector.hangup",
 )
+
+private fun setupAudioDeviceBridge(webView: WebView) {
+    val audioManager = webView.context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    
+    @Suppress("DEPRECATION")
+    fun getOutputDevices(): List<AudioDeviceInfo> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            audioManager.availableCommunicationDevices
+        } else {
+            audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter { it.isSink }
+        }
+    }
+    
+    val devices = getOutputDevices().map { device ->
+        val isSpeaker = device.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+        val isEarpiece = device.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+        val isExternalHeadset = device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                                device.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                                device.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES
+        val name = when (device.type) {
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "Built-in speaker"
+            AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "Built-in earpiece"
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "Bluetooth"
+            AudioDeviceInfo.TYPE_WIRED_HEADSET -> "Wired headset"
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "Wired headphones"
+            AudioDeviceInfo.TYPE_USB_HEADSET -> "USB headset"
+            AudioDeviceInfo.TYPE_USB_DEVICE -> "USB device"
+            AudioDeviceInfo.TYPE_USB_ACCESSORY -> "USB accessory"
+            else -> device.productName?.toString() ?: "Unknown"
+        }
+        """{"id":"${device.id}","name":"$name","isSpeaker":$isSpeaker,"isEarpiece":$isEarpiece,"isExternalHeadset":$isExternalHeadset}"""
+    }
+    
+    val devicesJson = "[${devices.joinToString(",")}]"
+    
+    webView.evaluateJavascript(
+        """
+        if (typeof controls !== 'undefined' && typeof controls.setAvailableOutputDevices === 'function') {
+            controls.setAvailableOutputDevices($devicesJson);
+        } else if (typeof controls !== 'undefined' && typeof controls.setAvailableAudioDevices === 'function') {
+            controls.setAvailableAudioDevices($devicesJson);
+        }
+        """.trimIndent(),
+        null
+    )
+}
 
 @SuppressLint("SetJavaScriptEnabled", "ComposableNaming")
 @Composable
@@ -46,6 +97,7 @@ actual fun CallWebViewHost(
     onMessageFromWidget: (String) -> Unit,
     onClosed: () -> Unit,
     onMinimizeRequested: () -> Unit,
+    minimized: Boolean,
     widgetBaseUrl: String?,
     modifier: Modifier,
     onAttachController: (CallWebViewController?) -> Unit
@@ -78,11 +130,7 @@ actual fun CallWebViewHost(
             val api = json.optString("api")
             val action = json.optString("action")
 
-            Log.d("WidgetBridge", "Widget → Native: api=$api, action=$action")
-
             if (action in ELEMENT_SPECIFIC_ACTIONS) {
-                Log.d("WidgetBridge", "Handling Element-specific action locally: $action")
-
                 sendElementActionResponse(webView, message)
                 onMessageFromWidget(message)
 
@@ -112,11 +160,11 @@ actual fun CallWebViewHost(
                     Log.e("WidgetBridge", "WebView is null!")
                     return
                 }
-                Log.d("WidgetBridge", "Native → Widget: ${message.take(200)}")
 
-                val origin = "*" // HACK: Same as above
-                val script = "postMessage($message, '$origin')"
+                // echo-suppressed post
+                val script = "window.__MagesPostFromHost && window.__MagesPostFromHost($message) || postMessage($message, '*')" // HACK: Same as above (*)
                 webView.post {
+                    Log.d("WidgetBridge", "Sending to widget: $message")
                     webView.evaluateJavascript(script) { result ->
                         Log.d("WidgetBridge", "postMessage result: $result")
                     }
@@ -240,20 +288,58 @@ actual fun CallWebViewHost(
 
                         view.evaluateJavascript(
                             """
-                            window.addEventListener('message', function(event) {
-                                let message = {data: event.data, origin: event.origin}
-                                if (message.data.response && message.data.api == "toWidget"
-                                    || !message.data.response && message.data.api == "fromWidget") {
-                                    let json = JSON.stringify(event.data);
-                                    console.log('message sent: ' + json);
-                                    elementX.postMessage(json);
-                                } else {
-                                    console.log('message received (ignored): ' + JSON.stringify(event.data));
+                            (function () {
+                                if (window.__MagesBridgeInstalled) {
+                                    return;
                                 }
-                            });
+                                window.__MagesBridgeInstalled = true;
+                                
+                                window.__MagesEchoBlock = new Set();
+                                
+                                function keyFor(data) {
+                                    if (!data || typeof data !== 'object') return null;
+                                    return JSON.stringify({
+                                        api: data.api || null,
+                                        requestId: data.requestId || null,
+                                        action: data.action || null,
+                                        hasResponse: Object.prototype.hasOwnProperty.call(data, 'response')
+                                    });
+                                }
+                                
+                                window.__MagesPostFromHost = function(payload) {
+                                    const key = keyFor(payload);
+                                    if (key) window.__MagesEchoBlock.add(key);
+                                    window.postMessage(payload, '*');
+                                };
+                                
+                                window.addEventListener('message', function(ev) {
+                                    const data = ev.data;
+                                    if (!data || typeof data !== 'object') return;
+                                    
+                                    const key = keyFor(data);
+                                    if (key && window.__MagesEchoBlock.delete(key)) {
+                                        return;
+                                    }
+                                    
+                                    const hasResponse = Object.prototype.hasOwnProperty.call(data, 'response');
+                                    const shouldForward = 
+                                        (!hasResponse && data.api === 'fromWidget') ||
+                                        (hasResponse && data.api === 'toWidget');
+                                    
+                                    if (!shouldForward) return;
+                                    
+                                    if (typeof elementX !== 'undefined' && elementX.postMessage) {
+                                        elementX.postMessage(JSON.stringify(data));
+                                    }
+                                });
+                            })();
                             """.trimIndent(),
                             null
                         )
+                        
+                        view.postDelayed({
+                            setupAudioDeviceBridge(view)
+                        }, 500)
                     }
 
                     override fun onPageFinished(view: WebView?, url: String?) {
@@ -261,7 +347,14 @@ actual fun CallWebViewHost(
                         Log.d("WidgetBridge", "Page finished: $url")
 
                         view?.evaluateJavascript(
-                            "controls.onBackButtonPressed = () => { elementX.postMessage(JSON.stringify({api:'fromWidget',action:'minimize'})) }",
+                            """
+                            if (typeof controls !== 'undefined') {
+                                controls.onBackButtonPressed = function() {
+                                    window.__MagesPostFromHost && window.__MagesPostFromHost(JSON.stringify({api:'fromWidget',action:'minimize'})) || 
+                                    elementX.postMessage(JSON.stringify({api:'fromWidget',action:'minimize'}));
+                                };
+                            }
+                            """.trimIndent(),
                             null
                         )
                     }

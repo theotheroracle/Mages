@@ -17,6 +17,7 @@ captures
 !*.xcworkspace/contents.xcworkspacedata
 **/xcshareddata/WorkspaceSettings.xcsettings
 node_modules/
+kotlin-js-store/
 
 rust/target
 target/
@@ -32,3 +33,4 @@ vendor/
 repo/
 gradle-deps/
 vendor-uniffi/
+webApp/src/wasm/

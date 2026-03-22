@@ -64,6 +64,12 @@ fun guessMimeType(fileName: String): String {
     }
 }
 
+fun decodeUrl(s: String): String = s.replace("%3A", ":", ignoreCase = true)
+    .replace("%2F", "/", ignoreCase = true)
+    .replace("%23", "#", ignoreCase = true)
+    .replace("%40", "@", ignoreCase = true)
+    .replace("%24", "$", ignoreCase = true)
+    .replace("%20", " ", ignoreCase = true)
 
 @OptIn(ExperimentalTime::class)
 fun nowMs(): Long = Clock.System.now().toEpochMilliseconds()

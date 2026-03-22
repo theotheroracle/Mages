@@ -2,16 +2,19 @@ package org.mlm.mages.ui.util
 
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import okio.Path.Companion.toPath
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.days
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 
+private fun pad2(value: Int): String = value.toString().padStart(2, '0')
+
 @OptIn(ExperimentalTime::class)
 fun formatTime(epochMs: Long): String {
     val instant = Instant.fromEpochMilliseconds(epochMs)
     val local = instant.toLocalDateTime(TimeZone.currentSystemDefault())
-    return "%02d:%02d".format(local.hour, local.minute)
+    return "${pad2(local.hour)}:${pad2(local.minute)}"
 }
 
 @OptIn(ExperimentalTime::class)
@@ -36,7 +39,16 @@ fun formatDuration(ms: Long): String {
     val h = secs / 3600
     val m = (secs % 3600) / 60
     val s = secs % 60
-    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
+    return if (h > 0) "$h:${pad2(m)}:${pad2(s)}" else "$m:${pad2(s)}"
+}
+
+fun fileName(path: String): String = path.toPath().name
+
+@OptIn(ExperimentalTime::class)
+fun monthYearLabel(timestampMs: Long): String {
+    val local = Instant.fromEpochMilliseconds(timestampMs).toLocalDateTime(TimeZone.currentSystemDefault())
+    val month = local.month.name.lowercase().replaceFirstChar { it.uppercase() }
+    return "$month ${local.year}"
 }
 
 fun formatBytes(bytes: Long): String = when {

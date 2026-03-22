@@ -2,15 +2,14 @@ package org.mlm.mages.ui.viewmodel
 
 import io.github.mlmgames.settings.core.SettingsRepository
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
-import kotlinx.coroutines.withContext
 import org.mlm.mages.accounts.MatrixAccount
 import org.mlm.mages.accounts.MatrixClients
+import org.mlm.mages.matrix.MatrixPort
 import org.mlm.mages.matrix.createMatrixPort
 import org.mlm.mages.platform.getDeviceDisplayName
 import org.mlm.mages.settings.AppSettings
@@ -78,9 +77,7 @@ class LoginViewModel(
             val tempId = "probe_${Clock.System.now().toEpochMilliseconds()}"
             port.init(hs, tempId)
 
-            val details = withContext(Dispatchers.IO) {
-                port.homeserverLoginDetails()
-            }
+            val details = port.homeserverLoginDetails()
 
             port.close()
 
@@ -211,9 +208,7 @@ class LoginViewModel(
             try {
                 port.init(hs, accountId)
 
-                val ok = withContext(Dispatchers.IO) {
-                    port.loginSsoLoopback(openUrl, deviceName = getDeviceDisplayName())
-                }
+                val ok = port.loginSsoLoopback(openUrl, deviceName = getDeviceDisplayName()).isSuccess
 
                 if (!ok || !port.isLoggedIn()) {
                     port.close()
@@ -290,14 +285,27 @@ class LoginViewModel(
             try {
                 port.init(hs, accountId)
 
-                val ok = withContext(Dispatchers.IO) {
-                    port.loginOauthLoopback(openUrl, deviceName = getDeviceDisplayName())
-                }
+                when (val result = port.loginOauth(openUrl, deviceName = getDeviceDisplayName())) {
+                    MatrixPort.OauthLoginResult.RedirectStarted -> {
+                        // Web flow continues after full-page redirect.
+                        return@launch
+                    }
 
-                if (!ok || !port.isLoggedIn()) {
-                    port.close()
-                    updateState { copy(isBusy = false, oauthInProgress = false, error = "OAuth failed or was cancelled") }
-                    return@launch
+                    is MatrixPort.OauthLoginResult.Failed -> {
+                        port.close()
+                        updateState {
+                            copy(
+                                isBusy = false,
+                                oauthInProgress = false,
+                                error = result.message ?: "OAuth failed or was cancelled"
+                            )
+                        }
+                        return@launch
+                    }
+
+                    MatrixPort.OauthLoginResult.Completed -> {
+                        // continue below
+                    }
                 }
 
                 val userId = port.whoami()

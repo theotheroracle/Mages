@@ -64,8 +64,6 @@ import org.jetbrains.compose.resources.stringResource
 import mages.shared.generated.resources.*
 import org.mlm.mages.ui.components.snackbar.snackbarHost
 import org.mlm.mages.ui.components.snackbar.rememberErrorPoster
-import java.io.File
-import java.nio.file.Files
 import io.github.mlmgames.settings.core.SettingsRepository
 import io.github.vinceglb.filekit.dialogs.FileKitMode
 import io.github.vinceglb.filekit.dialogs.FileKitType
@@ -73,6 +71,12 @@ import io.github.vinceglb.filekit.dialogs.compose.rememberFilePickerLauncher
 import org.mlm.mages.settings.AppSettings
 import org.mlm.mages.ui.AttachmentUploadStage
 import org.mlm.mages.ui.RoomUiState
+import org.mlm.mages.ui.components.message.MessageAttachmentUi
+import org.mlm.mages.ui.components.message.MessageBubbleModel
+import org.mlm.mages.ui.components.message.MessageGroupingUi
+import org.mlm.mages.ui.components.message.MessageReplyUi
+import org.mlm.mages.ui.components.message.MessageSenderUi
+import org.mlm.mages.ui.components.message.MessageThreadUi
 
 @Suppress("NewApi")
 @Composable
@@ -86,7 +90,8 @@ fun RoomScreen(
     onRequestLocationPermissions: ((() -> Unit) -> Unit)? = null,
     onStartCall: () -> Unit,
     onStartVoiceCall: () -> Unit,
-    onOpenForwardPicker: (sourceRoomId: String, eventIds: List<String>) -> Unit
+    onOpenForwardPicker: (sourceRoomId: String, eventIds: List<String>) -> Unit,
+    isBubbleMode: Boolean = false,
 ) {
     val state by viewModel.state.collectAsState()
     val scope = rememberCoroutineScope()
@@ -373,6 +378,11 @@ fun RoomScreen(
                     onClearSelection = viewModel::clearSelection,
                     onSelectAll = viewModel::selectAllVisible
                 )
+            } else if (isBubbleMode) {
+                BubbleTopBar(
+                    roomName = state.roomName,
+                    avatarUrl = state.roomAvatarUrl
+                )
             } else {
                 RoomTopBar(
                     roomName = state.roomName,
@@ -505,22 +515,11 @@ fun RoomScreen(
                     onDragEnter = { isDragging = true },
                     onDragExit = {
                         isDragging = false },
-                    onDrop = { paths ->
+                    onDrop = { attachments ->
                         isDragging = false
-                        paths.firstOrNull()?.let { path ->
+                        attachments.firstOrNull()?.let { attachment ->
                             try {
-                                val file = File(path)
-                                if (file.exists()) {
-                                    val mime = Files.probeContentType(file.toPath()) ?: "application/octet-stream"
-                                    viewModel.attachFile(
-                                        AttachmentData(
-                                            path = path,
-                                            fileName = file.name,
-                                            mimeType = mime,
-                                            sizeBytes = file.length()
-                                        )
-                                    )
-                                }
+                                viewModel.attachFile(attachment)
                             } catch (e: Exception) {
                                 e.printStackTrace()
                             }
@@ -627,7 +626,8 @@ fun RoomScreen(
                                             },
                                             highlightedEventId = state.highlightedEventId,
                                             viewModel = viewModel,
-                                            showMessageAvatars = settings.showMessageAvatars
+                                            showMessageAvatars = settings.showMessageAvatars,
+                                            showUsernameInDms = settings.showUsernameInDms
                                         )
                                     }
                                 }
@@ -985,6 +985,39 @@ private fun RoomTopBar(
 }
 
 @Composable
+private fun BubbleTopBar(
+    roomName: String,
+    avatarUrl: String?,
+) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shadowElevation = 2.dp) {
+        TopAppBar(
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = CircleShape,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Avatar(
+                                name = roomName,
+                                avatarPath = avatarUrl,
+                                size = 32.dp
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text(roomName, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+            )
+        )
+    }
+}
+
+@Composable
 private fun RoomBottomBar(
     state: RoomUiState,
     onSetInput: (String) -> Unit,
@@ -1094,7 +1127,8 @@ private fun MessageItem(
     onSaveReturnPosition: (String) -> Unit,
     highlightedEventId: String? = null,
     viewModel: RoomViewModel,
-    showMessageAvatars: Boolean = true
+    showMessageAvatars: Boolean,
+    showUsernameInDms: Boolean,
 ) {
     val timestamp = event.timestampMs
 
@@ -1164,7 +1198,7 @@ private fun MessageItem(
                 }
             )
             .then(
-                if (isSelected) Modifier.background(MaterialTheme.colorScheme.primaryContainer)
+                if (isSelected) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
                 else Modifier
             )
             .pointerInput(state.isSelectionMode) {
@@ -1246,48 +1280,56 @@ private fun MessageItem(
                     .animateContentSize()
             ) {
                 MessageBubble(
+                    model = MessageBubbleModel(
+                    eventId = event.eventId,
                     isMine = isMine,
                     body = event.body,
                     formattedBody = event.formattedBody,
-                    sender = event.senderDisplayName,
-                    senderAvatarPath = state.avatarByUserId[event.sender],
-                    senderId = event.sender,
+                    sender = MessageSenderUi(
+                        id = event.sender,
+                        displayName = event.senderDisplayName,
+                        avatarPath = state.avatarByUserId[event.sender]
+                    ),
                     timestamp = timestamp,
-                    groupedWithPrev = shouldGroup,
-                    groupedWithNext = nextEvent != null &&
-                            nextEvent.sender == event.sender &&
-                            formatDate(nextEvent.timestampMs) == eventDate,
+                    grouping = MessageGroupingUi(
+                        groupedWithPrev = shouldGroup,
+                        groupedWithNext = nextEvent != null &&
+                                nextEvent.sender == event.sender &&
+                                formatDate(nextEvent.timestampMs) == eventDate
+                    ),
                     isDm = state.isDm,
                     showMessageAvatars = showMessageAvatars,
-                    reactionChips = chips,
-                    eventId = event.eventId,
-                    onLongPress = onLongPress,
-                    onReact = onReact,
-                    lastReadByOthersTs = state.lastIncomingFromOthersTs,
-                    thumbPath = state.thumbByEvent[event.eventId],
-                    attachmentKind = event.attachment?.kind,
-                    attachmentWidth = event.attachment?.width,
-                    attachmentHeight = event.attachment?.height,
-                    durationMs = event.attachment?.durationMs,
-                    onOpenAttachment = onOpenAttachment,
-                    replyPreview = event.replyToBody,
-                    replySender = event.replyToSenderDisplayName,
+                    showUsernameInDms = showUsernameInDms,
+                    reactions = chips,
+                    attachment = if (event.attachment?.kind != null) MessageAttachmentUi(
+                        thumbPath = state.thumbByEvent[event.eventId],
+                        kind = event.attachment?.kind,
+                        width = event.attachment?.width,
+                        height = event.attachment?.height,
+                        durationMs = event.attachment?.durationMs
+                    ) else null,
+                    reply = if (event.replyToBody != null) MessageReplyUi(
+                        sender = event.replyToSenderDisplayName,
+                        body = event.replyToBody
+                    ) else null,
                     sendState = event.sendState,
                     isEdited = event.isEdited,
                     poll = event.pollData,
+                    thread = state.threadCount[event.eventId]?.let { MessageThreadUi(it) }
+                    ),
+                    onLongPress = onLongPress,
+                    onReact = onReact,
+                    onOpenAttachment = onOpenAttachment,
                     onVote = { optionId ->
                         event.pollData?.let { p -> viewModel.votePoll(event.eventId, p, optionId) }
                     },
-                    onEndPoll = {
-                        viewModel.endPoll(event.eventId)
-                    },
+                    onEndPoll = { viewModel.endPoll(event.eventId) },
                     onReplyPreviewClick = event.replyToEventId?.let { rid ->
                         {
                             onSaveReturnPosition(event.eventId)
                             viewModel.jumpToEvent(rid)
                         }
                     },
-                    threadCount = state.threadCount[event.eventId],
                     onOpenThread = onOpenThread,
                     onSenderClick = if (!isMine && !state.isSelectionMode) {
                         { viewModel.selectMemberForAction(event.sender) }

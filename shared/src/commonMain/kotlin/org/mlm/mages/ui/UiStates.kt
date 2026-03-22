@@ -17,6 +17,7 @@ import org.mlm.mages.matrix.SeenByEntry
 import org.mlm.mages.matrix.SpaceChildInfo
 import org.mlm.mages.matrix.SpaceInfo
 import org.mlm.mages.ui.components.AttachmentData
+import org.mlm.mages.ui.util.nowMs
 
 
 data class LoginUiState(
@@ -125,13 +126,13 @@ data class RoomUiState(
 
     val isSelectionMode: Boolean = false,
     val selectedEventIds: Set<String> = emptySet(),
-    
+
     val myPowerLevel: Long = 0L,
     val canRedactOthers: Boolean = false,
     val canKick: Boolean = false,
     val canBan: Boolean = false,
     val canPin: Boolean = false,
-    
+
     val pinnedEventIds: List<String> = emptyList(),
     val showPinnedMessagesSheet: Boolean = false,
 
@@ -163,7 +164,7 @@ data class ForwardableRoom(
     val avatarUrl: String?,
     val isDm: Boolean,
     val lastActivity: Long,
-  )
+)
 
 data class PresenceUiState(
     val currentPresence: Presence = Presence.Online,
@@ -175,7 +176,7 @@ data class VerificationRequestUi(
     val flowId: String,
     val fromUser: String,
     val fromDevice: String,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = nowMs()
 )
 
 data class SecurityUiState(

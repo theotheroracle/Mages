@@ -1,11 +1,18 @@
 package org.mlm.mages.matrix
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import org.mlm.mages.AttachmentInfo
 import org.mlm.mages.MessageEvent
 import org.mlm.mages.RoomSummary
 
+@Serializable
+data class DownloadResult (
+    var path: String,
+    var bytes: ULong
+)
+@Serializable
 data class DeviceSummary(
     val deviceId: String,
     val displayName: String,
@@ -14,13 +21,15 @@ data class DeviceSummary(
     var verified: Boolean
 )
 
+@Serializable
 data class SeenByEntry (
     var userId: String,
-    var displayName: String?,
-    var avatarUrl: String?,
-    var tsMs: ULong?
+    var displayName: String? = null,
+    var avatarUrl: String? = null,
+    var tsMs: ULong? = null
 )
 
+@Serializable
 data class SearchHit (
     var roomId: String,
     var eventId: String,
@@ -29,26 +38,36 @@ data class SearchHit (
     var timestampMs: ULong
 )
 
+@Serializable
 data class SearchPage (
     var hits: List<SearchHit>,
     var nextOffset: UInt?
 )
 
 sealed class TimelineDiff<out T> {
+    @Serializable
     data class Reset<T>(val items: List<T>) : TimelineDiff<T>()
     class Clear<T> : TimelineDiff<T>()
 
+    @Serializable
     data class Append<T>(val items: List<T>) : TimelineDiff<T>()
 
+    @Serializable
     data class UpdateByItemId<T>(val itemId: String, val item: T) : TimelineDiff<T>()
+    @Serializable
     data class RemoveByItemId<T>(val itemId: String) : TimelineDiff<T>()
+    @Serializable
     data class UpsertByItemId<T>(val itemId: String, val item: T) : TimelineDiff<T>()
+    @Serializable
     data class Prepend<T>(val item: T) : TimelineDiff<T>()
 }
+@Serializable
 enum class SasPhase { Created, Requested, Ready, Accepted, Started, Emojis, Confirmed, Cancelled, Failed, Done }
 
+@Serializable
 enum class SendState { Enqueued, Sending, Sent, Retrying, Failed }
 
+@Serializable
 enum class EventType {
     Message,
     MembershipChange,
@@ -68,6 +87,7 @@ enum class EventType {
     LiveLocation,
 }
 
+@Serializable
 data class SendUpdate(
     val roomId: String,
     val txnId: String,
@@ -77,6 +97,7 @@ data class SendUpdate(
     val error: String?
 )
 
+@Serializable
 enum class RoomNotificationMode {
     AllMessages,
     MentionsAndKeywordsOnly,
@@ -90,31 +111,37 @@ val RoomNotificationMode.displayName: String
         RoomNotificationMode.Mute -> "Muted"
     }
 
+@Serializable
 enum class Presence {
     Online,
     Offline,
     Unavailable
 }
 
+@Serializable
 data class PresenceInfo(
     val presence: Presence,
-    val statusMsg: String?
+    val statusMsg: String? = null
 )
 
+@Serializable
 enum class RoomDirectoryVisibility {
     Public,
     Private
 }
 
+@Serializable
 data class RoomUpgradeInfo(
     val roomId: String,
-    val reason: String?
+    val reason: String? = null
 )
 
+@Serializable
 data class RoomPredecessorInfo(
     val roomId: String,
 )
 
+@Serializable
 data class LiveLocationShare(
     val userId: String,
     val geoUri: String,
@@ -122,14 +149,41 @@ data class LiveLocationShare(
     val isLive: Boolean
 )
 
-interface VerificationObserver {
-    fun onPhase(flowId: String, phase: SasPhase)
-    fun onEmojis(flowId: String, otherUser: String, otherDevice: String, emojis: List<String>)
-    fun onError(flowId: String, message: String)
+@Serializable
+sealed class VerifEvent {
+    @Serializable @SerialName("Requested")
+    data class Requested(val flow_id: String) : VerifEvent()
+    @Serializable @SerialName("Ready") data object Ready : VerifEvent()
+    @Serializable @SerialName("SasStarted") data object SasStarted : VerifEvent()
+    @Serializable @SerialName("KeysExchanged")
+    data class KeysExchanged(
+        val emojis: List<EmojiEntry>,
+        val other_user: String,
+        val other_device: String,
+    ) : VerifEvent()
+    @Serializable @SerialName("Confirmed") data object Confirmed : VerifEvent()
+    @Serializable @SerialName("Done") data object Done : VerifEvent()
+    @Serializable @SerialName("Cancelled")
+    data class Cancelled(val reason: String) : VerifEvent()
+    @Serializable @SerialName("Error")
+    data class Error(val message: String) : VerifEvent()
+}
+
+@Serializable
+data class EmojiEntry(val symbol: String, val description: String)
+
+interface VerificationService {
+    fun startDeviceVerification(deviceId: String): Flow<VerifEvent>
+    fun startUserVerification(userId: String): Flow<VerifEvent>
+    fun acceptAndObserveVerification(flowId: String, otherUserId: String): kotlinx.coroutines.flow.Flow<VerifEvent>
+    suspend fun acceptSas(flowId: String, otherUserId: String): Boolean
+    suspend fun confirmSas(flowId: String): Boolean
+    suspend fun cancelVerification(flowId: String): Boolean
 }
 
 interface ReceiptsObserver { fun onChanged() }
 
+@Serializable
 data class CallInvite(
     val roomId: String,
     val sender: String,
@@ -138,6 +192,7 @@ data class CallInvite(
     val tsMs: Long
 )
 
+@Serializable
 enum class NotificationKind {
     Message,
     CallRing,
@@ -147,6 +202,7 @@ enum class NotificationKind {
     StateEvent
 }
 
+@Serializable
 data class RenderedNotification(
     val roomId: String,
     val eventId: String,
@@ -162,10 +218,15 @@ data class RenderedNotification(
     val expiresAtMs: Long?
 )
 
+@Serializable
 data class UnreadStats(val messages: Long, val notifications: Long, val mentions: Long)
-data class DirectoryUser(val userId: String, val displayName: String?, val avatarUrl: String?)
-data class PublicRoom(val roomId: String, val name: String?, val topic: String?, val alias: String?, val avatarUrl: String?, val memberCount: Long, val worldReadable: Boolean, val guestCanJoin: Boolean)
+@Serializable
+data class DirectoryUser(val userId: String, val displayName: String? = null, val avatarUrl: String? = null)
+@Serializable
+data class PublicRoom(val roomId: String, val name: String? = null, val topic: String? = null, val alias: String? = null, val avatarUrl: String? = null, val memberCount: Long = 0, val worldReadable: Boolean = false, val guestCanJoin: Boolean = false)
+@Serializable
 data class PublicRoomsPage(val rooms: List<PublicRoom>, val nextBatch: String?, val prevBatch: String?)
+@Serializable
 data class RoomPreview(
     val roomId: String,
     val canonicalAlias: String?,
@@ -177,19 +238,21 @@ data class RoomPreview(
     val joinRule: RoomJoinRule?,
     val membership: RoomPreviewMembership?
 )
+@Serializable
 data class RoomProfile(
     val roomId: String,
     val name: String,
-    val topic: String?,
-    val memberCount: Long,
-    val isEncrypted: Boolean,
-    val isDm: Boolean,
-    val avatarUrl: String?,
-    val canonicalAlias: String?,
-    val altAliases: List<String>,
-    val roomVersion: String?
+    val topic: String? = null,
+    val memberCount: Long = 0,
+    val isEncrypted: Boolean = false,
+    val isDm: Boolean = false,
+    val avatarUrl: String? = null,
+    val canonicalAlias: String? = null,
+    val altAliases: List<String> = emptyList(),
+    val roomVersion: String? = null
 )
 
+@Serializable
 enum class RoomJoinRule {
     Public,
     Invite,
@@ -198,6 +261,7 @@ enum class RoomJoinRule {
     KnockRestricted
 }
 
+@Serializable
 enum class RoomPreviewMembership {
     Joined,
     Invited,
@@ -206,6 +270,7 @@ enum class RoomPreviewMembership {
     Banned
 }
 
+@Serializable
 enum class RoomHistoryVisibility {
     Invited,
     Joined,
@@ -213,6 +278,7 @@ enum class RoomHistoryVisibility {
     WorldReadable
 }
 
+@Serializable
 data class RoomPowerLevels(
     val users: Map<String, Long>,
     val usersDefault: Long,
@@ -233,6 +299,7 @@ data class RoomPowerLevels(
     val spaceChild: Long
 )
 
+@Serializable
 data class RoomPowerLevelChanges(
     val usersDefault: Long? = null,
     val eventsDefault: Long? = null,
@@ -247,17 +314,19 @@ data class RoomPowerLevelChanges(
     val spaceChild: Long? = null
 )
 
+@Serializable
 data class LatestRoomEvent(
     val eventId: String,
     val sender: String,
-    val body: String?,
-    val msgtype: String?,
+    val body: String? = null,
+    val msgtype: String? = null,
     val eventType: String,
     val timestamp: Long,
     val isRedacted: Boolean,
     val isEncrypted: Boolean
 )
 
+@Serializable
 data class RoomListEntry(
     val roomId: String,
     val name: String,
@@ -278,36 +347,41 @@ data class RoomListEntry(
     val latestEvent: LatestRoomEvent? = null,
 )
 
+@Serializable
 data class MemberSummary(
     val userId: String,
-    val displayName: String?,
-    val avatarUrl: String?,
-    val isMe: Boolean,
-    val membership: String
+    val displayName: String? = null,
+    val avatarUrl: String? = null,
+    val isMe: Boolean = false,
+    val membership: String = ""
 )
 
+@Serializable
 data class KnockRequestSummary(
     val eventId: String,
     val userId: String,
-    val displayName: String?,
-    val avatarUrl: String?,
-    val reason: String?,
+    val displayName: String? = null,
+    val avatarUrl: String? = null,
+    val reason: String? = null,
     val tsMs: Long?,
     val isSeen: Boolean,
 )
 
 @Serializable
-data class ReactionChip(val key: String, val count: Int, val mine: Boolean)
+data class ReactionSummary(val key: String, val count: Int, val mine: Boolean)
 
+@Serializable
 data class ThreadPage(
     val rootEventId: String,
     val roomId: String,
     val messages: List<MessageEvent>,
-    val nextBatch: String?,
-    val prevBatch: String?
+    val nextBatch: String? = null,
+    val prevBatch: String? = null
 )
+@Serializable
 data class ThreadSummary(val rootEventId: String, val roomId: String, val count: Long, val latestTsMs: Long?)
 
+@Serializable
 data class SpaceInfo(
     val roomId: String,
     val name: String,
@@ -318,12 +392,13 @@ data class SpaceInfo(
     val avatarUrl: String? = null
 )
 
+@Serializable
 data class SpaceChildInfo(
     val roomId: String,
-    val name: String?,
-    val topic: String?,
-    val alias: String?,
-    val avatarUrl: String?,
+    val name: String? = null,
+    val topic: String? = null,
+    val alias: String? = null,
+    val avatarUrl: String? = null,
     val isSpace: Boolean,
     val memberCount: Long,
     val worldReadable: Boolean,
@@ -331,9 +406,10 @@ data class SpaceChildInfo(
     val suggested: Boolean
 )
 
+@Serializable
 data class SpaceHierarchyPage(
     val children: List<SpaceChildInfo>,
-    val nextBatch: String?
+    val nextBatch: String? = null
 )
 
 @Serializable
@@ -357,11 +433,13 @@ data class PollOption(
     var isWinner: Boolean
 )
 
+@Serializable
 enum class PollKind {
     Disclosed,
     Undisclosed
 }
 
+@Serializable
 enum class CallIntent {
     StartCall,
     JoinExisting,
@@ -369,17 +447,19 @@ enum class CallIntent {
     JoinExistingVoiceDm,
 }
 
+@Serializable
 data class CallSession(
     val sessionId: ULong,
     val widgetUrl: String,
-    val widgetBaseUrl: String?,
-    val parentUrl: String?,
+    val widgetBaseUrl: String? = null,
+    val parentUrl: String? = null,
 )
 
 interface CallWidgetObserver {
     fun onToWidget(message: String)
 }
 
+@Serializable
 data class HomeserverLoginDetails(
     val supportsOauth: Boolean,
     val supportsSso: Boolean,
@@ -387,9 +467,17 @@ data class HomeserverLoginDetails(
 )
 
 interface MatrixPort {
+    sealed interface OauthLoginResult {
+        data object Completed : OauthLoginResult
+        data object RedirectStarted : OauthLoginResult
+        data class Failed(val message: String? = null) : OauthLoginResult
+    }
 
-    data class SyncStatus(val phase: SyncPhase, val message: String?)
+    @Serializable
+    data class SyncStatus(val phase: SyncPhase, val message: String? = null)
+    @Serializable
     enum class SyncPhase { Idle, Running, BackingOff, Error }
+    @Serializable
     enum class ConnectionState {
         Disconnected,
         Connecting,
@@ -398,6 +486,7 @@ interface MatrixPort {
         Reconnecting
     }
 
+    @Serializable
     enum class RecoveryState {
         Disabled,
         Enabled,
@@ -405,6 +494,7 @@ interface MatrixPort {
         Unknown
     }
 
+    @Serializable
     enum class BackupState {
         Unknown,
         Creating,
@@ -422,25 +512,24 @@ interface MatrixPort {
     suspend fun listRooms(): List<RoomSummary>
     suspend fun recent(roomId: String, limit: Int = 50): List<MessageEvent>
     fun timelineDiffs(roomId: String): Flow<TimelineDiff<MessageEvent>>
-    suspend fun send(roomId: String, body: String, formattedBody: String? = null): Boolean
+    suspend fun send(roomId: String, body: String, formattedBody: String? = null): Result<Unit>
 
-    suspend fun sendQueueSetEnabled(enabled: Boolean): Boolean
-    suspend fun roomSendQueueSetEnabled(roomId: String, enabled: Boolean): Boolean
+    suspend fun sendQueueSetEnabled(enabled: Boolean): Result<Unit>
 
     suspend fun sendExistingAttachment(
         roomId: String,
         attachment: AttachmentInfo,
         body: String? = null,
         onProgress: ((Long, Long?) -> Unit)? = null
-    ): Boolean
+    ): Result<Unit>
 
     fun isLoggedIn(): Boolean
     fun close()
 
-    suspend fun setTyping(roomId: String, typing: Boolean): Boolean
+    suspend fun setTyping(roomId: String, typing: Boolean): Result<Unit>
     fun whoami(): String?
-    fun accountManagementUrl(): String?
-    fun setupRecovery(observer: RecoveryObserver): ULong
+    suspend fun accountManagementUrl(): String?
+    fun setupRecovery(observer: RecoveryObserver): Boolean
     fun observeRecoveryState(observer: RecoveryStateObserver): ULong
     fun unobserveRecoveryState(subId: ULong): Boolean
 
@@ -450,7 +539,6 @@ interface MatrixPort {
     suspend fun backupExistsOnServer(fetch: Boolean = false): Boolean
     suspend fun setKeyBackupEnabled(enabled: Boolean): Boolean
 
-    suspend fun enqueueText(roomId: String, body: String, txnId: String? = null): String
     fun observeSends(): Flow<SendUpdate>
 
     suspend fun roomTags(roomId: String): Pair<Boolean, Boolean>?
@@ -491,18 +579,18 @@ interface MatrixPort {
 
     fun stopTypingObserver(token: ULong)
 
-    suspend fun paginateBack(roomId: String, count: Int): Boolean
-    suspend fun paginateForward(roomId: String, count: Int): Boolean
-    suspend fun markRead(roomId: String): Boolean
-    suspend fun markReadAt(roomId: String, eventId: String): Boolean
-    suspend fun react(roomId: String, eventId: String, emoji: String): Boolean
-    suspend fun reply(roomId: String, inReplyToEventId: String, body: String, formattedBody: String? = null): Boolean
-    suspend fun edit(roomId: String, targetEventId: String, newBody: String, formattedBody: String? = null): Boolean
-    suspend fun redact(roomId: String, eventId: String, reason: String? = null): Boolean
+    suspend fun paginateBack(roomId: String, count: Int): Result<Boolean>
+    suspend fun paginateForward(roomId: String, count: Int): Result<Boolean>
+    suspend fun markRead(roomId: String): Result<Unit>
+    suspend fun markReadAt(roomId: String, eventId: String): Result<Unit>
+    suspend fun react(roomId: String, eventId: String, emoji: String): Result<Unit>
+    suspend fun reply(roomId: String, inReplyToEventId: String, body: String, formattedBody: String? = null): Result<Unit>
+    suspend fun edit(roomId: String, targetEventId: String, newBody: String, formattedBody: String? = null): Result<Unit>
+    suspend fun redact(roomId: String, eventId: String, reason: String? = null): Result<Unit>
     suspend fun getUserPowerLevel(roomId: String, userId: String): Long
     
     suspend fun getPinnedEvents(roomId: String): List<String>
-    suspend fun setPinnedEvents(roomId: String, eventIds: List<String>): Boolean
+    suspend fun setPinnedEvents(roomId: String, eventIds: List<String>): Result<Unit>
     
     fun observeTyping(roomId: String, onUpdate: (List<String>) -> Unit): ULong
 
@@ -510,23 +598,10 @@ interface MatrixPort {
 
     suspend fun listMyDevices(): List<DeviceSummary>
 
-    suspend fun startSelfSas(targetDeviceId: String, observer: VerificationObserver): String
-    suspend fun startUserSas(userId: String, observer: VerificationObserver): String
-
-    suspend fun acceptVerificationRequest(flowId: String, otherUserId: String?, observer: VerificationObserver): Boolean
-    suspend fun acceptSas(flowId: String, otherUserId: String?, observer: VerificationObserver): Boolean
-
-    suspend fun confirmVerification(flowId: String): Boolean
-    suspend fun cancelVerification(flowId: String): Boolean
-
-    suspend fun cancelVerificationRequest(flowId: String, otherUserId: String?): Boolean
-
     fun enterForeground()
     fun enterBackground()
 
     suspend fun logout(): Boolean
-
-    suspend fun checkVerificationRequest(userId: String, flowId: String): Boolean
 
     suspend fun sendAttachmentFromPath(
         roomId: String,
@@ -536,23 +611,9 @@ interface MatrixPort {
         onProgress: ((Long, Long?) -> Unit)? = null,
     ): Boolean
 
-    suspend fun sendAttachmentBytes(
-        roomId: String,
-        data: ByteArray,
-        mime: String,
-        filename: String,
-        onProgress: ((Long, Long?) -> Unit)? = null,
-    ): Boolean
-
     suspend fun downloadAttachmentToCache(
         info: AttachmentInfo,
         filenameHint: String? = null
-    ): Result<String>
-
-    suspend fun downloadAttachmentToPath(
-        info: AttachmentInfo,
-        savePath: String,
-        onProgress: ((Long, Long?) -> Unit)? = null
     ): Result<String>
 
     suspend fun searchRoom(
@@ -562,7 +623,7 @@ interface MatrixPort {
         offset: Int? = null
     ): SearchPage
 
-    suspend fun recoverWithKey(recoveryKey: String): Boolean
+    suspend fun recoverWithKey(recoveryKey: String): Result<Unit>
     fun observeReceipts(roomId: String, observer: ReceiptsObserver): ULong
     fun stopReceiptsObserver(token: ULong)
     suspend fun dmPeerUserId(roomId: String): String?
@@ -577,9 +638,7 @@ interface MatrixPort {
     suspend fun roomUnreadStats(roomId: String): UnreadStats?
     suspend fun ownLastRead(roomId: String): Pair<String?, Long?>
     fun observeOwnReceipt(roomId: String, observer: ReceiptsObserver): ULong
-    suspend fun markFullyReadAt(roomId: String, eventId: String): Boolean
-
-    suspend fun encryptionCatchupOnce(): Boolean
+    suspend fun markFullyReadAt(roomId: String, eventId: String): Result<Unit>
 
     interface RoomListObserver { fun onReset(items: List<RoomListEntry>); fun onUpdate(item: RoomListEntry) }
 
@@ -596,9 +655,25 @@ interface MatrixPort {
 
     fun roomListSetUnreadOnly(token: ULong, unreadOnly: Boolean): Boolean
 
-    suspend fun loginSsoLoopback(openUrl: (String) -> Boolean, deviceName: String? = null): Boolean
+    suspend fun loginSsoLoopback(openUrl: (String) -> Boolean, deviceName: String? = null): Result<Unit>
 
-    suspend fun loginOauthLoopback(openUrl: (String) -> Boolean, deviceName: String? = null): Boolean
+    suspend fun loginOauthLoopback(openUrl: (String) -> Boolean, deviceName: String? = null): Result<Unit>
+
+    suspend fun loginOauth(
+        openUrl: (String) -> Boolean,
+        deviceName: String? = null
+    ): OauthLoginResult {
+        val result = loginOauthLoopback(openUrl, deviceName)
+        return if (result.isSuccess && isLoggedIn()) {
+            OauthLoginResult.Completed
+        } else {
+            OauthLoginResult.Failed("OAuth failed or was cancelled")
+        }
+    }
+
+    suspend fun maybeFinishOauthRedirect(): Boolean = false
+
+    suspend fun resumeOauthIfNeeded(): Boolean = maybeFinishOauthRedirect()
 
     suspend fun homeserverLoginDetails(): HomeserverLoginDetails
 
@@ -607,12 +682,12 @@ interface MatrixPort {
     suspend fun publicRooms(server: String? = null, search: String? = null, limit: Int = 50, since: String? = null): PublicRoomsPage
     suspend fun roomPreview(idOrAlias: String): Result<RoomPreview>
     suspend fun joinByIdOrAlias(idOrAlias: String): Result<Unit>
-    suspend fun knock(idOrAlias: String): Boolean
+    suspend fun knock(idOrAlias: String): Result<Unit>
     suspend fun ensureDm(userId: String): String?
     suspend fun resolveRoomId(idOrAlias: String): String?
 
     suspend fun listInvited(): List<RoomProfile>
-    suspend fun acceptInvite(roomId: String): Boolean
+    suspend fun acceptInvite(roomId: String): Result<Unit>
     suspend fun leaveRoom(roomId: String): Result<Unit>
 
     suspend fun createRoom(name: String?, topic: String?, invitees: List<String>, isPublic: Boolean, roomAlias: String?): String?
@@ -627,11 +702,11 @@ interface MatrixPort {
     suspend fun listMembers(roomId: String): List<MemberSummary>
     suspend fun listKnockRequests(roomId: String): List<KnockRequestSummary>
 
-    suspend fun reactions(roomId: String, eventId: String): List<ReactionChip>
+    suspend fun reactions(roomId: String, eventId: String): List<ReactionSummary>
     suspend fun reactionsBatch(
         roomId: String,
         eventIds: List<String>
-    ): Map<String, List<ReactionChip>>
+    ): Map<String, List<ReactionSummary>>
 
     suspend fun sendThreadText(
         roomId: String,
@@ -664,8 +739,8 @@ interface MatrixPort {
         childRoomId: String,
         order: String?,
         suggested: Boolean?
-    ): Boolean
-    suspend fun spaceRemoveChild(spaceId: String, childRoomId: String): Boolean
+    ): Result<Unit>
+    suspend fun spaceRemoveChild(spaceId: String, childRoomId: String): Result<Unit>
     suspend fun spaceHierarchy(
         spaceId: String,
         from: String?,
@@ -673,7 +748,7 @@ interface MatrixPort {
         maxDepth: Int?,
         suggestedOnly: Boolean
     ): SpaceHierarchyPage?
-    suspend fun spaceInviteUser(spaceId: String, userId: String): Boolean
+    suspend fun spaceInviteUser(spaceId: String, userId: String): Result<Unit>
 
     suspend fun setPresence(presence: Presence, status: String?): Result<Unit>
     suspend fun getPresence(userId: String): Pair<Presence, String?>?
@@ -684,8 +759,8 @@ interface MatrixPort {
 
     suspend fun roomDirectoryVisibility(roomId: String): RoomDirectoryVisibility?
     suspend fun setRoomDirectoryVisibility(roomId: String, visibility: RoomDirectoryVisibility): Result<Unit>
-    suspend fun publishRoomAlias(roomId: String, alias: String): Boolean
-    suspend fun unpublishRoomAlias(roomId: String, alias: String): Boolean
+    suspend fun publishRoomAlias(roomId: String, alias: String): Result<Unit>
+    suspend fun unpublishRoomAlias(roomId: String, alias: String): Result<Unit>
     suspend fun setRoomCanonicalAlias(roomId: String, alias: String?, altAliases: List<String>): Result<Unit>
     suspend fun roomAliases(roomId: String): List<String>
 
@@ -721,15 +796,15 @@ interface MatrixPort {
     fun observeLiveLocation(roomId: String, onShares: (List<LiveLocationShare>) -> Unit): ULong
     fun stopObserveLiveLocation(token: ULong)
 
-    suspend fun sendPoll(roomId: String, question: String, answers: List<String>): Boolean
+    suspend fun sendPoll(roomId: String, question: String, answers: List<String>): Result<Unit>
 
     fun seenByForEvent(roomId: String, eventId: String, limit: Int): List<SeenByEntry>
 
     suspend fun mxcThumbnailToCache(mxcUri: String, width: Int, height: Int, crop: Boolean): String
     suspend fun loadRoomListCache(): List<RoomListEntry>
 
-    suspend fun sendPollResponse(roomId: String, pollEventId: String, answers: List<String>): Boolean
-    suspend fun sendPollEnd(roomId: String, pollEventId: String): Boolean
+    suspend fun sendPollResponse(roomId: String, pollEventId: String, answers: List<String>): Result<Unit>
+    suspend fun sendPollEnd(roomId: String, pollEventId: String): Result<Unit>
     suspend fun startElementCall(
         roomId: String,
         intent: CallIntent,
@@ -747,3 +822,5 @@ interface MatrixPort {
 }
 
 expect fun createMatrixPort(): MatrixPort
+
+fun MatrixPort.asVerificationService(): VerificationService? = this as? VerificationService

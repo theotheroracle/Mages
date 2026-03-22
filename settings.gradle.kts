@@ -31,3 +31,4 @@ rootProject.name = "mages"
 include(":shared")
 include(":androidApp")
 include(":desktopApp")
+include(":webApp")

@@ -24,6 +24,7 @@ import org.mlm.mages.ui.theme.Durations
 import org.mlm.mages.ui.RoomUiState
 import org.mlm.mages.ui.components.AttachmentData
 import org.mlm.mages.ui.util.mimeToExtension
+import org.mlm.mages.ui.util.nowMs
 import kotlin.collections.map
 
 class RoomViewModel(
@@ -102,7 +103,7 @@ class RoomViewModel(
             val share = LiveLocationShare(
                 userId = myUserId,
                 geoUri = "geo:${location.latitude},${location.longitude}",
-                tsMs = System.currentTimeMillis(),
+                tsMs = nowMs(),
                 isLive = true,
             )
             updateState { copy(liveLocationShares = liveLocationShares + (myUserId to share)) }
@@ -316,14 +317,14 @@ class RoomViewModel(
     }
 
     private fun String.toPlainComposerText(): String =
-        Regex("\\[([^\\]]+)]\\(https://matrix\\.to/#/(@[^)]+)\\)")
+        Regex("\\[([^]]+)]\\(https://matrix\\.to/#/(@[^)]+)\\)")
             .replace(this) { matchResult ->
                 val label = matchResult.groupValues[1]
                 if (label.startsWith("@")) label else "@$label"
             }
 
     private fun String.toFormattedBodyOrNull(): String? {
-        val regex = Regex("\\[([^\\]]+)]\\(https://matrix\\.to/#/(@[^)]+)\\)")
+        val regex = Regex("\\[([^]]+)]\\(https://matrix\\.to/#/(@[^)]+)\\)")
         if (!regex.containsMatchIn(this)) return null
 
         val html = buildString {
@@ -391,14 +392,14 @@ class RoomViewModel(
         if (myUserId == null) return
         launch {
             val powerLevel = runSafe { service.port.getUserPowerLevel(currentState.roomId, myUserId) } ?: 0L
-            
+
             // Matrix defaults -> kick=50, ban=50, redact=50, state_default=50
             val canRedactOthers = powerLevel >= 50
             val canKick = powerLevel >= 50
             val canBan = powerLevel >= 50
             val canPin = powerLevel >= 50
-            
-            updateState { 
+
+            updateState {
                 copy(
                     myPowerLevel = powerLevel,
                     canRedactOthers = canRedactOthers,
@@ -429,7 +430,7 @@ class RoomViewModel(
             val currentPinned = currentState.pinnedEventIds.toMutableList()
             if (event.eventId !in currentPinned) {
                 currentPinned.add(0, event.eventId) // Add to front
-                val ok = runSafe { service.port.setPinnedEvents(currentState.roomId, currentPinned) } ?: false
+                val ok = runSafe { service.port.setPinnedEvents(currentState.roomId, currentPinned) }?.isSuccess ?: false
                 if (ok) {
                     updateState { copy(pinnedEventIds = currentPinned) }
                     _events.send(Event.ShowError("Message pinned"))
@@ -450,7 +451,7 @@ class RoomViewModel(
             val currentPinned = currentState.pinnedEventIds.toMutableList()
             if (event.eventId in currentPinned) {
                 currentPinned.remove(event.eventId)
-                val ok = runSafe { service.port.setPinnedEvents(currentState.roomId, currentPinned) } ?: false
+                val ok = runSafe { service.port.setPinnedEvents(currentState.roomId, currentPinned) }?.isSuccess ?: false
                 if (ok) {
                     updateState { copy(pinnedEventIds = currentPinned) }
                     _events.send(Event.ShowError("Message unpinned"))
@@ -479,9 +480,7 @@ class RoomViewModel(
         }
         launch {
             val entries = runSafe {
-                withContext(Dispatchers.IO) {
-                    service.port.seenByForEvent(currentState.roomId, event.eventId, 20)
-                }
+                service.port.seenByForEvent(currentState.roomId, event.eventId, 20)
             } ?: emptyList()
             updateState { copy(messageInfoEntries = entries) }
         }
@@ -564,7 +563,7 @@ class RoomViewModel(
         launch {
             updateState { copy(isPaginatingBack = true) }
             try {
-                val hitStart = runSafe { service.port.paginateBack(s.roomId, 50) } ?: false
+                val hitStart = runSafe { service.port.paginateBack(s.roomId, 50) }?.isSuccess ?: false
                 updateState { copy(hitStart = hitStart || this.hitStart) }
 
                 // After pagination, recompute thread counts from timeline
@@ -682,8 +681,7 @@ class RoomViewModel(
 
             service.port.downloadAttachmentToCache(a, nameHint)
                 .onSuccess { path ->
-                    val f = java.io.File(path)
-                    if (!f.exists() || f.length() == 0L) {
+                    if (path.isBlank()) {
                         _events.send(
                             Event.ShowError("Downloaded file is missing or empty: $path")
                         )
@@ -850,8 +848,7 @@ class RoomViewModel(
 
             selected.forEachIndexed { idx, ev ->
                 _events.send(Event.ShowProgress(idx + 1, total, "Deleting…"))
-                val success = runCatching { service.port.redact(currentState.roomId, ev.eventId, null) }
-                    .getOrDefault(false)
+                val success = runSafe { service.port.redact(currentState.roomId, ev.eventId, null) }?.isSuccess ?: false
                 if (success) ok++
             }
 
@@ -904,7 +901,7 @@ class RoomViewModel(
         if (q.isBlank() || opts.size < 2) return
 
         launch {
-            val ok = service.port.sendPoll(currentState.roomId, q, opts)
+            val ok = service.port.sendPoll(currentState.roomId, q, opts).isSuccess
             if (ok) {
                 updateState { copy(showPollCreator = false) }
             } else {
@@ -918,7 +915,7 @@ class RoomViewModel(
     fun setNotificationMode(mode: RoomNotificationMode) {
         launch {
             val result = service.port.setRoomNotificationMode(currentState.roomId, mode)
-            if (result?.isSuccess == true) {
+            if (result.isSuccess) {
                 updateState { copy(notificationMode = mode, showNotificationSettings = false) }
                 _events.send(Event.ShowSuccess("Notification settings updated"))
             } else {
@@ -977,7 +974,7 @@ class RoomViewModel(
                 }
             }.toList()
 
-            val ok = service.port.sendPollResponse(currentState.roomId, pollEventId, newSelections)
+            val ok = service.port.sendPollResponse(currentState.roomId, pollEventId, newSelections).isSuccess
             if (!ok) {
                 _events.send(Event.ShowError("Failed to submit vote"))
             }
@@ -986,7 +983,7 @@ class RoomViewModel(
 
     fun endPoll(pollEventId: String) {
         launch {
-            val ok = service.port.sendPollEnd(currentState.roomId, pollEventId)
+            val ok = service.port.sendPollEnd(currentState.roomId, pollEventId).isSuccess
             if (!ok) {
                 _events.send(Event.ShowError("Failed to end poll"))
             } else {
@@ -1299,15 +1296,16 @@ class RoomViewModel(
         return try {
             val attachment = event.attachment
 
-            if (attachment != null) {
+            val ok = if (attachment != null) {
                 service.port.sendExistingAttachment(
                     roomId = targetRoomId,
                     attachment = attachment,
                     body = event.body.takeIf { it.isNotBlank() && it != attachment.mxcUri }
-                )
+                ).isSuccess
             } else {
                 service.sendMessage(targetRoomId, event.body)
             }
+            ok
         } catch (e: Exception) {
             e.printStackTrace()
             false
@@ -1509,9 +1507,7 @@ class RoomViewModel(
         }
         launch {
             val entries = runSafe {
-                withContext(Dispatchers.IO) {
-                    service.port.seenByForEvent(s.roomId, lastOutgoing.eventId, 10)
-                }
+                service.port.seenByForEvent(s.roomId, lastOutgoing.eventId, 10)
             } ?: emptyList()
             val resolvedEntries = entries.map { entry ->
                 entry.copy(avatarUrl = service.avatars.resolve(entry.avatarUrl, px = 64, crop = true))

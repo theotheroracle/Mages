@@ -142,10 +142,10 @@ class ForwardPickerViewModel(
                 service.port.sendExistingAttachment(
                     roomId = targetRoomId,
                     attachment = attachment,
-                    body = event.body.takeIf { 
-                        it.isNotBlank() && it != attachment.mxcUri && !it.startsWith("mxc://") 
+                    body = event.body.takeIf {
+                        it.isNotBlank() && it != attachment.mxcUri && !it.startsWith("mxc://")
                     }
-                )
+                ).isSuccess
             } else {
                 service.sendMessage(targetRoomId, event.body)
             }

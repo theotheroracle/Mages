@@ -13,9 +13,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Reply
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.*
@@ -29,7 +26,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 import org.mlm.mages.MessageEvent
-import org.mlm.mages.matrix.ReactionChip
+import org.mlm.mages.matrix.ReactionSummary
 import org.mlm.mages.ui.ThreadUiState
 import org.mlm.mages.ui.components.composer.MessageComposer
 import org.mlm.mages.ui.components.core.Avatar
@@ -38,11 +35,17 @@ import org.mlm.mages.ui.components.core.StatusBanner
 import org.mlm.mages.ui.components.core.BannerType
 import org.mlm.mages.ui.components.core.formatDisplayName
 import org.mlm.mages.ui.components.message.MessageBubble
+import org.mlm.mages.ui.components.message.MessageBubbleModel
+import org.mlm.mages.ui.components.message.MessageGroupingUi
+import org.mlm.mages.ui.components.message.MessageReplyUi
+import org.mlm.mages.ui.components.message.MessageAttachmentUi
+import org.mlm.mages.ui.components.message.MessageSenderUi
+import org.mlm.mages.ui.components.message.ReactionChipsRow
+import org.mlm.mages.ui.components.message.ReactionChipStyle
 import org.mlm.mages.ui.components.sheets.MessageActionSheet
 import org.mlm.mages.ui.components.snackbar.SnackbarManager
 import org.mlm.mages.ui.components.snackbar.rememberErrorPoster
 import org.mlm.mages.ui.theme.Spacing
-import org.mlm.mages.ui.util.formatTime
 import org.mlm.mages.ui.viewmodel.ThreadViewModel
 import io.github.mlmgames.settings.core.SettingsRepository
 import org.mlm.mages.settings.AppSettings
@@ -245,7 +248,7 @@ fun ThreadScreen(
                                     state = state,
                                     event = root,
                                     isMine = root.sender == myUserId,
-                                    reactionChips = root.reactions,
+                                    reactionSummaries = root.reactions,
                                     onReact = { emoji -> onReact(root, emoji) },
                                     onReply = { onStartReply(root) },
                                     onLongPress = { sheetEvent = root }
@@ -276,7 +279,7 @@ fun ThreadScreen(
                             ThreadReplyMessage(
                                 event = event,
                                 isMine = event.sender == myUserId,
-                                reactionChips = event.reactions,
+                                reactionSummaries = event.reactions,
                                 avatarByUserId = state.avatarByUserId,
                                 onReact = { emoji -> onReact(event, emoji) },
                                 onLongPress = { sheetEvent = event },
@@ -388,7 +391,7 @@ private fun ThreadRootMessage(
     state: ThreadUiState,
     event: MessageEvent,
     isMine: Boolean,
-    reactionChips: List<ReactionChip>,
+    reactionSummaries: List<ReactionSummary>,
     onReact: (String) -> Unit,
     onReply: () -> Unit,
     onLongPress: () -> Unit
@@ -471,9 +474,14 @@ private fun ThreadRootMessage(
                 )
             }
 
-            if (reactionChips.isNotEmpty()) {
+            if (reactionSummaries.isNotEmpty()) {
                 Spacer(Modifier.height(Spacing.sm))
-                ThreadReactionChipsRow(chips = reactionChips, onReact = onReact)
+                ReactionChipsRow(
+                    chips = reactionSummaries,
+                    style = ReactionChipStyle.ThreadRoot,
+                    maxVisible = 6,
+                    onClick = onReact,
+                )
             }
 
             Spacer(Modifier.height(Spacing.sm))
@@ -540,7 +548,7 @@ private fun ThreadDivider(replyCount: Int) {
 private fun ThreadReplyMessage(
     event: MessageEvent,
     isMine: Boolean,
-    reactionChips: List<ReactionChip>,
+    reactionSummaries: List<ReactionSummary>,
     avatarByUserId: Map<String, String>,
     onReact: (String) -> Unit,
     onLongPress: () -> Unit,
@@ -571,66 +579,39 @@ private fun ThreadReplyMessage(
 
         Column(modifier = Modifier.weight(1f)) {
             MessageBubble(
-                isMine = isMine,
-                body = event.body,
-                formattedBody = event.formattedBody,
-                sender = if (grouped) null else event.senderDisplayName,
-                senderAvatarPath = avatarByUserId[event.sender],
-                senderId = event.sender,
-                timestamp = event.timestampMs,
-                groupedWithPrev = grouped,
-                groupedWithNext = groupedWithNext,
-                isDm = false,
-                reactionChips = reactionChips,
-                eventId = event.eventId,
-                onReact = onReact,
+                model = MessageBubbleModel(
+                    eventId = event.eventId,
+                    isMine = isMine,
+                    body = event.body,
+                    formattedBody = event.formattedBody,
+                    sender = if (grouped) null else MessageSenderUi(
+                        id = event.sender,
+                        displayName = event.senderDisplayName,
+                        avatarPath = avatarByUserId[event.sender]
+                    ),
+                    timestamp = event.timestampMs,
+                    grouping = MessageGroupingUi(
+                        groupedWithPrev = grouped,
+                        groupedWithNext = groupedWithNext
+                    ),
+                    isDm = false,
+                    reactions = reactionSummaries,
+                    reply = if (event.replyToBody != null) MessageReplyUi(
+                        sender = event.replyToSenderDisplayName,
+                        body = event.replyToBody
+                    ) else null,
+                    sendState = event.sendState,
+                    isEdited = event.isEdited,
+                    attachment = if (event.attachment?.kind != null) MessageAttachmentUi(
+                        kind = event.attachment?.kind,
+                        width = event.attachment?.width,
+                        height = event.attachment?.height,
+                        durationMs = event.attachment?.durationMs
+                    ) else null
+                ),
                 onLongPress = onLongPress,
-                replyPreview = event.replyToBody,
-                replySender = event.replyToSenderDisplayName,
-                sendState = event.sendState,
-                isEdited = event.isEdited,
-                attachmentKind = event.attachment?.kind,
-                attachmentWidth = event.attachment?.width,
-                attachmentHeight = event.attachment?.height,
-                durationMs = event.attachment?.durationMs
+                onReact = onReact
             )
-        }
-    }
-}
-
-@Composable
-private fun ThreadReactionChipsRow(
-    chips: List<ReactionChip>,
-    onReact: (String) -> Unit
-) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        chips.take(6).forEach { chip ->
-            Surface(
-                onClick = { onReact(chip.key) },
-                color = if (chip.mine)
-                    MaterialTheme.colorScheme.primaryContainer
-                else
-                        MaterialTheme.colorScheme.surfaceContainerLow,
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = Spacing.sm, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(chip.key, style = MaterialTheme.typography.bodyMedium)
-                    if (chip.count > 1) {
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            "${chip.count}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
         }
     }
 }

@@ -326,6 +326,8 @@ private fun formatSenderName(sender: String): String {
 
 @OptIn(ExperimentalTime::class)
 fun formatRelativeTime(timestamp: Long): String {
+    fun pad2(value: Int): String = value.toString().padStart(2, '0')
+
     val now = Clock.System.now()
     val messageTime = Instant.fromEpochMilliseconds(timestamp)
     val duration = now - messageTime
@@ -337,7 +339,7 @@ fun formatRelativeTime(timestamp: Long): String {
         duration.inWholeMinutes < 1 -> "now"
         duration.inWholeHours < 1   -> "${duration.inWholeMinutes}m"
         localNow.date == localMessage.date -> {
-            "%02d:%02d".format(localMessage.hour, localMessage.minute)
+            "${pad2(localMessage.hour)}:${pad2(localMessage.minute)}"
         }
         localNow.date.minus(1, DateTimeUnit.DAY) == localMessage.date -> "Yesterday"
         duration.inWholeDays < 7 -> {

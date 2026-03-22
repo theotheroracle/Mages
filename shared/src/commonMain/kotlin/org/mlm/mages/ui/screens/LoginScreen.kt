@@ -5,6 +5,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -28,6 +29,8 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.mlmgames.settings.core.annotations.SettingPlatform
+import io.github.mlmgames.settings.core.platform.currentPlatform
 import mages.shared.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
 import org.mlm.mages.ui.theme.Spacing
@@ -224,45 +227,47 @@ fun LoginScreen(
                     }
 
                     // SSO button
-                    AnimatedVisibility(
-                        visible = ssoAvailable || state.ssoInProgress,
-                        enter = fadeIn(tween(300)) + expandVertically(tween(300)),
-                        exit = fadeOut(tween(200)) + shrinkVertically(tween(200))
-                    ) {
-                        if (state.ssoInProgress) {
-                            OutlinedButton(
-                                onClick = { viewModel.cancelSso() },
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    contentColor = MaterialTheme.colorScheme.error
-                                )
-                            ) {
-                                Icon(Icons.Default.Close, null)
-                                Spacer(Modifier.width(Spacing.sm))
-                                Text(stringResource(Res.string.cancel_sso))
-                            }
-                        } else if (primaryAuth == "sso") {
-                            Button(
-                                onClick = onSso,
-                                enabled = !state.isBusy,
-                                modifier = Modifier.fillMaxWidth().height(52.dp)
-                            ) {
-                                Icon(Icons.Default.OpenInBrowser, null)
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    stringResource(Res.string.continue_with_sso),
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        } else {
-                            OutlinedButton(
-                                onClick = onSso,
-                                enabled = !state.isBusy && !state.oauthInProgress,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Default.OpenInBrowser, null)
-                                Spacer(Modifier.width(Spacing.sm))
-                                Text(stringResource(Res.string.continue_with_sso))
+                    if (currentPlatform != SettingPlatform.WEB) {
+                        AnimatedVisibility(
+                            visible = ssoAvailable || state.ssoInProgress,
+                            enter = fadeIn(tween(300)) + expandVertically(tween(300)),
+                            exit = fadeOut(tween(200)) + shrinkVertically(tween(200))
+                        ) {
+                            if (state.ssoInProgress) {
+                                OutlinedButton(
+                                    onClick = { viewModel.cancelSso() },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.error
+                                    )
+                                ) {
+                                    Icon(Icons.Default.Close, null)
+                                    Spacer(Modifier.width(Spacing.sm))
+                                    Text(stringResource(Res.string.cancel_sso))
+                                }
+                            } else if (primaryAuth == "sso") {
+                                Button(
+                                    onClick = onSso,
+                                    enabled = !state.isBusy,
+                                    modifier = Modifier.fillMaxWidth().height(52.dp)
+                                ) {
+                                    Icon(Icons.Default.OpenInBrowser, null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        stringResource(Res.string.continue_with_sso),
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            } else {
+                                OutlinedButton(
+                                    onClick = onSso,
+                                    enabled = !state.isBusy && !state.oauthInProgress,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Default.OpenInBrowser, null)
+                                    Spacer(Modifier.width(Spacing.sm))
+                                    Text(stringResource(Res.string.continue_with_sso))
+                                }
                             }
                         }
                     }
@@ -410,7 +415,7 @@ fun LoginScreen(
                         ) {
                             Row(
                                 modifier = Modifier.padding(Spacing.md),
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalAlignment = Alignment.Top
                             ) {
                                 Icon(
                                     Icons.Default.Error, null,
@@ -418,11 +423,13 @@ fun LoginScreen(
                                     modifier = Modifier.size(20.dp)
                                 )
                                 Spacer(Modifier.width(Spacing.sm))
-                                Text(
-                                    state.error ?: "",
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
+                                SelectionContainer {
+                                    Text(
+                                        state.error ?: "",
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
                             }
                         }
                     }

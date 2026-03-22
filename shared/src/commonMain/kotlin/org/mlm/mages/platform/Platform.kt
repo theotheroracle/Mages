@@ -9,12 +9,18 @@ expect fun getDeviceDisplayName(): String
 
 expect fun deleteDirectory(path: String): Boolean
 
+expect fun platformSystemBarColorScheme(): ColorScheme?
+
 @Composable
 expect fun getDynamicColorScheme(darkTheme: Boolean, useDynamicColors: Boolean): ColorScheme?
 
 expect fun platformEmbeddedElementCallUrlOrNull(): String?
 
 expect fun platformEmbeddedElementCallParentUrlOrNull(): String?
+
+expect fun platformNeedsControlledAudioDevices(): Boolean
+
+expect fun setSystemBarsVisibility(hide: Boolean)
 
 expect class CameraPickerLauncher {
     fun launch()

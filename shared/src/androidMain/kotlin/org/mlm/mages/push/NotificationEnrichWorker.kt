@@ -1,7 +1,10 @@
 package org.mlm.mages.push
 
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.flow.first
@@ -13,6 +16,7 @@ import org.koin.core.component.inject
 import org.mlm.mages.MatrixService
 import org.mlm.mages.matrix.NotificationKind
 import org.mlm.mages.platform.SettingsProvider
+import org.mlm.mages.shared.R
 
 private fun parseNotifiedRooms(json: String): Set<String> {
     if (json.isBlank()) return emptySet()
@@ -33,7 +37,7 @@ class NotificationEnrichWorker(
         val eventId = inputData.getString(KEY_EVENT_ID) ?: return Result.failure()
 
         // Placeholder + message notification share the same ID (to update after enrich).
-        val notifId = (roomId + eventId).hashCode()
+        val notifId = (roomId).hashCode()
         val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         val settingsRepo = SettingsProvider.get(applicationContext)
@@ -178,16 +182,56 @@ class NotificationEnrichWorker(
                     false
                 }
 
-                // No need to cancel here; showSingleEvent uses the same notifId and will replace.
-                AndroidNotificationHelper.showSingleEvent(
-                    applicationContext,
-                    AndroidNotificationHelper.NotificationText(
-                        title = title,
-                        body = rendered.body
-                    ),
+                // No need to cancel here; showConversationNotification uses the same notifId and will replace.
+                val notificationId = (roomId).hashCode()
+                val bubbleActivityClass = try {
+                    Class.forName("org.mlm.mages.activities.BubbleConversationActivity")
+                } catch (_: ClassNotFoundException) {
+                    null // not possible
+                }
+
+                val isDm = rendered.isDm
+
+                val senderAvatarUrl = runCatching {
+                    port.getUserProfile(rendered.senderUserId)?.avatarUrl
+                }.getOrNull()
+
+                val roomAvatarUrl = runCatching {
+                    port.roomProfile(roomId)?.avatarUrl
+                }.getOrNull()
+
+                val senderAvatar = NotificationAvatarHelper.resolve(
+                    context = applicationContext,
+                    service = service,
+                    avatarUrl = senderAvatarUrl,
+                    displayName = rendered.sender,
+                    userId = rendered.senderUserId,
+                    fallbackRes = R.drawable.ic_notif_status_bar,
+                )
+                val roomAvatar = NotificationAvatarHelper.resolve(
+                    context = applicationContext,
+                    service = service,
+                    avatarUrl = roomAvatarUrl,
+                    displayName = rendered.roomName,
+                    userId = roomId,
+                    fallbackRes = R.drawable.ic_notif_status_bar,
+                )
+
+                Notifier.showConversationNotification(
+                    context = applicationContext,
                     roomId = roomId,
+                    roomName = rendered.roomName,
+                    senderName = rendered.sender,
+                    senderUserId = rendered.senderUserId,
+                    messageBody = rendered.body,
                     eventId = eventId,
-                    playSound = playSound
+                    timestamp = System.currentTimeMillis(),
+                    notificationId = notificationId,
+                    bubbleActivityClass = bubbleActivityClass,
+                    fullOpenIntent = buildFullOpenIntent(applicationContext, roomId),
+                    senderAvatar = senderAvatar,
+                    roomAvatar = roomAvatar,
+                    isDm = isDm,
                 )
                 return Result.success()
             }
@@ -198,4 +242,20 @@ class NotificationEnrichWorker(
         const val KEY_ROOM_ID = "roomId"
         const val KEY_EVENT_ID = "eventId"
     }
+}
+
+private fun buildFullOpenIntent(context: Context, roomId: String): PendingIntent {
+    val uri = Uri.Builder()
+        .scheme("mages")
+        .authority("room")
+        .appendQueryParameter("id", roomId)
+        .build()
+    val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+        setPackage(context.packageName)
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+    }
+    return PendingIntent.getActivity(
+        context, roomId.hashCode(),
+        intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+    )
 }

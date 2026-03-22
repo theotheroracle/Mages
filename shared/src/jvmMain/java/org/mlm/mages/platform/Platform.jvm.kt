@@ -4,6 +4,7 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.runtime.Composable
 import io.github.vinceglb.filekit.PlatformFile
 import org.mlm.mages.ui.components.AttachmentData
+import org.mlm.mages.ui.components.AttachmentSourceKind
 import org.mlm.mages.ui.util.guessMimeType
 import java.io.File
 import java.net.InetAddress
@@ -22,6 +23,7 @@ actual fun getDeviceDisplayName(): String {
     }
 }
 
+actual fun platformSystemBarColorScheme(): ColorScheme? = null
 
 actual fun deleteDirectory(path: String): Boolean {
     return File(path).deleteRecursively()
@@ -36,6 +38,12 @@ actual fun getDynamicColorScheme(
 actual fun platformEmbeddedElementCallUrlOrNull(): String? = ElementCallLocalServer.indexUrl()
 
 actual fun platformEmbeddedElementCallParentUrlOrNull(): String? = ElementCallLocalServer.parentUrl()
+
+actual fun platformNeedsControlledAudioDevices(): Boolean = false
+
+actual fun setSystemBarsVisibility(hide: Boolean) {
+    // No-op
+}
 
 actual class CameraPickerLauncher {
     actual fun launch() {
@@ -60,6 +68,7 @@ actual suspend fun PlatformFile.toAttachmentData(): AttachmentData {
         path = file.absolutePath,
         mimeType = mime,
         fileName = file.name,
-        sizeBytes = file.length()
+        sizeBytes = file.length(),
+        sourceKind = AttachmentSourceKind.LocalPath
     )
 }

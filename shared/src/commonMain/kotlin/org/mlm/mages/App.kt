@@ -99,6 +99,10 @@ private fun AppContent(
     var initDone by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         runCatching { service.initFromDisk() }
+        val oauthCompleted = runCatching { service.port.maybeFinishOauthRedirect() }.getOrDefault(false)
+        if (oauthCompleted) {
+            runCatching { service.initFromDisk() }
+        }
         initDone = true
     }
 

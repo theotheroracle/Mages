@@ -1,8 +1,18 @@
 package org.mlm.mages.ui.components
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 data class AttachmentData(
     val path: String,
     val mimeType: String,
     val fileName: String,
-    val sizeBytes: Long
+    val sizeBytes: Long,
+    val sourceKind: AttachmentSourceKind = AttachmentSourceKind.LocalPath,
 )
+
+enum class AttachmentSourceKind {
+    LocalPath,
+    WebObjectUrl,
+    WebBlobToken,
+}

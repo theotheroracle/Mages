@@ -106,59 +106,36 @@ class MatrixService(
     fun timelineDiffs(roomId: String): Flow<TimelineDiff<MessageEvent>> = port.timelineDiffs(roomId)
 
     suspend fun sendMessage(roomId: String, body: String, formattedBody: String? = null): Boolean =
-        port.send(roomId, body, formattedBody)
+        port.send(roomId, body, formattedBody).isSuccess
 
     suspend fun paginateBack(roomId: String, count: Int) =
-        runCatching { port.paginateBack(roomId, count) }.getOrElse { false }
-
-    suspend fun paginateForward(roomId: String, count: Int) =
-        runCatching { port.paginateForward(roomId, count) }.getOrElse { false }
+        port.paginateBack(roomId, count).isSuccess
 
     suspend fun markRead(roomId: String) =
-        runCatching { port.markRead(roomId) }.getOrElse { false }
+        port.markRead(roomId).isSuccess
 
     suspend fun markReadAt(roomId: String, eventId: String) =
-        runCatching { port.markReadAt(roomId, eventId) }.getOrElse { false }
+        port.markReadAt(roomId, eventId).isSuccess
 
     suspend fun react(roomId: String, eventId: String, emoji: String) =
-        runCatching { port.react(roomId, eventId, emoji) }.getOrElse { false }
+        port.react(roomId, eventId, emoji).isSuccess
 
     suspend fun reply(roomId: String, inReplyToEventId: String, body: String, formattedBody: String? = null) =
-        runCatching { port.reply(roomId, inReplyToEventId, body, formattedBody) }.getOrElse { false }
+        port.reply(roomId, inReplyToEventId, body, formattedBody).isSuccess
 
     suspend fun edit(roomId: String, targetEventId: String, newBody: String, formattedBody: String? = null) =
-        runCatching { port.edit(roomId, targetEventId, newBody, formattedBody) }.getOrElse { false }
+        port.edit(roomId, targetEventId, newBody, formattedBody).isSuccess
 
     suspend fun redact(roomId: String, eventId: String, reason: String? = null) =
-        runCatching { port.redact(roomId, eventId, reason) }.getOrElse { false }
+        port.redact(roomId, eventId, reason).isSuccess
 
     fun observeTyping(roomId: String, onUpdate: (List<String>) -> Unit): ULong =
         port.observeTyping(roomId, onUpdate)
 
     fun stopTypingObserver(token: ULong) = port.stopTypingObserver(token)
 
-    suspend fun enqueueText(roomId: String, body: String, txnId: String? = null) =
-        port.enqueueText(roomId, body, txnId)
-
     suspend fun listMyDevices(): List<DeviceSummary> =
         runCatching { port.listMyDevices() }.getOrElse { emptyList() }
-
-    suspend fun startSelfSas(deviceId: String, observer: VerificationObserver) =
-        port.startSelfSas(deviceId, observer)
-
-    suspend fun startUserSas(userId: String, observer: VerificationObserver) =
-        port.startUserSas(userId, observer)
-
-    suspend fun acceptVerificationRequest(flowId: String, otherUserId: String?, observer: VerificationObserver) =
-        port.acceptVerificationRequest(flowId, otherUserId, observer)
-
-    suspend fun acceptSas(flowId: String, otherUserId: String?, observer: VerificationObserver) =
-        port.acceptSas(flowId, otherUserId, observer)
-
-    suspend fun confirmVerification(flowId: String) = port.confirmVerification(flowId)
-    suspend fun cancelVerification(flowId: String) = port.cancelVerification(flowId)
-    suspend fun cancelVerificationRequest(flowId: String, otherUserId: String?) =
-        port.cancelVerificationRequest(flowId, otherUserId)
 
     suspend fun logout(): Boolean {
         supervisedSyncStarted = false
@@ -171,24 +148,10 @@ class MatrixService(
         mime: String,
         filename: String? = null,
         onProgress: ((Long, Long?) -> Unit)? = null
-    ) = runCatching { port.sendAttachmentFromPath(roomId, path, mime, filename, onProgress) }.getOrElse { false }
-
-    suspend fun sendAttachmentBytes(
-        roomId: String,
-        data: ByteArray,
-        mime: String,
-        filename: String,
-        onProgress: ((Long, Long?) -> Unit)? = null
-    ) = runCatching { port.sendAttachmentBytes(roomId, data, mime, filename, onProgress) }.getOrElse { false }
+    ): Boolean = port.sendAttachmentFromPath(roomId, path, mime, filename, onProgress)
 
     suspend fun recoverWithKey(recoveryKey: String) =
         runCatching { port.recoverWithKey(recoveryKey) }.getOrElse { false }
-
-    suspend fun backupExistsOnServer(fetch: Boolean) =
-        runCatching { port.backupExistsOnServer(fetch) }.getOrDefault(false)
-
-    suspend fun setKeyBackupEnabled(enabled: Boolean) =
-        runCatching { port.setKeyBackupEnabled(enabled) }.getOrDefault(false)
 
     suspend fun retryByTxn(roomId: String, txnId: String) =
         runCatching { port.retryByTxn(roomId, txnId) }.getOrElse { false }
@@ -211,10 +174,10 @@ class MatrixService(
         childRoomId: String,
         order: String? = null,
         suggested: Boolean? = null
-    ): Boolean = runCatching { port.spaceAddChild(spaceId, childRoomId, order, suggested) }.getOrDefault(false)
+    ): Boolean = port.spaceAddChild(spaceId, childRoomId, order, suggested).isSuccess
 
     suspend fun spaceRemoveChild(spaceId: String, childRoomId: String): Boolean =
-        runCatching { port.spaceRemoveChild(spaceId, childRoomId) }.getOrDefault(false)
+        port.spaceRemoveChild(spaceId, childRoomId).isSuccess
 
     suspend fun spaceHierarchy(
         spaceId: String,
@@ -227,6 +190,6 @@ class MatrixService(
     }.getOrNull()
 
     suspend fun spaceInviteUser(spaceId: String, userId: String): Boolean =
-        runCatching { port.spaceInviteUser(spaceId, userId) }.getOrDefault(false)
+        port.spaceInviteUser(spaceId, userId).isSuccess
 
 }

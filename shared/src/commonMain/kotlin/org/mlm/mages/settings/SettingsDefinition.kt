@@ -59,7 +59,7 @@ data class AppSettings(
         description = "System / English / Spanish",
         category = Appearance::class,
         type = Dropdown::class,
-        options = ["System", "English", "Spanish"]
+        options = ["System", "English", "Spanish"],
     )
     val language: Int = AppLanguage.System.ordinal,
 
@@ -81,6 +81,23 @@ data class AppSettings(
         type = Toggle::class
     )
     val showMessageAvatars: Boolean = true,
+
+    @Setting(
+        title = "Show username in DMs",
+        category = Appearance::class,
+        type = Toggle::class
+    )
+    val showUsernameInDms: Boolean = false,
+
+    @Setting(
+        title = "Chat bubbles",
+        description = "Open system settings to enable (or disable) conversation bubbles",
+        category = Notifications::class,
+        type = Button::class,
+        platforms = [SettingPlatform.ANDROID],
+    )
+    @ActionHandler(OpenBubbleSettingsAction::class)
+    val openBubbleSettings: Unit = Unit,
 
     @Setting(
         title = "Enable notifications",
@@ -163,16 +180,11 @@ data class AppSettings(
 //    @Setting(
 //        type = TextInput::class,
 //        title = "Status Message",
-//        description = "What's on your mind?"
+//        description = "Mostly only shown by discord-based clients"
 //    )
 //    val statusMessage: String = ""
 
-//    @Setting(
-//        title = "Element Call URL",
-//        description = "Override Element Call instance (default: call.element.io)",
-//        category = Calls::class,
-//        type = TextInput::class
-//    )
+
     val elementCallUrl: String = "",
 
     @Setting(
@@ -269,7 +281,7 @@ data class AppSettings(
         description = "Minimize to tray on launch",
         category = Advanced::class,
         type = Toggle::class,
-        platforms = [SettingPlatform.DESKTOP]
+        platforms = [SettingPlatform.JVM]
     )
     val startInTray: Boolean = false,
 
@@ -292,3 +304,6 @@ object OpenSystemNotificationSettingsAction : SettingAction
 object SelectUnifiedPushDistributorAction : SettingAction
 object ReRegisterUnifiedPushAction : SettingAction
 object CopyUnifiedPushEndpointAction : SettingAction
+
+object OpenBubbleSettingsAction : SettingAction
+
