@@ -1,3 +1,11 @@
+## v4.3.3
+
+- Add more details to message info sheet
+- add multi-room share functionality
+- Add ability to select multiple rooms when forwarding messages
+- improve Seen by chip alignment for groups
+
+
 ## v4.3.2
 
 - Add floating timeline date display

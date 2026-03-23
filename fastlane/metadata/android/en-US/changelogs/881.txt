@@ -1,0 +1,4 @@
+- Add more details to message info sheet
+- add multi-room share functionality
+- Add ability to select multiple rooms when forwarding messages
+- improve Seen by chip alignment for groups
