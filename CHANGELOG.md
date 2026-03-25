@@ -1,3 +1,13 @@
+## v4.3.5
+
+- Fix client id not being properly saved (might need to relogin)
+- add the deleted toolchain resolver
+- make the sso and login wait for e2ee tasks before logging in
+- show a silent notification if the notif is not noisy instead of discarding
+- hide dup. circular indicator for unread messages
+- Change other Linear and Circular indicators to m3e wavy components
+
+
 ## v4.3.4
 
 - hide dup. circular indicator for unread messages
