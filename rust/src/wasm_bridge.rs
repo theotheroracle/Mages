@@ -486,7 +486,15 @@ impl WasmClient {
                     refresh_token: info.refresh_token,
                 };
                 if info.auth_api == "oauth" {
-                    if let Some(cid) = info.client_id {
+                    if info.client_id.is_none() {
+                        web_sys::console::warn_1(
+                            &JsValue::from_str(&format!(
+                                "Stored OAuth session for {} is missing client_id. Removing invalid session and requiring re-login",
+                                info.user_id
+                            )),
+                        );
+                        clear_wasm_session(&store_name);
+                    } else if let Some(cid) = info.client_id {
                         let _ = client
                             .restore_session(OAuthSession {
                                 client_id: ClientId::new(cid),

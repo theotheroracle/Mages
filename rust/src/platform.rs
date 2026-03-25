@@ -1,6 +1,7 @@
 use crate::{RoomListEntry, SessionInfo};
 use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
+use tracing::{warn, info};
 
 #[cfg(not(target_family = "wasm"))]
 use tracing_subscriber::{EnvFilter, fmt};
@@ -52,9 +53,62 @@ pub(crate) fn reset_store_dir(path: &Path) {
 pub(crate) async fn load_session(store_dir: &Path) -> Option<SessionInfo> {
     #[cfg(not(target_family = "wasm"))]
     {
-        let path = session_file(store_dir);
-        let txt = tokio::fs::read_to_string(path).await.ok()?;
-        serde_json::from_str::<SessionInfo>(&txt).ok()
+        let new_path = session_file(store_dir);
+
+        if let Ok(txt) = tokio::fs::read_to_string(&new_path).await {
+            match serde_json::from_str::<SessionInfo>(&txt) {
+                Ok(info) => return Some(info),
+                Err(e) => {
+                    warn!("Failed to parse session file at {:?}: {e}", new_path);
+                }
+            }
+        }
+
+        let old_path = store_dir.join("session.json");
+        if let Ok(txt) = tokio::fs::read_to_string(&old_path).await {
+            match serde_json::from_str::<SessionInfo>(&txt) {
+                Ok(info) => {
+                    if let Some(parent) = new_path.parent() {
+                        let _ = tokio::fs::create_dir_all(parent).await;
+                    }
+
+                    match tokio::fs::rename(&old_path, &new_path).await {
+                        Ok(()) => {
+                            info!("Migrated session file from {:?} to {:?}", old_path, new_path);
+                        }
+                        Err(rename_err) => {
+                            warn!(
+                                "rename({:?} -> {:?}) failed: {rename_err}; trying copy+delete",
+                                old_path, new_path
+                            );
+
+                            match tokio::fs::write(&new_path, &txt).await {
+                                Ok(()) => {
+                                    let _ = tokio::fs::remove_file(&old_path).await;
+                                    info!(
+                                        "Migrated session file from {:?} to {:?} using copy+delete",
+                                        old_path, new_path
+                                    );
+                                }
+                                Err(write_err) => {
+                                    warn!(
+                                        "Failed to migrate session file to {:?}: {write_err}; leaving old file in place",
+                                        new_path
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    return Some(info);
+                }
+                Err(e) => {
+                    warn!("Failed to parse legacy session file at {:?}: {e}", old_path);
+                }
+            }
+        }
+
+        None
     }
 
     #[cfg(target_family = "wasm")]
@@ -193,21 +247,24 @@ pub(crate) async fn persist_session(store_dir: &Path, info: &SessionInfo) -> std
 pub(crate) async fn build_and_persist_session(sdk: &matrix_sdk::Client, store_dir: &Path) {
     #[cfg(not(target_family = "wasm"))]
     {
+        use tracing::warn;
         let homeserver = sdk.homeserver().to_string();
 
-        if let Some(oauth_sess) = sdk.oauth().user_session() {
-            let client_id_str = sdk.oauth().client_id().map(|c| c.to_string());
+        if let Some(full) = sdk.oauth().full_session() {
             let info = SessionInfo {
-                user_id: oauth_sess.meta.user_id.to_string(),
-                device_id: oauth_sess.meta.device_id.to_string(),
-                access_token: oauth_sess.tokens.access_token.clone(),
-                refresh_token: oauth_sess.tokens.refresh_token.clone(),
+                user_id: full.user.meta.user_id.to_string(),
+                device_id: full.user.meta.device_id.to_string(),
+                access_token: full.user.tokens.access_token.clone(),
+                refresh_token: full.user.tokens.refresh_token.clone(),
                 homeserver,
                 auth_api: "oauth".to_string(),
-                client_id: client_id_str,
+                client_id: Some(full.client_id.to_string()),
             };
             let _ = persist_session(store_dir, &info).await;
-        } else if let Some(matrix_sess) = sdk.matrix_auth().session() {
+            return;
+        }
+
+        if let Some(matrix_sess) = sdk.matrix_auth().session() {
             let info = SessionInfo {
                 user_id: matrix_sess.meta.user_id.to_string(),
                 device_id: matrix_sess.meta.device_id.to_string(),
@@ -218,7 +275,10 @@ pub(crate) async fn build_and_persist_session(sdk: &matrix_sdk::Client, store_di
                 client_id: None,
             };
             let _ = persist_session(store_dir, &info).await;
+            return;
         }
+
+        warn!("No restorable session available; not updating session file");
     }
 
     #[cfg(target_family = "wasm")]

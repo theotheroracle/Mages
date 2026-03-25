@@ -461,6 +461,7 @@ impl Client {
         #[cfg(not(target_family = "wasm"))]
         RT.block_on(async {
             if let Some(info) = platform::load_session(&this.store_dir).await {
+                info!("Loading session for {} (auth: {})", info.user_id, info.auth_api);
                 if let Ok(user_id) = info.user_id.parse::<OwnedUserId>() {
                     let meta = SessionMeta {
                         user_id,
@@ -471,30 +472,38 @@ impl Client {
                         refresh_token: info.refresh_token,
                     };
                     let result = if info.auth_api == "oauth" {
-                        if let Some(cid) = info.client_id {
-                            this.core
-                                .sdk
-                                .restore_session(OAuthSession {
-                                    client_id: ClientId::new(cid),
-                                    user: UserSession { meta, tokens },
-                                })
-                                .await
-                        } else {
-                            // OAuth without client_id can't be restored — delete bad session
+                        if info.client_id.is_none() {
+                            warn!(
+                                "Stored OAuth session for {} is missing client_id; removing invalid session file and requiring re-login",
+                                info.user_id
+                            );
                             platform::remove_session_file(&this.store_dir);
-                            Err(matrix_sdk::Error::UnknownError(
-                                "OAuth session missing client_id".into(),
-                            ))
+                            None
+                        } else if let Some(cid) = &info.client_id {
+                            Some(
+                                this.core
+                                    .sdk
+                                    .restore_session(OAuthSession {
+                                        client_id: ClientId::new(cid.clone()),
+                                        user: UserSession { meta, tokens },
+                                    })
+                                    .await,
+                            )
+                        } else {
+                            None
                         }
                     } else {
-                        this.core
-                            .sdk
-                            .restore_session(MatrixSession { meta, tokens })
-                            .await
+                        Some(
+                            this.core
+                                .sdk
+                                .restore_session(MatrixSession { meta, tokens })
+                                .await,
+                        )
                     };
 
                     match result {
-                        Ok(()) => {
+                        Some(Ok(())) => {
+                            info!("restore_session succeeded");
                             this.core
                                 .sdk
                                 .encryption()
@@ -515,14 +524,17 @@ impl Client {
                                 .respawn_tasks_for_rooms_with_unsent_requests()
                                 .await;
                         }
-                        Err(e) => {
+                        Some(Err(e)) => {
                             warn!(
                                 "restore_session failed, resetting local store but preserving session: {e:?}"
                             );
                             platform::reset_store_dir(&this.store_dir);
                         }
+                        None => {}
                     }
                 }
+            } else {
+                info!("No usable session found, starting fresh");
             }
         });
 
@@ -1280,7 +1292,6 @@ impl Client {
 
     pub fn homeserver_login_details(&self) -> HomeserverLoginDetails {
         RT.block_on(async {
-            let supports_oauth = self.core.sdk.oauth().server_metadata().await.is_ok();
             let (supports_sso, supports_password) =
                 match self.core.sdk.matrix_auth().get_login_types().await {
                     Ok(resp) => {
@@ -1292,8 +1303,22 @@ impl Client {
                                 .any(|f| matches!(f, LoginType::Password(_))),
                         )
                     }
-                    Err(_) => (false, false),
+                    Err(e) => {
+                        warn!("get_login_types failed: {e:?}");
+                        (false, false)
+                    }
                 };
+
+            let supports_oauth = match self.core.sdk.oauth().server_metadata().await {
+                Ok(_) => true,
+                Err(e) => {
+                    if !e.is_not_supported() {
+                        warn!("OAuth discovery failed, treating as unsupported: {e:?}");
+                    }
+                    false
+                }
+            };
+
             HomeserverLoginDetails {
                 supports_oauth,
                 supports_sso,
