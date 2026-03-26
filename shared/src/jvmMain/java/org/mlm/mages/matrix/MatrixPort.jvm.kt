@@ -77,6 +77,20 @@ class RustMatrixPort : MatrixPort, VerificationService {
             }
         }
 
+    override suspend fun loginEmail(email: String, password: String, deviceDisplayName: String?) =
+        withContext(matrixDispatcher) {
+            withClient {
+                it.loginEmail(email, password, deviceDisplayName)
+            }
+        }
+
+    override suspend fun loginPhone(country: String, phone: String, password: String, deviceDisplayName: String?) =
+        withContext(matrixDispatcher) {
+            withClient {
+                it.loginPhone(country, phone, password, deviceDisplayName)
+            }
+        }
+
     override fun isLoggedIn(): Boolean =
         runBlocking(matrixDispatcher) {
             synchronized(clientLock) { client?.isLoggedIn() ?: false }

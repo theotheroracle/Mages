@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import org.mlm.mages.accounts.MatrixAccount
 import org.mlm.mages.accounts.MatrixClients
 import org.mlm.mages.matrix.MatrixPort
+import org.mlm.mages.matrix.PasswordLoginKind
 import org.mlm.mages.matrix.createMatrixPort
 import org.mlm.mages.platform.getDeviceDisplayName
 import org.mlm.mages.settings.AppSettings
@@ -49,6 +50,12 @@ class LoginViewModel(
 
     fun setUser(value: String) = updateState { copy(user = value) }
     fun setPass(value: String) = updateState { copy(pass = value) }
+
+    fun setPasswordLoginKind(value: PasswordLoginKind) =
+        updateState { copy(passwordLoginKind = value) }
+
+    fun setPhoneCountry(value: String) =
+        updateState { copy(phoneCountry = value.uppercase()) }
 
     fun togglePasswordLogin() = updateState { copy(showPasswordLogin = !showPasswordLogin) }
 
@@ -140,7 +147,32 @@ class LoginViewModel(
 
             try {
                 port.init(hs, accountId)
-                port.login(s.user, s.pass, getDeviceDisplayName())
+
+                when (s.passwordLoginKind) {
+                    PasswordLoginKind.Username -> {
+                        port.login(s.user.trim(), s.pass, getDeviceDisplayName())
+                    }
+
+                    PasswordLoginKind.Email -> {
+                        port.loginEmail(s.user.trim(), s.pass, getDeviceDisplayName())
+                    }
+
+                    PasswordLoginKind.Phone -> {
+                        val country = s.phoneCountry.trim().uppercase()
+                        if (country.length != 2) {
+                            port.close()
+                            updateState {
+                                copy(
+                                    isBusy = false,
+                                    error = "Enter a 2-letter country code, e.g. US or DE"
+                                )
+                            }
+                            return@launch
+                        }
+
+                        port.loginPhone(country, s.user.trim(), s.pass, getDeviceDisplayName())
+                    }
+                }
 
                 if (!port.isLoggedInSuspend()) {
                     port.close()

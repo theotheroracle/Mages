@@ -33,6 +33,7 @@ import io.github.mlmgames.settings.core.annotations.SettingPlatform
 import io.github.mlmgames.settings.core.platform.currentPlatform
 import mages.shared.generated.resources.*
 import org.jetbrains.compose.resources.stringResource
+import org.mlm.mages.matrix.PasswordLoginKind
 import org.mlm.mages.ui.theme.Spacing
 import org.mlm.mages.ui.viewmodel.LoginViewModel
 
@@ -52,6 +53,37 @@ fun LoginScreen(
     val ssoAvailable = details?.supportsSso == true
     val passwordAvailable = details?.supportsPassword == true
     val serverKnown = details != null
+
+    val identifierLabel = when (state.passwordLoginKind) {
+        PasswordLoginKind.Username -> stringResource(Res.string.username)
+        PasswordLoginKind.Email -> "Email"
+        PasswordLoginKind.Phone -> "Phone number"
+    }
+
+    val identifierPlaceholder = when (state.passwordLoginKind) {
+        PasswordLoginKind.Username -> stringResource(Res.string.username_placeholder)
+        PasswordLoginKind.Email -> "alice@example.org"
+        PasswordLoginKind.Phone -> "5151634567"
+    }
+
+    val identifierKeyboardType = when (state.passwordLoginKind) {
+        PasswordLoginKind.Username -> KeyboardType.Text
+        PasswordLoginKind.Email -> KeyboardType.Email
+        PasswordLoginKind.Phone -> KeyboardType.Phone
+    }
+
+    val canSubmitPassword = when (state.passwordLoginKind) {
+        PasswordLoginKind.Phone ->
+            !state.isBusy &&
+                state.user.isNotBlank() &&
+                state.pass.isNotBlank() &&
+                state.phoneCountry.trim().length == 2
+
+        else ->
+            !state.isBusy &&
+                state.user.isNotBlank() &&
+                state.pass.isNotBlank()
+    }
 
     // The best auth method becomes filled
     val primaryAuth = when {
@@ -311,17 +343,82 @@ fun LoginScreen(
                                 )
                             ) {
                                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    SingleChoiceSegmentedButtonRow(
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        PasswordLoginKind.entries.forEachIndexed { index, mode ->
+                                            SegmentedButton(
+                                                selected = state.passwordLoginKind == mode,
+                                                onClick = { viewModel.setPasswordLoginKind(mode) },
+                                                enabled = !state.isBusy,
+                                                shape = SegmentedButtonDefaults.itemShape(
+                                                    index = index,
+                                                    count = PasswordLoginKind.entries.size
+                                                ),
+                                            ) {
+                                                Text(
+                                                    when (mode) {
+                                                        PasswordLoginKind.Username -> "Username"
+                                                        PasswordLoginKind.Email -> "Email"
+                                                        PasswordLoginKind.Phone -> "Phone"
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    if (state.passwordLoginKind == PasswordLoginKind.Phone) {
+                                        OutlinedTextField(
+                                            value = state.phoneCountry,
+                                            onValueChange = viewModel::setPhoneCountry,
+                                            label = { Text("Country code") },
+                                            placeholder = { Text("US") },
+                                            leadingIcon = { Icon(Icons.Default.Flag, null) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            enabled = !state.isBusy,
+                                            singleLine = true,
+                                            keyboardOptions = KeyboardOptions(
+                                                keyboardType = KeyboardType.Text,
+                                                imeAction = ImeAction.Next,
+                                            ),
+                                            keyboardActions = KeyboardActions(
+                                                onNext = { focusManager.moveFocus(FocusDirection.Down) }
+                                            ),
+                                            colors = OutlinedTextFieldDefaults.colors(
+                                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                                focusedLeadingIconColor = MaterialTheme.colorScheme.primary,
+                                            )
+                                        )
+                                    }
+
+                                    if (state.passwordLoginKind != PasswordLoginKind.Username) {
+                                        Text(
+                                            text = "Not normally configured, available for special cases.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+
                                     OutlinedTextField(
                                         value = state.user,
                                         onValueChange = viewModel::setUser,
-                                        label = { Text(stringResource(Res.string.username)) },
-                                        placeholder = { Text(stringResource(Res.string.username_placeholder)) },
-                                        leadingIcon = { Icon(Icons.Default.Person, null) },
+                                        label = { Text(identifierLabel) },
+                                        placeholder = { Text(identifierPlaceholder) },
+                                        leadingIcon = {
+                                            Icon(
+                                                when (state.passwordLoginKind) {
+                                                    PasswordLoginKind.Username -> Icons.Default.Person
+                                                    PasswordLoginKind.Email -> Icons.Default.Email
+                                                    PasswordLoginKind.Phone -> Icons.Default.Phone
+                                                },
+                                                null
+                                            )
+                                        },
                                         modifier = Modifier.fillMaxWidth(),
                                         enabled = !state.isBusy,
                                         singleLine = true,
                                         keyboardOptions = KeyboardOptions(
-                                            keyboardType = KeyboardType.Email,
+                                            keyboardType = identifierKeyboardType,
                                             imeAction = ImeAction.Next
                                         ),
                                         keyboardActions = KeyboardActions(
@@ -362,7 +459,7 @@ fun LoginScreen(
                                         keyboardActions = KeyboardActions(
                                             onDone = {
                                                 focusManager.clearFocus()
-                                                if (!state.isBusy && state.user.isNotBlank() && state.pass.isNotBlank()) {
+                                                if (canSubmitPassword) {
                                                     viewModel.submit()
                                                 }
                                             }
@@ -375,7 +472,7 @@ fun LoginScreen(
 
                                     Button(
                                         onClick = viewModel::submit,
-                                        enabled = !state.isBusy && state.user.isNotBlank() && state.pass.isNotBlank(),
+                                        enabled = canSubmitPassword,
                                         modifier = Modifier.fillMaxWidth().height(52.dp),
                                         shape = MaterialTheme.shapes.large
                                     ) {

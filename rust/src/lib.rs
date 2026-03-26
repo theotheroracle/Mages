@@ -1518,18 +1518,70 @@ impl Client {
         device_display_name: Option<String>,
     ) -> Result<(), FfiError> {
         RT.block_on(async {
-            let mut req = self
-                .core
-                .sdk
-                .matrix_auth()
-                .login_username(username.as_str(), &password);
-            if let Some(name) = device_display_name.as_ref() {
-                req = req.initial_device_display_name(name);
-            }
-            let _res = req.send().await.ffi()?;
-            self.finish_login_setup().await;
+            self.core
+                .login_password(
+                    PasswordLoginKind::Username,
+                    username,
+                    password,
+                    None,
+                    device_display_name,
+                )
+                .await?;
+            self.finish_authenticated_setup(true).await;
             Ok(())
         })
+    }
+
+    pub fn login_email(
+        &self,
+        email: String,
+        password: String,
+        device_display_name: Option<String>,
+    ) -> Result<(), FfiError> {
+        RT.block_on(async {
+            self.core
+                .login_password(
+                    PasswordLoginKind::Email,
+                    email,
+                    password,
+                    None,
+                    device_display_name,
+                )
+                .await?;
+            self.finish_authenticated_setup(true).await;
+            Ok(())
+        })
+    }
+
+    pub fn login_phone(
+        &self,
+        country: String,
+        phone: String,
+        password: String,
+        device_display_name: Option<String>,
+    ) -> Result<(), FfiError> {
+        RT.block_on(async {
+            self.core
+                .login_password(
+                    PasswordLoginKind::Phone,
+                    phone,
+                    password,
+                    Some(country),
+                    device_display_name,
+                )
+                .await?;
+            self.finish_authenticated_setup(true).await;
+            Ok(())
+        })
+    }
+
+    async fn finish_authenticated_setup(&self, persist_session: bool) {
+        self.core.finish_authenticated_setup_common().await;
+        self.ensure_send_queue_supervision();
+
+        if persist_session {
+            Self::persist_current_session(self).await;
+        }
     }
 
     pub fn send_existing_attachment(

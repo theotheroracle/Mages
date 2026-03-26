@@ -479,7 +479,7 @@ pub enum ConnectionState {
     Reconnecting { attempt: u32, next_retry_secs: u32 },
 }
 
-#[derive(Clone, Serialize, Deserialize, uniffi::Enum)]
+#[derive(Clone, Serialize, Deserialize, Enum)]
 pub enum EventType {
     Message,
     MembershipChange,
@@ -533,7 +533,7 @@ pub enum BackupState {
     Disabling,
 }
 
-#[derive(Clone, Serialize, Deserialize, uniffi::Enum)]
+#[derive(Clone, Serialize, Deserialize, Enum)]
 pub enum NotificationKind {
     Message,
     CallRing,
@@ -609,6 +609,13 @@ pub enum RoomJoinRule {
     Knock,
     Restricted,
     KnockRestricted,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize, Enum)]
+pub enum PasswordLoginKind {
+    Username,
+    Email,
+    Phone,
 }
 
 #[derive(Clone, Serialize, Deserialize, Enum)]

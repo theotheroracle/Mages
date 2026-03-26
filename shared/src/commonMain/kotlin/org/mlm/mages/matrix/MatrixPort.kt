@@ -279,6 +279,13 @@ enum class RoomHistoryVisibility {
 }
 
 @Serializable
+enum class PasswordLoginKind {
+    Username,
+    Email,
+    Phone,
+}
+
+@Serializable
 data class RoomPowerLevels(
     val users: Map<String, Long>,
     val usersDefault: Long,
@@ -509,6 +516,8 @@ interface MatrixPort {
 
     suspend fun init(hs: String, accountId: String? = null)
     suspend fun login(user: String, password: String, deviceDisplayName: String?)
+    suspend fun loginEmail(email: String, password: String, deviceDisplayName: String?)
+    suspend fun loginPhone(country: String, phone: String, password: String, deviceDisplayName: String?)
     suspend fun listRooms(): List<RoomSummary>
     suspend fun recent(roomId: String, limit: Int = 50): List<MessageEvent>
     fun timelineDiffs(roomId: String): Flow<TimelineDiff<MessageEvent>>

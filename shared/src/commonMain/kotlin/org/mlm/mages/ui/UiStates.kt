@@ -1,5 +1,6 @@
 package org.mlm.mages.ui
 
+import kotlinx.serialization.Serializable
 import org.mlm.mages.MessageEvent
 import org.mlm.mages.RoomSummary
 import org.mlm.mages.matrix.DeviceSummary
@@ -9,6 +10,7 @@ import org.mlm.mages.matrix.MemberSummary
 import org.mlm.mages.matrix.MatrixPort
 import org.mlm.mages.matrix.Presence
 import org.mlm.mages.matrix.RoomNotificationMode
+import org.mlm.mages.matrix.PasswordLoginKind
 import org.mlm.mages.matrix.RoomPredecessorInfo
 import org.mlm.mages.matrix.RoomUpgradeInfo
 import org.mlm.mages.matrix.SasPhase
@@ -30,7 +32,9 @@ data class LoginUiState(
     val error: String? = null,
     val loginDetails: HomeserverLoginDetails? = null,
     val showPasswordLogin: Boolean = false,
-    val isCheckingServer: Boolean = false
+    val isCheckingServer: Boolean = false,
+    val passwordLoginKind: PasswordLoginKind = PasswordLoginKind.Username,
+    val phoneCountry: String = ""
 )
 
 data class RoomsUiState(
@@ -153,6 +157,7 @@ data class RoomUiState(
     val selectedMemberForAction: MemberSummary? = null,
 )
 
+@Serializable
 enum class AttachmentUploadStage {
     Preparing,
     Uploading,

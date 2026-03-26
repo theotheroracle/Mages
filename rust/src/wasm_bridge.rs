@@ -346,6 +346,12 @@ impl WasmAsyncState {
             }
         });
     }
+
+    async fn finish_authenticated_setup(self: &Rc<Self>) {
+        self.core.finish_authenticated_setup_common().await;
+        self.ensure_send_queue_supervision();
+        self.persist_session();
+    }
 }
 
 #[wasm_bindgen]
@@ -589,26 +595,72 @@ impl WasmClient {
         password: String,
         device_display_name: Option<String>,
     ) -> Option<String> {
-        let state = self.state()?;
-        let mut req = state
-            .client()
-            .matrix_auth()
-            .login_username(username.as_str(), &password);
-        if let Some(ref name) = device_display_name {
-            req = req.initial_device_display_name(name);
-        }
-        if let Err(e) = req.send().await {
+        self.login_password_async_impl(
+            PasswordLoginKind::Username,
+            username,
+            password,
+            None,
+            device_display_name,
+        )
+        .await
+    }
+
+    #[wasm_bindgen(js_name = loginEmail)]
+    pub async fn login_email_async(
+        &self,
+        email: String,
+        password: String,
+        device_display_name: Option<String>,
+    ) -> Option<String> {
+        self.login_password_async_impl(
+            PasswordLoginKind::Email,
+            email,
+            password,
+            None,
+            device_display_name,
+        )
+        .await
+    }
+
+    #[wasm_bindgen(js_name = loginPhone)]
+    pub async fn login_phone_async(
+        &self,
+        country: String,
+        phone: String,
+        password: String,
+        device_display_name: Option<String>,
+    ) -> Option<String> {
+        self.login_password_async_impl(
+            PasswordLoginKind::Phone,
+            phone,
+            password,
+            Some(country),
+            device_display_name,
+        )
+        .await
+    }
+
+    async fn login_password_async_impl(
+        &self,
+        kind: PasswordLoginKind,
+        identifier: String,
+        password: String,
+        country: Option<String>,
+        device_display_name: Option<String>,
+    ) -> Option<String> {
+        let Some(state) = self.state() else {
+            return Some("not initialized".to_string());
+        };
+
+        if let Err(e) = state
+            .core
+            .login_password(kind, identifier, password, country, device_display_name)
+            .await
+        {
             return Some(e.to_string());
         }
-        state.persist_session();
-        state
-            .client()
-            .encryption()
-            .wait_for_e2ee_initialization_tasks()
-            .await;
-        let _ = state.ensure_sync_service().await;
-        let _ = state.client().event_cache().subscribe();
-        state.ensure_send_queue_supervision();
+
+        state.finish_authenticated_setup().await;
         None
     }
 
@@ -689,21 +741,12 @@ impl WasmClient {
             Err(_) => UrlOrQuery::Query(callback_url_or_query),
         };
         match state.client().oauth().finish_login(url_or_query).await {
-            Ok(_) => {}
-            Err(e) => {
-                return to_json(&serde_json::json!({"ok": false, "error": e.to_string()}));
+            Ok(_) => {
+                state.finish_authenticated_setup().await;
+                to_json(&serde_json::json!({"ok": true}))
             }
+            Err(e) => to_json(&serde_json::json!({"ok": false, "error": e.to_string()})),
         }
-        state.persist_session();
-        state
-            .client()
-            .encryption()
-            .wait_for_e2ee_initialization_tasks()
-            .await;
-        let _ = state.ensure_sync_service().await;
-        let _ = state.client().event_cache().subscribe();
-        state.ensure_send_queue_supervision();
-        to_json(&serde_json::json!({"ok": true}))
     }
 
     // Methods with wasm-specific signatures (cast, missing optional args)

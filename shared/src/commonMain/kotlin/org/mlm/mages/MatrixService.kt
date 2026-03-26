@@ -57,6 +57,14 @@ class MatrixService(
         port.login(user.trim(), password, deviceDisplayName)
     }
 
+    suspend fun loginEmail(email: String, password: String, deviceDisplayName: String?) {
+        port.loginEmail(email.trim(), password, deviceDisplayName)
+    }
+
+    suspend fun loginPhone(country: String, phone: String, password: String, deviceDisplayName: String?) {
+        port.loginPhone(country.trim().uppercase(), phone.trim(), password, deviceDisplayName)
+    }
+
     fun isLoggedIn(): Boolean = clients.hasActiveClient()
 
     suspend fun isLoggedInSuspend(): Boolean = clients.hasActiveClient()

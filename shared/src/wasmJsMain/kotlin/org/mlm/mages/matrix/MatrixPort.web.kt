@@ -307,6 +307,28 @@ class WebStubMatrixPort : MatrixPort, VerificationService {
         }
     }
 
+    override suspend fun loginEmail(email: String, password: String, deviceDisplayName: String?) {
+        val result = requireClient().loginEmail(email, password, deviceDisplayName).await<String?>()
+        val error = result?.takeIf { it.isNotBlank() }
+        if (error != null) {
+            throw IllegalStateException(error)
+        }
+        if (!isLoggedIn()) {
+            throw IllegalStateException("Login failed")
+        }
+    }
+
+    override suspend fun loginPhone(country: String, phone: String, password: String, deviceDisplayName: String?) {
+        val result = requireClient().loginPhone(country, phone, password, deviceDisplayName).await<String?>()
+        val error = result?.takeIf { it.isNotBlank() }
+        if (error != null) {
+            throw IllegalStateException(error)
+        }
+        if (!isLoggedIn()) {
+            throw IllegalStateException("Login failed")
+        }
+    }
+
     override suspend fun listRooms(): List<RoomSummary> =
         run {
             val raw = requireClient().rooms().await<JsAny?>()

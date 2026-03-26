@@ -54,14 +54,14 @@ use tracing::warn;
 use crate::errors::{IntoFfi, OptionFfi};
 use crate::{
     DirectoryUser, FfiError, FfiRoomNotificationMode, INITIAL_BACK_PAGINATION, KnockRequestSummary,
-    LiveLocationBeaconState, MemberSummary, MessageEvent, OwnReceipt, PollDefinition,
-    PredecessorRoomInfo, Presence, PresenceInfo, PublicRoom, PublicRoomsPage, ReactionSummary,
-    RoomDirectoryVisibility, RoomHistoryVisibility, RoomJoinRule, RoomPowerLevelChanges,
-    RoomPowerLevels, RoomPreview, RoomPreviewMembership, RoomProfile, RoomSummary, RoomTags,
-    RoomUpgradeLinks, SearchHit, SearchPage, SeenByEntry, SendState, SendUpdate, SpaceChildInfo,
-    SpaceHierarchyPage, SpaceInfo, SuccessorRoomInfo, ThreadPage, ThreadSummary, UnreadStats,
-    build_unstable_poll_content, map_event_id_via_timeline, map_timeline_event,
-    paginate_backwards_visible, timeline_event_filter,
+    LiveLocationBeaconState, MemberSummary, MessageEvent, OwnReceipt, PasswordLoginKind,
+    PollDefinition, PredecessorRoomInfo, Presence, PresenceInfo, PublicRoom, PublicRoomsPage,
+    ReactionSummary, RoomDirectoryVisibility, RoomHistoryVisibility, RoomJoinRule,
+    RoomPowerLevelChanges, RoomPowerLevels, RoomPreview, RoomPreviewMembership, RoomProfile,
+    RoomSummary, RoomTags, RoomUpgradeLinks, SearchHit, SearchPage, SeenByEntry, SendState,
+    SendUpdate, SpaceChildInfo, SpaceHierarchyPage, SpaceInfo, SuccessorRoomInfo, ThreadPage,
+    ThreadSummary, UnreadStats, build_unstable_poll_content, map_event_id_via_timeline,
+    map_timeline_event, paginate_backwards_visible, timeline_event_filter,
 };
 
 #[cfg(not(target_family = "wasm"))]
@@ -233,6 +233,74 @@ impl CoreClient {
             }
             Err(e) => warn!("ensure_sync_service: failed: {e:?}"),
         }
+    }
+
+    pub async fn login_password(
+        &self,
+        kind: PasswordLoginKind,
+        identifier: String,
+        password: String,
+        country: Option<String>,
+        device_display_name: Option<String>,
+    ) -> Result<(), FfiError> {
+        use matrix_sdk::ruma::api::client::uiaa::UserIdentifier;
+
+        let identifier = identifier.trim().to_owned();
+        if identifier.is_empty() {
+            return Err(FfiError::Msg("identifier is required".into()));
+        }
+
+        let user_id = match kind {
+            PasswordLoginKind::Username => UserIdentifier::UserIdOrLocalpart(identifier),
+            PasswordLoginKind::Email => UserIdentifier::Email { address: identifier },
+            PasswordLoginKind::Phone => {
+                let country = country.unwrap_or_default().trim().to_uppercase();
+                if country.len() != 2 {
+                    return Err(FfiError::Msg(
+                        "phone login requires a 2-letter country code".into(),
+                    ));
+                }
+
+                UserIdentifier::PhoneNumber {
+                    country,
+                    phone: identifier,
+                }
+            }
+        };
+
+        let mut builder = self
+            .sdk
+            .matrix_auth()
+            .login_identifier(user_id, &password);
+
+        if let Some(name) = device_display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            builder = builder.initial_device_display_name(name);
+        }
+
+        builder.send().await.ffi()?;
+        Ok(())
+    }
+
+    pub async fn finish_authenticated_setup_common(&self) {
+        self.sdk
+            .encryption()
+            .wait_for_e2ee_initialization_tasks()
+            .await;
+
+        self.ensure_sync_service().await;
+
+        if let Err(e) = self.sdk.event_cache().subscribe() {
+            warn!("event_cache.subscribe() failed after auth: {e:?}");
+        }
+
+        self.sdk
+            .send_queue()
+            .respawn_tasks_for_rooms_with_unsent_requests()
+            .await;
     }
 
     pub fn resolve_other_user(&self, other_user_id: Option<String>) -> Option<OwnedUserId> {
