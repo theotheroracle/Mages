@@ -46,6 +46,249 @@
     <content_attribute id="social-audio">intense</content_attribute>
   </content_rating>
   <releases>
+    <release version="4.3.6" date="2026-05-01" type="stable">
+      <description>
+        <ul>
+          <li>add email and phone number options for password login</li>
+          <li>Expose dynamic theme options to bubbles</li>
+          <li>Fix client id not being properly saved (might need to relogin)</li>
+          <li>add the deleted toolchain resolver</li>
+          <li>make the sso and login wait for e2ee tasks before logging in</li>
+          <li>show a silent notification if the notif is not noisy instead of discarding</li>
+          <li>hide dup. circular indicator for unread messages</li>
+          <li>Change other Linear and Circular indicators to m3e wavy components</li>
+          <li>Add more details to message info sheet</li>
+          <li>add multi-room share functionality</li>
+          <li>Add ability to select multiple rooms when forwarding messages</li>
+          <li>improve Seen by chip alignment for groups</li>
+          <li>Add floating timeline date display</li>
+          <li>Android: Select the correct audio device based on call method (#60)</li>
+          <li>Add a toggle for bubble appearance animations</li>
+          <li>fix android crash when trying to call</li>
+          <li>Support Conversional Bubbles feature (A11+)</li>
+          <li>add element-call logging and an option to show username in DMs</li>
+          <li>add panic hook, and use the macro.rs macros</li>
+          <li>Oauth session persistence improvements</li>
+          <li>works between 2 mages clients now (hack: polling again)</li>
+          <li>save: Complete one-side emoji verif flow</li>
+          <li>save: Complete one-side emoji verif flow</li>
+          <li>save: New Partial emoji verif. flow</li>
+          <li>web also works (80%) now (android builds, is untested)</li>
+          <li>Jvm works after refactor (only issue is a misconfigured sdk verif ui error</li>
+          <li>save: add missing wasm methods, and misc</li>
+          <li>save: macro ftw</li>
+          <li>save: add few missing methods</li>
+          <li>save: rm unused fns</li>
+          <li>save: the great rs restructure</li>
+          <li>save 5</li>
+          <li>save 4</li>
+          <li>save 3</li>
+          <li>save 2</li>
+          <li>save 1</li>
+          <li>calls impl. for web</li>
+          <li>revert the selection mode color for selected message items</li>
+          <li>timeline works!</li>
+          <li>spawn non assigned tasks as detached to prevent timeline crash</li>
+          <li>rem. the limitedwebmode dialogs</li>
+          <li>use macros, and delegate platform code to another file</li>
+          <li>core web test 1 (log in and room listing works)</li>
+          <li>web platform specific conf. and setup</li>
+          <li>harmless commonCode changes</li>
+          <li>uniffi bumping, and cargo.toml web deps</li>
+          <li>knock requests admin UI</li>
+          <li>Discover now checks for room rules, and shows join / knock accordingly</li>
+          <li>show calls in previews</li>
+          <li>Improve attachment progress anim</li>
+          <li>Add language setting (to switch without switching the default lang.)</li>
+          <li>change secondary color to be slighly less greyish</li>
+          <li>fix: settings "calls" section shown as a "privacy" section</li>
+          <li>fix \' strings translation</li>
+          <li>add location permission request logic</li>
+          <li>Do not consider system messages for read events (#55)</li>
+          <li>Render mentions as bold links</li>
+          <li>@Mentions support</li>
+          <li>Show avatars toggle (#54)</li>
+          <li>Live location impl. (android only)</li>
+          <li>test: override OAuth for android</li>
+          <li>Bump few dependencies' versions</li>
+          <li>Unread FAB, and scroll to last unread on opening a room (#50)</li>
+          <li>Add Unread count to filter chip in Rooms</li>
+          <li>fallback to global avatars if local names aren't present</li>
+          <li>try forcing the redirects be ipv4 addrs (#41)</li>
+          <li>Show a return action, after clicking a reply (#50)</li>
+          <li>Only ask for call perms, when making a call</li>
+          <li>Move "This Device" down in DevicesTab, and try fixing UnifiedPush again</li>
+          <li>UI: make "This device" text not autowrap</li>
+          <li>Show the actual error message for few fails</li>
+          <li>Add copy action to snackbar (for errors)</li>
+          <li>Filter server or state messages to display them in a different way</li>
+          <li>Option to change recovery key, and turn off key storage</li>
+          <li>make filter chips row scrollable</li>
+          <li>[BREAKING] Bump matrix-rust-sdk to latest main, and add dm voice calling support (Need to clear data!)</li>
+          <li>Improve status indicators, and make "seen by" clickable</li>
+          <li>Revert tap to open color change (cause of bad text contrast)</li>
+          <li>Hide predecessor room banner</li>
+          <li>bump rust toolchain version, and element-call version</li>
+          <li>Login screen refactor</li>
+          <li>add thread fallback (for non replies, replies was already present)</li>
+          <li>Initial recovery key generation impl (experimental) (#47)</li>
+          <li>Add manage account button for homeservers that support oidc (#47)</li>
+          <li>Move invite screen to a filter in room screen</li>
+          <li>implement direct user lookup in discover, while removing suggested people</li>
+          <li>Invite event formatting (#46)</li>
+          <li>Android: make the distributor popup appearing when there are no options to choose from</li>
+          <li>Add native OAuth login support</li>
+          <li>Fix typo in license section of README.md</li>
+          <li>multiple attachments, native file pickers on jvm, and an camera option</li>
+          <li>ctrl + V can now paste multiple files instead of just one</li>
+          <li>make message actions sheet scrollable</li>
+          <li>make textlinks and md headings also react to the font size setting</li>
+          <li>add the foss embedded distributor for notifications without a fcm client</li>
+          <li>Improve search screen UI</li>
+          <li>Fix font size not changing for messages (#44)</li>
+          <li>add sound once per room option</li>
+          <li>improve reply, and edit banner</li>
+          <li>Reactions are now handled in message events</li>
+          <li>desktop: show avatar/fp if present</li>
+          <li>Add filtering based on groups and DMs</li>
+          <li>Add a message info action to check seen by entries</li>
+          <li>condense message bubble spacers, and have reactions closer to the message</li>
+          <li>shrink images to look like other chat clients</li>
+          <li>Move members listing dropdown button to room info screen</li>
+          <li>Another room info screen overhaul</li>
+          <li>Room info screen avatar, spaces avatar, member listing, and leave button</li>
+          <li>Add swipe to reply, and the ability to click a reply to go to the message that was replied to.</li>
+          <li>Add emojis sheet to have curated emojis (like other clients), and app icon badges</li>
+          <li>Store draft messages, and other misc stuff</li>
+          <li>Have an option to change the default unifiedPush provider</li>
+          <li>Add enter handling (shift + enter now sends message by default, togglable in settings)</li>
+          <li>do not hide the status bar (#40)</li>
+          <li>Add ctrl + V support for desktop</li>
+          <li>Add clipboard handling (attachment sheet has an extra button for pastables)</li>
+          <li>better url handling for desktop notifications, and media gallery links</li>
+          <li>Fix room info dropdowns not being aligned to the location, and use better room join rule display names</li>
+          <li>Android: Try forwarding avatar to call screen</li>
+          <li>Add start menu icons for Windows and MacOS</li>
+          <li>Add power levels, and perms management to room info screen (initial)</li>
+          <li>Add an option to set room alias when creating a room</li>
+          <li>move actually to 1.10.0</li>
+          <li>fix replies taking full width</li>
+          <li>(Android) pass a diff. color to markdown text for better monochrome contrast</li>
+          <li>Fix no results string</li>
+          <li>Fix no rooms match string</li>
+          <li>fix thread replies again</li>
+          <li>Let message bubbles take 80% of available width</li>
+          <li>Use the Material 3 Expressive theme</li>
+          <li>Initial translation handling (es)</li>
+          <li>rem legacy packaging, and update ndk ver (test fdroid build)</li>
+          <li>bump from rc-02 to rel. for M. Compose</li>
+          <li>Improve room info screen</li>
+          <li>Make media gallery auto paginate for all 4 tabs (remove load more)</li>
+          <li>hide option to change title and topic if power levels are low</li>
+          <li>Resolve room names in spaces (lazy)</li>
+          <li>avatar handling for spaces</li>
+          <li>try fixing flathub screen share (and cam)</li>
+          <li>Add View all option for pinned messages</li>
+          <li>Add "Report content" and Pins support</li>
+          <li>Shift flathub builds locally</li>
+          <li>update media and files screen to seperate by month, show "load more" in empty rooms, add avatar for space detail screen, and other misc changes</li>
+          <li>fix vendored tarball</li>
+          <li>update vendor tarball yml</li>
+          <li>bump back to 21 (for fdroid deb. migration)</li>
+          <li>Clarify Android and Linux build availability in README</li>
+          <li>add vendoring yml</li>
+          <li>remove duplicate "Add space" button, when no spaces exist</li>
+          <li>reduce the pagination load to 20 (from 50) messages at a time</li>
+          <li>fix duplicate notifications on Desktop</li>
+          <li>version info embedding for desktop AppImages</li>
+          <li>Reduce monochrome icon size slightly</li>
+          <li>Add an option to disable media preview thumbnails (can be used for saving mobile data)</li>
+          <li>Revise README for clarity and feature updates</li>
+          <li>Add nav bars padding (#31)</li>
+          <li>try fix windows build lib not being copied</li>
+          <li>upgrade to agp 9.0.0</li>
+          <li>Add back mono icon</li>
+          <li>Add version trackers</li>
+          <li>test add mac and win ymls</li>
+          <li>Desktop: Indicator for calls on first download</li>
+          <li>Fix the input / resize issue with jcef windows (jcef call issue fixed)</li>
+          <li>Revert "chore: hide the call button for jvm (shelve it for tests)"</li>
+          <li>(desktop-only) BREAKING, EXISTING DATA WILL BE LOST: Change the paths to xdg complaint locs for linux</li>
+          <li>fix clearing of events after ending a call</li>
+          <li>Fix back pagination to only consider visible events</li>
+          <li>Back minimizes call instead of navigating back</li>
+          <li>Fix webview not being destroyed on android</li>
+          <li>Do not show call notification by default</li>
+          <li>Add resize handler for minimized call overlay</li>
+          <li>Fix call notification deep link</li>
+          <li>fix intent scheme logic for links</li>
+          <li>Notifications consistenancy improvements</li>
+          <li>Decrease icon's roundedness, and improve timeline caching (account-specific)</li>
+          <li>Add dynamic colors option (Android 12+ only)</li>
+          <li>Do not show the room name in notifications for dm rooms (revert)</li>
+          <li>Working element calls, on android (theming and minimize action needs to be wired)</li>
+          <li>Fix go back logic for adding an account, change security icon to settigns icon, and remove unused logic from security screen)</li>
+          <li>Hide start in tray on Android (fix #26)</li>
+          <li>Hide start in tray on Android (fix #26)</li>
+          <li>Make verification flows global, and fix them for android</li>
+          <li>Resolve homeservers (#22)</li>
+          <li>Remove depinfo (migr miss)</li>
+          <li>Fix markdown colors for `` text, and also make the surface dark for loading bg</li>
+          <li>Switch logout button to show logout icon, show options when added</li>
+          <li>Android Multi account related fixes, remove AppCtx and MatrixProvider classes (might not be necessary now) for android</li>
+          <li>Breaking change, bump major ver (may need to relogin)</li>
+          <li>Add multi login support</li>
+          <li>Dark theme by default</li>
+          <li>fix the body_path for release notes, and remove extra step</li>
+          <li>Login screen adjusts for keyboard padding (fix #18)</li>
+          <li>Use DayNight instead of Light for AppCompat (#16)</li>
+          <li>Allow direct # paths in discovery (#21)</li>
+          <li>try calling all tasks (in yml</li>
+          <li>Revert "Trial fix for desktop"</li>
+          <li>fix kts warns</li>
+          <li>add a desktop screenshot</li>
+          <li>Trial fix for desktop</li>
+          <li>Save before cleaning build</li>
+          <li>Add selection mode for room screen (thread screen next commit), and media gallery screen (accessible from the best screen)</li>
+          <li>Try fix desktop rel. build</li>
+          <li>Fix android rel. build</li>
+          <li>Remove android library cleanup from workflow</li>
+          <li>Move proguard-rules.pro to androidApp</li>
+          <li>Remove refresh button ( feel-good/ placebo only as of now)</li>
+          <li>isLoading bar fix</li>
+          <li>Try fixing room name not being the formatted one sometimes (2)</li>
+          <li>Try fixing room name not being the formatted one sometimes</li>
+          <li>Try fixing room name not appearing sometimes</li>
+          <li>Fix android build, and wire most settings</li>
+          <li>Hide settings that arent' working yet</li>
+          <li>Desktop packageVersion shouldn't be confusing</li>
+          <li>Similarly fix room scoped search (fix todo 2)</li>
+          <li>Make search go to the event search (fix todo)</li>
+          <li>remove unused tabs</li>
+          <li>use display names directly from rust MessageEvent (try fixing #14)</li>
+          <li>Remove unused settings screen</li>
+          <li>Move settings to security secreen</li>
+          <li>add initial settings screen. and theme setting in-app (not all settings work yet)</li>
+          <li>Fix build error</li>
+          <li>Change discover screen's navBack icon (fix #15)</li>
+          <li>Add my kmp settings module, update to the new agp 9.0 recc. structure, add initial broken call handling (backend, not for use)</li>
+          <li>reduce text size</li>
+          <li>bump vers</li>
+          <li>USe the markdown-compose kmp repo for markdown rendering</li>
+          <li>Show a snackbar in share reciever once sent</li>
+          <li>search does index properly now, but only for newer messages</li>
+          <li>Add drag n drop, remove a lot of platofrm calls or compose native calls, reuse common ui elements (section header, load more, etc), broken search impl (needs the upstream pr to be merged, or pick commit to tag's branch), add poll ui and attachment (file) clickable ui</li>
+          <li>Extract Section Header, and Load More button</li>
+          <li>Better error handling for unsent messages via send queues</li>
+          <li>remove duplicate decryption block in startup, and offline sync service improvement</li>
+          <li>Do not append "edited" to message, show it in ui</li>
+          <li>improve ui for continue / accept() stage</li>
+          <li>Add continue action to potentially fix deadlocks</li>
+          <li>Use device specific name while logging in</li>
+          <li>ensure sync started when clicking a notif (#10), do not register if user isn't logged in (#11)</li>
+        </ul>
+      </description>
+    </release>
     <release version="4.3.5" date="2026-03-25" type="stable">
       <description>
         <ul>
